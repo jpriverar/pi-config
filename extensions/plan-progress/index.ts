@@ -78,7 +78,7 @@ export default function planProgress(pi: ExtensionAPI) {
 
   function planContent(): string | undefined {
     return (
-      planMarkdown ??
+      planMarkdown ||
       (steps.length > 0
         ? steps
             .map(
@@ -217,7 +217,7 @@ export default function planProgress(pi: ExtensionAPI) {
         text,
         done: false,
       }));
-      if (params.markdown) planMarkdown = params.markdown;
+      planMarkdown = params.markdown;
       updateWidget(ctx);
       persistState();
       return {

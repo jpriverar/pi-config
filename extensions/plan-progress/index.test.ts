@@ -134,6 +134,37 @@ test("set_plan stores ordered steps and markdown", async () => {
   ]);
 });
 
+test("set_plan replaces prior markdown when new markdown is omitted or empty", async (t) => {
+  for (const replacement of [
+    { name: "omitted", params: { steps: ["New omitted step"] } },
+    {
+      name: "empty",
+      params: { steps: ["New empty step"], markdown: "" },
+    },
+  ]) {
+    await t.test(replacement.name, async () => {
+      const harness = createHarness();
+      await executeTool(harness, "set_plan", {
+        steps: ["Old step"],
+        markdown: "old-plan-markdown",
+      });
+
+      await executeTool(harness, "set_plan", replacement.params);
+      await runCommand(harness, "plan-view");
+
+      assert.equal(
+        harness.appended.at(-1)?.data.planMarkdown,
+        replacement.params.markdown,
+      );
+      assert.match(
+        harness.documents.at(-1) ?? "",
+        new RegExp(replacement.params.steps[0]),
+      );
+      assert.doesNotMatch(harness.documents.at(-1) ?? "", /old-plan-markdown/);
+    });
+  }
+});
+
 test("complete_step rejects invalid and duplicate indices and completes valid steps", async () => {
   const harness = createHarness();
   await executeTool(harness, "set_plan", { steps: ["First", "Second"] });
