@@ -214,6 +214,38 @@ test("multiple workstream labels preserve source order and the first controls sc
   assert.match(renderCard(scoped), /No tracked work for project 'alpha'/);
 });
 
+test("renders deduplicated durable entries written before active was stored", () => {
+  const legacyIssue = issue("jp-legacy", "open", ["workstream:pr-review"]);
+  const harness = createHarness();
+  const renderer = harness.renderers.get("jp-work-startup");
+  assert.ok(renderer, "startup renderer was not registered");
+
+  const component = renderer(
+    {
+      type: "custom",
+      customType: "jp-work-startup",
+      data: {
+        state: {
+          inProgress: [],
+          blocked: [],
+          ready: [legacyIssue],
+          inbox: [],
+          needsJp: [legacyIssue],
+          stale: [],
+          knownProjects: ["pr-review"],
+        },
+      },
+    },
+    {},
+    theme,
+  );
+  const output = component.render(100).join("\n");
+
+  assert.match(output, /PR REVIEW — 1/);
+  assert.match(output, /READY/);
+  assert.equal(output.match(/jp-legacy/g)?.length, 1);
+});
+
 test("empty and unavailable Beads produce stable states without throwing", async (t) => {
   await t.test("empty", async () => {
     const harness = createHarness();

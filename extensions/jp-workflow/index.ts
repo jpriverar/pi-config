@@ -33,7 +33,7 @@ const STARTUP_ENTRY = "jp-work-startup";
 
 interface State {
   project?: string;
-  active: ClassifiedIssue[];
+  active?: ClassifiedIssue[];
   inProgress: ClassifiedIssue[];
   blocked: ClassifiedIssue[];
   ready: ClassifiedIssue[];
@@ -194,7 +194,18 @@ function groupPriority(group: ProjectGroup): number {
 }
 
 function projectGroups(state: State): ProjectGroup[] {
-  const tasks = state.active.map((issue) => ({
+  const candidates = state.active ?? [
+    ...state.inProgress,
+    ...state.blocked,
+    ...state.ready,
+    ...state.inbox,
+    ...state.needsJp,
+  ];
+  const unique = [
+    ...new Map(candidates.map((issue) => [issue.id, issue])).values(),
+  ];
+  const readyIds = new Set(state.ready.map((issue) => issue.id));
+  const tasks = classifyReadiness(unique, readyIds).map((issue) => ({
     issue,
     status: issue.readiness,
   }));
