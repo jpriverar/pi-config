@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { CustomEditor, InteractiveMode } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import { createStyledEditorExtension, StyledEditor } from "./index.js";
@@ -104,10 +105,10 @@ test("keeps Pi 0.84.1 autocomplete rows visible and outside the tint", async () 
 
 type Handler = (event: any, context: any) => void | Promise<void>;
 
-test("reinstalls after shortcut wiring, hides the footer, and toggles only styled/default", async () => {
+test("installs once per session, hides the footer, and toggles only styled/default", async () => {
   const events = new Map<string, Handler>();
   const commands = new Map<string, { handler: Handler }>();
-  const scheduled: Array<() => void> = [];
+  let scheduled = 0;
   const pi = {
     on(name: string, handler: Handler) {
       events.set(name, handler);
@@ -130,20 +131,18 @@ test("reinstalls after shortcut wiring, hides the footer, and toggles only style
     },
   };
 
-  createStyledEditorExtension((callback) => scheduled.push(callback))(
-    pi as any,
-  );
+  (createStyledEditorExtension as any)(() => scheduled++)(pi as any);
   await events.get("session_start")?.({}, context);
 
+  assert.equal(
+    scheduled,
+    0,
+    "session startup must not depend on timer ordering",
+  );
   assert.equal(editorFactories.length, 1);
   assert.equal(typeof editorFactories[0], "function");
   assert.equal(footerFactories.length, 1);
   assert.deepEqual((footerFactories[0] as Function)().render(80), []);
-
-  // Pi wires extension shortcuts after session_start; the scheduled install must run later.
-  scheduled.shift()?.();
-  assert.equal(editorFactories.length, 2);
-  assert.equal(typeof editorFactories[1], "function");
 
   const prompt = commands.get("prompt");
   assert.ok(prompt);
@@ -151,4 +150,50 @@ test("reinstalls after shortcut wiring, hides the footer, and toggles only style
   assert.equal(editorFactories.at(-1), undefined);
   await prompt.handler("", context);
   assert.equal(typeof editorFactories.at(-1), "function");
+});
+
+test("Pi 0.84.1 custom editors dynamically receive shortcuts wired after installation", () => {
+  const tui = {
+    terminal: { rows: 24 },
+    requestRender() {},
+    setFocus() {},
+  };
+  const keybindings = { matches: () => false };
+  const defaultEditor = new CustomEditor(
+    tui as any,
+    editorTheme,
+    keybindings as any,
+  );
+  const editorContainer = {
+    clear() {},
+    addChild() {},
+  };
+  const mode = {
+    editor: defaultEditor,
+    defaultEditor,
+    editorContainer,
+    ui: tui,
+    keybindings,
+    autocompleteProvider: undefined,
+    disposeActiveSelector() {},
+  };
+
+  const install = (InteractiveMode.prototype as any).setCustomEditorComponent;
+  install.call(
+    mode,
+    (runtimeTui: any, runtimeTheme: any, runtimeKeybindings: any) =>
+      new StyledEditor(runtimeTui, runtimeTheme, runtimeKeybindings),
+  );
+  const customEditor = mode.editor as StyledEditor;
+
+  let shortcutCalls = 0;
+  defaultEditor.onExtensionShortcut = (data) => {
+    if (data !== "ctrl+shift+q") return false;
+    shortcutCalls++;
+    return true;
+  };
+  customEditor.handleInput("ctrl+shift+q");
+
+  assert.equal(shortcutCalls, 1);
+  assert.equal(customEditor.getText(), "");
 });

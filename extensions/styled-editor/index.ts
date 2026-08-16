@@ -21,12 +21,6 @@ type EditorAutocompleteInternals = {
   autocompleteState?: unknown;
 };
 
-type PostStartScheduler = (callback: () => void) => void;
-
-const scheduleAfterStartup: PostStartScheduler = (callback) => {
-  setTimeout(callback, 0);
-};
-
 function autocompleteLineCount(editor: StyledEditor, width: number): number {
   if (!editor.isShowingAutocomplete()) return 0;
 
@@ -72,12 +66,9 @@ function hiddenFooter() {
   };
 }
 
-export function createStyledEditorExtension(
-  schedule: PostStartScheduler = scheduleAfterStartup,
-) {
+export function createStyledEditorExtension() {
   return function styledEditorExtension(pi: ExtensionAPI): void {
     let styled = true;
-    let sessionGeneration = 0;
 
     const install = (ctx: ExtensionContext) => {
       ctx.ui.setEditorComponent(
@@ -97,19 +88,8 @@ export function createStyledEditorExtension(
     pi.on("session_start", (_event, ctx) => {
       if (ctx.mode !== "tui") return;
 
-      const generation = ++sessionGeneration;
       ctx.ui.setFooter(() => hiddenFooter());
       if (styled) install(ctx);
-
-      // Pi wires extension shortcuts after session_start. Reinstall on the next
-      // macrotask so the replacement editor inherits those completed bindings.
-      schedule(() => {
-        if (styled && generation === sessionGeneration) install(ctx);
-      });
-    });
-
-    pi.on("session_shutdown", () => {
-      sessionGeneration++;
     });
   };
 }
