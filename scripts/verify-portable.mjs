@@ -41,6 +41,15 @@ const allowedUrlHosts = new Set([
   "protesilaos.com",
 ]);
 const reviewedVendorPrefix = "skills/superpowers/";
+const reviewedVendorUrlHosts = new Set([
+  "agentskills.io",
+  "code.claude.com",
+  "github.com",
+  "localhost",
+  "mintcdn.com",
+  "platform.claude.com",
+  "primeradiant.com",
+]);
 const placeholderValues = new Set([
   "placeholder",
   "redacted",
@@ -148,16 +157,24 @@ function validateBinary(path, content, errors) {
 }
 
 function isPlaceholder(value) {
-  const normalized = value
-    .trim()
-    .replace(/^['"]|['"],?$/g, "")
-    .toLowerCase();
-  return (
+  const trimmed = value.trim().replace(/;$/, "").trim();
+  const unquoted = trimmed.replace(/^(['"])(.*)\1$/, "$2").trim();
+  const normalized = unquoted.toLowerCase();
+  if (
     placeholderValues.has(normalized) ||
     normalized.startsWith("your_") ||
-    normalized.includes("${") ||
-    normalized.includes("<") ||
+    /^<[^>]+>$/.test(unquoted) ||
+    /\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(unquoted) ||
+    /^\$[A-Za-z_][A-Za-z0-9_]*$/.test(unquoted) ||
+    /^(?:process|import\.meta)\.env(?:\.|\[)/.test(unquoted) ||
     normalized === ""
+  ) {
+    return true;
+  }
+
+  if (["env", "file", "generated-fallback"].includes(normalized)) return true;
+  return /^(?:[A-Za-z_$][\w$]*)(?:\.[A-Za-z_$][\w$]*)*(?:\([^\r\n]*\))?(?:\s*(?:\|\||\?\?)\s*(?:null|undefined))?$/.test(
+    unquoted,
   );
 }
 
@@ -177,9 +194,10 @@ function validateCredentials(path, text, errors) {
   }
 
   const assignment =
-    /(?:^|[\s{"'])((?:api[_-]?key|token|secret|password|credential)[\w-]*)\s*[=:]\s*([^\s,}\]]+)/gim;
+    /(?:^|[\s{,])["']?([A-Za-z_][\w-]*)["']?\s*[:=]\s*([^\r\n,]+)/gim;
+  const sensitiveKey = /api[_-]?key|token|secret|password|credential/i;
   for (const match of text.matchAll(assignment)) {
-    if (match[1].toLowerCase() === "tokens") continue;
+    if (!sensitiveKey.test(match[1])) continue;
     if (!isPlaceholder(match[2])) {
       report(
         errors,
@@ -195,18 +213,21 @@ function validatePrivateLocations(path, text, errors) {
   const macHome = ["/", "Users", "/"].join("");
   const linuxHome = ["/", "home", "/"].join("");
   const workTree = ["~", "/", "d", "d", "/"].join("");
-  const macPath = new RegExp(
-    `${macHome}(?!jp(?:/|[\\s'\"]|$))[A-Za-z0-9._-]+(?:/|$)`,
-  );
+  const macPath = new RegExp(`${macHome}[A-Za-z0-9._-]+(?:/|$)`);
   const linuxPath = new RegExp(`${linuxHome}[A-Za-z0-9._-]+(?:/|$)`);
   if (macPath.test(text)) report(errors, path, "absolute macOS home path");
   if (linuxPath.test(text)) report(errors, path, "absolute Linux home path");
   if (text.includes(workTree)) report(errors, path, "private work-tree path");
 }
 
-function validateUrls(path, text, errors) {
-  if (path.startsWith(reviewedVendorPrefix)) return;
+function urlsInText(text) {
+  return [...text.matchAll(/https?:\/\/[^\s<>'"`)\]]+/g)].map((match) =>
+    match[0].replace(/[.,;:]$/, ""),
+  );
+}
 
+function validateUrls(path, text, errors) {
+  const vendored = path.startsWith(reviewedVendorPrefix);
   if (path === "package-lock.json") {
     let lock;
     try {
@@ -215,19 +236,30 @@ function validateUrls(path, text, errors) {
       report(errors, path, "package lock is not valid JSON");
       return;
     }
-    const resolved = Object.values(lock.packages ?? {})
-      .map((entry) => entry?.resolved)
-      .filter((value) => typeof value === "string");
-    for (const value of resolved) validateUrl(path, value, errors);
+    const visit = (value) => {
+      if (typeof value === "string") {
+        for (const url of urlsInText(value)) {
+          validateUrl(path, url, false, errors);
+        }
+      } else if (Array.isArray(value)) {
+        for (const item of value) visit(item);
+      } else if (value && typeof value === "object") {
+        for (const item of Object.values(value)) visit(item);
+      }
+    };
+    visit(lock);
     return;
   }
 
-  for (const match of text.matchAll(/https?:\/\/[^\s<>'"`)\]]+/g)) {
-    validateUrl(path, match[0].replace(/[.,;:]$/, ""), errors);
+  for (const value of urlsInText(text)) {
+    validateUrl(path, value, vendored, errors);
   }
 }
 
-function validateUrl(path, value, errors) {
+function validateUrl(path, value, vendored, errors) {
+  if (/^https?:\/\/host:port(?:\/|$)/.test(value) || value === "http://") {
+    return;
+  }
   let url;
   try {
     url = new URL(value);
@@ -235,7 +267,8 @@ function validateUrl(path, value, errors) {
     report(errors, path, `invalid URL ${JSON.stringify(value)}`);
     return;
   }
-  if (!allowedUrlHosts.has(url.hostname.toLowerCase())) {
+  const hosts = vendored ? reviewedVendorUrlHosts : allowedUrlHosts;
+  if (!hosts.has(url.hostname.toLowerCase())) {
     report(errors, path, `URL host is not reviewed: ${url.hostname}`);
   }
 }
@@ -299,10 +332,8 @@ function main() {
     validateBinary(entry.path, content, errors);
     if (content.includes(0)) continue;
     const text = content.toString("utf8");
-    if (!entry.path.startsWith(reviewedVendorPrefix)) {
-      validatePrivateLocations(entry.path, text, errors);
-      validateCredentials(entry.path, text, errors);
-    }
+    validatePrivateLocations(entry.path, text, errors);
+    validateCredentials(entry.path, text, errors);
     validateUrls(entry.path, text, errors);
   }
   validateManifest(root, entries, errors);

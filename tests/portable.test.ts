@@ -154,10 +154,22 @@ test("rejects private homes, work trees, and manifest escapes", async (t) => {
 });
 
 test("rejects credential-shaped assignments and payloads", async (t) => {
-  const cases = [
-    ["key assignment", ["api", "key"].join("_") + "=live-value-123"],
-    ["token assignment", ["to", "ken"].join("") + "=live-value-123"],
-    ["secret assignment", ["sec", "ret"].join("") + "=live-value-123"],
+  const sensitiveKeys = [
+    ["database", "pass" + "word"].join("_"),
+    ["service", "to" + "ken"].join("_"),
+    ["AWS", "SEC" + "RET", "ACCESS", "KEY"].join("_"),
+    ["OPENAI", "API", "KEY"].join("_"),
+    ["to", "kens"].join(""),
+  ];
+  for (const key of sensitiveKeys) {
+    await t.test(key, () =>
+      assertRejected({
+        "tests/credentials.json": `${JSON.stringify({ [key]: "live-value-123" }, null, 2)}\n`,
+      }),
+    );
+  }
+
+  const payloads = [
     [
       "authorization",
       ["Author", "ization"].join("") + ": Bearer abcdefgh123456",
@@ -167,16 +179,94 @@ test("rejects credential-shaped assignments and payloads", async (t) => {
       ["-----BEGIN ", "PRIVATE", " KEY-----", "\nmaterial"].join(""),
     ],
   ];
-  for (const [name, value] of cases) {
+  for (const [name, value] of payloads) {
     await t.test(name, () =>
       assertRejected({ "tests/credentials.txt": `${value}\n` }),
     );
   }
 });
 
+test("accepts credential placeholders and environment references", () => {
+  const sensitive = ["service", "to", "ken"].join("_");
+  const envKey = ["OPENAI", "API", "KEY"].join("_");
+  const fixture = createFixture({
+    "tests/placeholders.txt": [
+      `${sensitive}=YOUR_TOKEN_HERE`,
+      `${sensitive}=\${SERVICE_TOKEN}`,
+      `${sensitive}=process.env.${envKey}`,
+      `${sensitive}=<provided-at-runtime>`,
+    ].join("\n"),
+  });
+  const result = fixture.run();
+  assert.equal(result.status, 0, String(result.stderr));
+});
+
 test("rejects URLs on hosts outside the public allowlist", () => {
   const url = ["https", "://", "example", ".com/resource"].join("");
   assertRejected({ "tests/url.txt": `${url}\n` });
+});
+
+test("uses an explicit reviewed URL host set for vendored skills", async (t) => {
+  const reviewedHosts = [
+    "agentskills.io",
+    "code.claude.com",
+    "github.com",
+    "localhost",
+    "mintcdn.com",
+    "platform.claude.com",
+    "primeradiant.com",
+  ];
+  await t.test("known hosts", () => {
+    const urls = reviewedHosts
+      .map((host) => ["https", "://", host, "/reviewed"].join(""))
+      .join("\n");
+    const fixture = createFixture({
+      "skills/superpowers/reviewed.md": `${urls}\n`,
+    });
+    const result = fixture.run();
+    assert.equal(result.status, 0, String(result.stderr));
+  });
+  await t.test("unknown host", () => {
+    const url = ["https", "://", "unknown", ".invalid/reviewed"].join("");
+    assertRejected({ "skills/superpowers/reviewed.md": `${url}\n` });
+  });
+  await t.test("private path", () => {
+    const home = ["/", "Users", "/", "vendor-user", "/private"].join("");
+    assertRejected({ "skills/superpowers/reviewed.md": `${home}\n` });
+  });
+  await t.test("credential payload", () => {
+    const key = ["vendor", "sec" + "ret"].join("_");
+    assertRejected({
+      "skills/superpowers/reviewed.md": `${key}=live-value-123\n`,
+    });
+  });
+});
+
+test("validates URL strings recursively in package-lock metadata", async (t) => {
+  await t.test("allowed metadata host", () => {
+    const lock = {
+      packages: {},
+      metadata: {
+        support: ["https", "://", "github.com", "/example/support"].join(""),
+      },
+    };
+    const fixture = createFixture({
+      "package-lock.json": `${JSON.stringify(lock, null, 2)}\n`,
+    });
+    const result = fixture.run();
+    assert.equal(result.status, 0, String(result.stderr));
+  });
+  await t.test("unknown metadata host", () => {
+    const lock = {
+      packages: {},
+      metadata: {
+        support: ["https", "://", "unknown", ".invalid/support"].join(""),
+      },
+    };
+    assertRejected({
+      "package-lock.json": `${JSON.stringify(lock, null, 2)}\n`,
+    });
+  });
 });
 
 test("rejects runtime-data paths", async (t) => {

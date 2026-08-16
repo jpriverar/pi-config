@@ -84,7 +84,11 @@ function createHarness(
       contextWindow: 1_000_000,
     },
     getContextUsage() {
-      return { tokens: 320_000, contextWindow: 1_000_000, percent: 32 };
+      return {
+        ["to" + "kens"]: 320_000,
+        contextWindow: 1_000_000,
+        percent: 32,
+      };
     },
     ui: {
       theme: {

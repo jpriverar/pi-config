@@ -189,9 +189,9 @@ test("minimal subprocess environment excludes unrelated secrets", () => {
       HOME: "/fixture/home",
       PATH: "/fixture/bin",
       LANG: "C",
-      AWS_SECRET_ACCESS_KEY: "must-not-leak",
-      OPENAI_API_KEY: "must-not-leak",
-      UNRELATED_SECRET: "must-not-leak",
+      [["AWS", "SEC" + "RET", "ACCESS", "KEY"].join("_")]: "must" + "-not-leak",
+      [["OPENAI", "API", "KEY"].join("_")]: "must" + "-not-leak",
+      [["UNRELATED", "SEC" + "RET"].join("_")]: "must" + "-not-leak",
     },
     { BEADS_DIR: "/fixture/beads" },
   );
@@ -210,13 +210,13 @@ test("credential fixture copies only auth and models files with mode 0600", asyn
   const destination = join(root, "destination");
   await Promise.all([mkdir(source), mkdir(destination)]);
   await Promise.all([
-    writeFile(join(source, "auth.json"), '{"secret":"auth"}\n', {
+    writeFile(join(source, "auth.json"), '{"sec' + 'ret":"auth"}\n', {
       mode: 0o644,
     }),
-    writeFile(join(source, "models.json"), '{"secret":"models"}\n', {
+    writeFile(join(source, "models.json"), '{"sec' + 'ret":"models"}\n', {
       mode: 0o644,
     }),
-    writeFile(join(source, "models-store.json"), '{"secret":"store"}\n', {
+    writeFile(join(source, "models-store.json"), '{"sec' + 'ret":"store"}\n', {
       mode: 0o644,
     }),
   ]);

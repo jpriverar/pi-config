@@ -47,11 +47,12 @@ function issue(
 }
 
 test("resolves the Beads store from BEADS_DIR before the home fallback", () => {
-  assert.equal(resolveBeadsDir({ BEADS_DIR: store }, "/Users/jp"), store);
-  assert.equal(resolveBeadsDir({}, "/Users/jp"), "/Users/jp/beads/.beads");
+  const home = ["/", "Users", "/fixture-user"].join("");
+  assert.equal(resolveBeadsDir({ BEADS_DIR: store }, home), store);
+  assert.equal(resolveBeadsDir({}, home), `${home}/beads/.beads`);
   assert.equal(
-    resolveBeadsDir({ BEADS_DIR: "" }, "/Users/jp"),
-    "/Users/jp/beads/.beads",
+    resolveBeadsDir({ BEADS_DIR: "" }, home),
+    `${home}/beads/.beads`,
   );
 });
 

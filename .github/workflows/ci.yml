@@ -42,7 +42,7 @@ jobs:
           fi
           echo "Testing Pi $PI_VERSION ($COMPAT_LANE)"
           npm ci
-          npm install --no-save "@earendil-works/pi-coding-agent@${PI_VERSION}" "@earendil-works/pi-tui@${PI_VERSION}"
+          npm install --no-save --package-lock=false "@earendil-works/pi-coding-agent@${PI_VERSION}" "@earendil-works/pi-tui@${PI_VERSION}"
           npm test
           npm run typecheck
           npm run format:check

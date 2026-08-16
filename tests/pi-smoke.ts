@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import {
+  execFile,
+  execFileSync,
+  spawn,
+  type ChildProcess,
+} from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -156,6 +161,79 @@ if (command === "list") {
 
 type RpcRow = Record<string, any>;
 
+type ProcessExit = {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
+
+function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+async function waitForProcessGroupExit(
+  pid: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(-pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+      throw error;
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+  }
+  return false;
+}
+
+async function boundedExit(
+  exited: Promise<ProcessExit>,
+  timeoutMs: number,
+  description: string,
+): Promise<ProcessExit> {
+  return await Promise.race([
+    exited,
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(`${description} did not exit within ${timeoutMs}ms`),
+          ),
+        timeoutMs,
+      ),
+    ),
+  ]);
+}
+
+export async function terminateProcessGroup(
+  child: ChildProcess,
+  exited: Promise<ProcessExit>,
+  graceMs = 500,
+): Promise<void> {
+  const pid = child.pid;
+  if (pid === undefined) {
+    await boundedExit(exited, graceMs, "process");
+    return;
+  }
+
+  if (!(await waitForProcessGroupExit(pid, graceMs))) {
+    signalProcessGroup(child, "SIGTERM");
+  }
+  if (!(await waitForProcessGroupExit(pid, graceMs))) {
+    signalProcessGroup(child, "SIGKILL");
+  }
+  await boundedExit(exited, graceMs, `process ${pid}`);
+  if (!(await waitForProcessGroupExit(pid, graceMs))) {
+    throw new Error(`process group ${pid} survived SIGKILL`);
+  }
+}
+
 async function runRpc(
   packagePath: string,
   cwd: string,
@@ -176,9 +254,13 @@ async function runRpc(
         PATH: `${fakeBd.bin}:${process.env.PATH ?? ""}`,
         PI_CODING_AGENT_DIR: agentDirectory,
       },
+      detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     },
   );
+  const exited = new Promise<ProcessExit>((resolveExit) => {
+    child.once("close", (code, signal) => resolveExit({ code, signal }));
+  });
   const rows: RpcRow[] = [];
   let stderr = "";
   child.stderr.setEncoding("utf8");
@@ -246,17 +328,14 @@ async function runRpc(
     return { commands, entries, invoked, rows, state, stderr };
   } finally {
     child.stdin.end();
-    await new Promise<void>((resolveExit, rejectExit) => {
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        rejectExit(new Error(`Pi RPC did not exit; stderr: ${stderr}`));
-      }, 5_000);
-      child.once("exit", (code) => {
-        clearTimeout(timer);
-        if (code === 0) resolveExit();
-        else rejectExit(new Error(`Pi RPC exited ${code}; stderr: ${stderr}`));
-      });
-    });
+    try {
+      await terminateProcessGroup(child, exited);
+    } catch (error) {
+      throw new Error(
+        `Pi RPC process-group shutdown failed; stderr: ${stderr}`,
+        { cause: error },
+      );
+    }
   }
 }
 
@@ -651,7 +730,12 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error.stack ?? error.message);
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === resolve(process.argv[1])
+) {
+  main().catch((error) => {
+    console.error(error.stack ?? error.message);
+    process.exitCode = 1;
+  });
+}

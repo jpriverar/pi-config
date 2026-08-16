@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 const allowedLicenses = new Set([
@@ -14,10 +23,12 @@ const allowedLicenses = new Set([
 ]);
 
 function repositoryRoot() {
-  return execFileSync("git", ["rev-parse", "--show-toplevel"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  return realpathSync(
+    execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim(),
+  );
 }
 
 function parseArguments(argv) {
@@ -76,16 +87,37 @@ function productionInventory(root) {
   );
 }
 
+function isInside(root, candidate) {
+  const location = relative(root, candidate);
+  return (
+    location === "" || (!location.startsWith(`..${sep}`) && location !== "..")
+  );
+}
+
 function assertExternalOutput(root, output) {
   const resolved = resolve(output);
-  const location = relative(root, resolved);
-  if (
-    location === "" ||
-    (!location.startsWith(`..${sep}`) && location !== "..")
-  ) {
+  if (isInside(root, resolved)) {
     throw new Error(
       `refusing to write license report inside repository: ${resolved}`,
     );
+  }
+
+  const parent = realpathSync(dirname(resolved));
+  if (isInside(root, parent)) {
+    throw new Error(
+      `refusing to write license report inside repository through parent: ${resolved}`,
+    );
+  }
+  try {
+    const existing = lstatSync(resolved);
+    if (existing.isSymbolicLink()) {
+      throw new Error(
+        `license report output must not be a symbolic link: ${resolved}`,
+      );
+    }
+    throw new Error(`license report output already exists: ${resolved}`);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
   }
   return resolved;
 }
@@ -113,7 +145,17 @@ function main() {
   const report = `${JSON.stringify(inventory, null, 2)}\n`;
   if (options.output) {
     const output = assertExternalOutput(root, options.output);
-    writeFileSync(output, report, { encoding: "utf8", mode: 0o600 });
+    const flags =
+      constants.O_WRONLY |
+      constants.O_CREAT |
+      constants.O_EXCL |
+      (constants.O_NOFOLLOW ?? 0);
+    const descriptor = openSync(output, flags, 0o600);
+    try {
+      writeFileSync(descriptor, report, { encoding: "utf8" });
+    } finally {
+      closeSync(descriptor);
+    }
     console.log(
       `Production dependency licenses verified (${inventory.length}); report: ${output}`,
     );
