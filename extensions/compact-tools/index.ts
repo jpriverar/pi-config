@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
+import { sep } from "node:path";
 
 const defaultFactories = {
   read: createReadTool,
@@ -33,9 +34,17 @@ type RenderTheme = {
   fg(color: string, text: string): string;
 };
 
+function normalizeSummaryText(value: string): string {
+  return value.replace(/[\r\n]+/g, " ");
+}
+
 function shortenPath(path: string): string {
+  const normalized = normalizeSummaryText(path);
   const home = homedir();
-  return path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+  if (normalized === home) return "~";
+  return normalized.startsWith(`${home}${sep}`)
+    ? `~${normalized.slice(home.length)}`
+    : normalized;
 }
 
 function outputText(result: RenderResult): string | undefined {
@@ -142,7 +151,7 @@ export function createCompactTools(
         return getTools(ctx.cwd).grep.execute(id, params, signal, onUpdate);
       },
       renderCall(args, theme) {
-        const pattern = args.pattern || "...";
+        const pattern = normalizeSummaryText(args.pattern || "...");
         const path = shortenPath(args.path || ".");
         return new Text(
           `${theme.fg("dim", "grep")} ${theme.fg("accent", pattern)} ${theme.fg("dim", path)}`,
@@ -171,7 +180,7 @@ export function createCompactTools(
         return getTools(ctx.cwd).find.execute(id, params, signal, onUpdate);
       },
       renderCall(args, theme) {
-        const pattern = args.pattern || "*";
+        const pattern = normalizeSummaryText(args.pattern || "*");
         const path = shortenPath(args.path || ".");
         return new Text(
           `${theme.fg("dim", "find")} ${theme.fg("accent", pattern)} ${theme.fg("dim", path)}`,
@@ -228,7 +237,7 @@ export function createCompactTools(
         return getTools(ctx.cwd).bash.execute(id, params, signal, onUpdate);
       },
       renderCall(args, theme) {
-        const command = args.command || "...";
+        const command = normalizeSummaryText(args.command || "...");
         const display =
           command.length > 80 ? `${command.slice(0, 77)}...` : command;
         return new Text(theme.fg("dim", `$ ${display}`), 0, 0);

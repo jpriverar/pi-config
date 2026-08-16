@@ -161,6 +161,69 @@ test("renders compact one-line call summaries with home abbreviation and truncat
   }
 });
 
+test("normalizes CR and LF in every user-controlled call summary field", () => {
+  const { tools } = createHarness();
+  const summaries = [
+    render(
+      tools.get("read")!.renderCall({ path: "/tmp/read\r\npath.ts" }, theme),
+    ),
+    render(
+      tools
+        .get("grep")!
+        .renderCall(
+          { pattern: "first\r\nsecond", path: "/tmp/grep\npath" },
+          theme,
+        ),
+    ),
+    render(
+      tools
+        .get("find")!
+        .renderCall(
+          { pattern: "*.ts\r\n*.tsx", path: "/tmp/find\rpath" },
+          theme,
+        ),
+    ),
+    render(tools.get("ls")!.renderCall({ path: "/tmp/ls\npath" }, theme)),
+    render(
+      tools
+        .get("bash")!
+        .renderCall({ command: "printf first\r\nprintf second" }, theme),
+    ),
+    render(
+      tools
+        .get("edit")!
+        .renderCall({ path: "/tmp/edit\r\npath", edits: [{}] }, theme),
+    ),
+    render(
+      tools
+        .get("write")!
+        .renderCall({ path: "/tmp/write\npath", content: "content" }, theme),
+    ),
+  ];
+
+  assert.deepEqual(summaries, [
+    "read /tmp/read path.ts",
+    "grep first second /tmp/grep path",
+    "find *.ts *.tsx /tmp/find path",
+    "ls /tmp/ls path",
+    "$ printf first printf second",
+    "edit /tmp/edit path",
+    "write /tmp/write path (1 lines)",
+  ]);
+  for (const summary of summaries) assert.doesNotMatch(summary, /[\r\n]/);
+});
+
+test("abbreviates only the home directory and its descendants", () => {
+  const { tools } = createHarness();
+  const ls = tools.get("ls")!;
+
+  assert.equal(render(ls.renderCall({ path: homedir() }, theme)), "ls ~");
+  assert.equal(
+    render(ls.renderCall({ path: `${homedir()}-old/file` }, theme)),
+    `ls ${homedir()}-old/file`,
+  );
+});
+
 test("hides ordinary results but renders errors even when collapsed", () => {
   const { tools } = createHarness();
   const success = { content: [{ type: "text", text: "ordinary output" }] };
