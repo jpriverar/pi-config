@@ -1,10 +1,16 @@
 # Third-Party Notices
 
+## Production dependency inventory
+
+This package bundles no production npm dependencies. Pi, Pi TUI, and TypeBox
+are peer dependencies supplied by the compatible Pi installation and are not
+included in the production dependency license report.
+
 ## Modus themes colour palette
 
-The `modus-vivendi-tinted` theme uses colours from the Modus themes
-palette by Protesilaos Stavrou. The colour palette is dedicated to the
-public domain under Creative Commons Zero (CC0).
+The `modus-vivendi-tinted` theme uses colours from the Modus themes palette by
+Protesilaos Stavrou. The colour palette is dedicated to the public domain under
+Creative Commons Zero (CC0-1.0).
 
 Source: https://protesilaos.com/codelog/2022-05-10-modus-themes-palette-cc0/
 Palette: https://protesilaos.com/emacs/modus-themes-colors

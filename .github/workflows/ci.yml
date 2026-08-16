@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: ${{ matrix.compat_lane }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compat_lane:
+          - minimum
+          - latest-0.84
+    env:
+      COMPAT_LANE: ${{ matrix.compat_lane }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Run release gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$COMPAT_LANE" = minimum ]; then
+            PI_VERSION=0.84.1
+          else
+            PI_VERSION=$(npm view @earendil-works/pi-coding-agent versions --json | node -e '
+              const versions = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              const matches = versions.filter((v) => /^0\.84\.\d+$/.test(v)).sort((a, b) => Number(a.split(".")[2]) - Number(b.split(".")[2]));
+              if (matches.length === 0) process.exit(1);
+              process.stdout.write(matches.at(-1));
+            ')
+            printf '### Latest Pi 0.84.x compatibility\n\n`%s`\n' "$PI_VERSION" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "Testing Pi $PI_VERSION ($COMPAT_LANE)"
+          npm ci
+          npm install --no-save "@earendil-works/pi-coding-agent@${PI_VERSION}" "@earendil-works/pi-tui@${PI_VERSION}"
+          npm test
+          npm run typecheck
+          npm run format:check
+          npm run verify:portable
+          npm run licenses:check
+          npm run verify:smoke -- --package "$GITHUB_WORKSPACE"
+          npm run test:file -- tests/pinned-ref.test.ts

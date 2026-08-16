@@ -2,25 +2,48 @@
 
 JP's public Pi package for a portable personal coding-agent setup.
 
-## Manual local installation
+## Requirements
+
+- Pi `>=0.84.1 <0.85.0`
+- Node.js `>=22.19.0`
+- [`bd`](https://github.com/steveyegge/beads) available on `PATH`
+
+Task data is read from `BEADS_DIR`. When it is unset, the package uses
+`~/beads/.beads`. Create and manage that store with `bd`; task state is not
+included in this package.
+
+## Manual installation
 
 ```sh
-git clone https://github.com/jpriverar/pi-config.git ~/src/pi-config
-cd ~/src/pi-config
-npm install
-pi install .
+set -euo pipefail
+pi install git:github.com/jpriverar/pi-config@v0.1.0
+```
+
+The immutable tag keeps the installed configuration reproducible. Running
+`pi update --extensions` reconciles the managed checkout with the configured
+ref; it does not advance a pinned ref to a newer tag.
+
+To remove the package and its managed checkout:
+
+```sh
+set -euo pipefail
+pi remove git:github.com/jpriverar/pi-config@v0.1.0
 ```
 
 ## Resources
 
-The package provides:
+The package manifest loads:
 
-- extensions for compact tool output, permission gates, plan progress, editing, workflow, project status, and tasks;
-- skills for superpowers, critical review, collaborative thinking, and handoffs;
-- a Modus Vivendi Tinted theme.
+- seven extensions for compact built-in tools, permission gates, plan and spec
+  progress, the styled editor, task workflow, project status, and `/tasks`;
+- four skill roots: Superpowers, critical review, collaborative thinking, and
+  handoffs;
+- the `modus-vivendi-tinted` theme.
 
-## Support
+Use `pi config` to enable or disable individual package resources after
+installation.
 
-The supported range is Pi `>=0.84.1 <0.85.0` on Node.js `>=22.19.0`.
+## Release scope
 
-The macOS bootstrap is not part of `v0.1.0`; it arrives in `v0.2.0`.
+The macOS bootstrap is intentionally not part of `v0.1.0`; bootstrap
+instructions are deferred to `v0.2.0`.
