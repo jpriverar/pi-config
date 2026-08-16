@@ -45,6 +45,8 @@ function splitCommand(command: string): string[][] {
       quote = character;
     } else if (character === "\\" && index + 1 < command.length) {
       word += command[++index];
+    } else if (character === "\n" || character === "\r") {
+      finishSegment();
     } else if (/\s/.test(character)) {
       finishWord();
     } else if (character === ";" || character === "|" || character === "&") {

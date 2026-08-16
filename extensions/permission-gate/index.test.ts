@@ -61,6 +61,8 @@ const denied = [
   "chown root:wheel / --recursive",
   "printf safe && sudo true",
   "echo safe; rm -rf /",
+  "printf safe\nsudo true",
+  "echo safe\r\nrm -rf /",
 ];
 
 for (const command of denied) {
