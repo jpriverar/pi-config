@@ -41,6 +41,26 @@ const denied = [
   "/bin/chmod  -R   777  /",
   '/usr/sbin/chown\t-R "$USER" /',
   "/usr/bin/git  push  --force origin main",
+  "env sudo true",
+  "/usr/bin/env -- sudo true",
+  "env -u SAFE sudo true",
+  "env -S 'sudo true'",
+  "command /bin/rm -rf /",
+  "env FOO=bar command rm -- / --recursive",
+  "sh -c 'rm -r -f -- /'",
+  '/bin/bash -c "git push origin main --force"',
+  "env zsh -c 'sudo true'",
+  "rm / -rf",
+  "rm --force --recursive -- /",
+  "rm -fr -- /",
+  "git push origin main --force",
+  "git -c advice.detachedHead=false push origin main -f",
+  "git push origin main --force-with-lease",
+  "chmod 777 -R -- /",
+  "chmod --recursive 777 /",
+  "chown root:wheel / --recursive",
+  "printf safe && sudo true",
+  "echo safe; rm -rf /",
 ];
 
 for (const command of denied) {
@@ -63,6 +83,10 @@ const allowed = [
   "printf safe",
   "bzl clean",
   "bazel clean",
+  "env FOO=bar printf safe",
+  "sh -c 'rm -rf ./build'",
+  "printf 'sudo true'",
+  "echo 'rm -rf /'",
 ];
 
 for (const command of allowed) {

@@ -68,6 +68,14 @@ The package manifest loads:
 Use `pi config` to enable or disable individual package resources after
 installation.
 
+## Permission guardrail
+
+The permission-gate extension performs best-effort checks for several common
+destructive shell-command forms. It is intentionally incomplete: it is not a
+shell parser, sandbox, or authorization boundary, and commands run with the
+same privileges as Pi. Do not rely on it to execute untrusted commands safely
+or to enforce access control.
+
 ## Scope
 
 The macOS bootstrap is intentionally not included. No delivery version or date
