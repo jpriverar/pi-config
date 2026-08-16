@@ -25,7 +25,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Run release gates
+      - name: Run compatibility and public-safety gates
         shell: bash
         run: |
           set -euo pipefail

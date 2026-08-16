@@ -1,6 +1,8 @@
 # JP's Pi Config
 
-JP's public Pi package for a portable personal coding-agent setup.
+JP's personal Pi configuration, published for discovery and exploration. This
+project is experimental and unsupported; it is not a stable product or a
+supported distribution.
 
 ## Requirements
 
@@ -12,22 +14,36 @@ Task data is read from `BEADS_DIR`. When it is unset, the package uses
 `~/beads/.beads`. Create and manage that store with `bd`; task state is not
 included in this package.
 
-## Manual installation
+## Explore current main
+
+Install the current `main` branch to explore the configuration as it evolves:
 
 ```sh
 set -euo pipefail
-pi install git:github.com/jpriverar/pi-config@v0.1.0
+pi install git:github.com/jpriverar/pi-config@main
 ```
 
-The immutable tag keeps the installed configuration reproducible. Running
-`pi update --extensions` reconciles the managed checkout with the configured
-ref; it does not advance a pinned ref to a newer tag.
+`main` may change without notice. There is no stable-release or compatibility
+promise beyond the currently documented Pi and Node.js range.
 
-To remove the package and its managed checkout:
+## Pin an exact revision
+
+For reproducible use on personal or work machines, replace the placeholder with
+an exact commit SHA reviewed for that environment:
 
 ```sh
 set -euo pipefail
-pi remove git:github.com/jpriverar/pi-config@v0.1.0
+pi install git:github.com/jpriverar/pi-config@YOUR_COMMIT_SHA
+```
+
+Running `pi update --extensions` reconciles the managed checkout with its exact
+configured commit; it does not advance that commit pin when `main` changes.
+
+Remove the package with the same source originally installed, for example:
+
+```sh
+set -euo pipefail
+pi remove git:github.com/jpriverar/pi-config@YOUR_COMMIT_SHA
 ```
 
 ## Resources
@@ -43,7 +59,7 @@ The package manifest loads:
 Use `pi config` to enable or disable individual package resources after
 installation.
 
-## Release scope
+## Scope
 
-The macOS bootstrap is intentionally not part of `v0.1.0`; bootstrap
-instructions are deferred to `v0.2.0`.
+The macOS bootstrap is intentionally not included. No delivery version or date
+is promised for it.
