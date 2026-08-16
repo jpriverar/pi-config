@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { visibleWidth } from "@earendil-works/pi-tui";
+
 import type { BeadsIssue } from "../../lib/beads.js";
 import projectStatus from "./index.js";
 
@@ -38,7 +40,7 @@ function createHarness(
   let thinkingLevel = "high";
   let sessionName =
     options.sessionName === undefined ? "pi-setup" : options.sessionName;
-  let renderedWidget = "";
+  let widgetFactory: any;
   const issues = options.issues ?? [];
   const readyIds = new Set(options.readyIds ?? []);
 
@@ -97,7 +99,7 @@ function createHarness(
         },
       },
       setWidget(_key: string, factory: any) {
-        renderedWidget = factory ? factory({}, {}).render(120)[0] : "";
+        widgetFactory = factory;
       },
     },
   };
@@ -107,7 +109,8 @@ function createHarness(
     calls,
     context,
     handlers,
-    render: () => renderedWidget,
+    render: (width = 120) =>
+      widgetFactory ? widgetFactory({}, {}).render(width)[0] : "",
     setModel(name: string) {
       context.model.name = name;
     },
@@ -199,6 +202,37 @@ test("preserves model, thinking, context, and session-name refresh behavior", as
   await harness.handlers.get("session_info_changed")?.({}, harness.context);
   assert.match(harness.render(), /pr-review/);
   assert.doesNotMatch(harness.render(), /pi-setup/);
+});
+
+test("fits dense global status within the terminal width", async () => {
+  const inProgress = Array.from({ length: 2 }, (_, index) =>
+    issue(`doing-${index}`, "in_progress"),
+  );
+  const blocked = [issue("blocked", "blocked")];
+  const ready = Array.from({ length: 19 }, (_, index) =>
+    issue(`ready-${index}`),
+  );
+  const waiting = Array.from({ length: 2 }, (_, index) =>
+    issue(`waiting-${index}`),
+  );
+  const closed = Array.from({ length: 115 }, (_, index) =>
+    issue(`closed-${index}`, "closed"),
+  );
+  const harness = createHarness({
+    sessionName: "",
+    issues: [...inProgress, ...blocked, ...ready, ...waiting],
+    readyIds: ready.map((item) => item.id),
+    closed,
+  });
+
+  await start(harness);
+
+  const rendered = harness.render(80);
+  assert.ok(
+    visibleWidth(rendered) <= 80,
+    `status width ${visibleWidth(rendered)} exceeds 80`,
+  );
+  assert.match(rendered, /Opus 4\.6 • high • 32%/);
 });
 
 test("empty queries render zero task counts without hiding identity", async () => {

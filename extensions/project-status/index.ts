@@ -3,7 +3,7 @@ import type {
   ExtensionContext,
   ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import {
   classifyReadiness,
@@ -152,11 +152,23 @@ export default function projectStatus(pi: ExtensionAPI) {
 
     ctx.ui.setWidget(WIDGET_KEY, () => ({
       render(width: number) {
-        const gap = Math.max(
-          2,
-          width - visibleWidth(left) - visibleWidth(right),
+        if (width <= 0) return [""];
+        if (!right) return [truncateToWidth(left, width, "…", true)];
+        if (!left) return [truncateToWidth(right, width, "…", true)];
+
+        const rightWidth = visibleWidth(right);
+        if (rightWidth + 2 >= width) {
+          return [truncateToWidth(right, width, "…", true)];
+        }
+
+        const fittedLeft = truncateToWidth(
+          left,
+          width - rightWidth - 2,
+          "…",
+          true,
         );
-        return [left + " ".repeat(gap) + right];
+        const gap = width - visibleWidth(fittedLeft) - rightWidth;
+        return [fittedLeft + " ".repeat(gap) + right];
       },
       invalidate() {},
     }));
