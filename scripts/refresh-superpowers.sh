@@ -6,7 +6,7 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 version=$1
-if ! printf '%s\n' "$version" | rg -q '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "invalid Superpowers version: $version" >&2
   exit 2
 fi
@@ -110,9 +110,9 @@ if [ "$actual_commit" != "$expected_commit" ]; then
 fi
 
 test -f "$tmp/superpowers/LICENSE"
-rg -q 'MIT License' "$tmp/superpowers/LICENSE"
+grep -q 'MIT License' "$tmp/superpowers/LICENSE"
 test -d "$tmp/superpowers/skills"
-find "$tmp/superpowers/skills" -name SKILL.md -type f | rg -q .
+find "$tmp/superpowers/skills" -name SKILL.md -type f -print -quit | grep -q .
 
 cp -Rp "$tmp/superpowers/skills/." "$staging/"
 cp -p "$tmp/superpowers/LICENSE" "$staging/LICENSE"
