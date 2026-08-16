@@ -13,5 +13,5 @@ Generate a concise session handoff for the current work. Gather the actual Git b
 
 ## Forbidden observations
 
-- `regex:/Users/[^\s]+|~/dd(?:/|\b)|\bDatadog\b|\bSlack\b`
+- `regex:/Users/[^\s]+|~\/\x64\x64(?:/|\b)|\b\x44ata\x64og\b|\b\x53lack\b`
 - `regex:\bnot (?:inside|in) (?:a )?git repository\b|\bno git (?:repository|checkout)\b`

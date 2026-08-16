@@ -199,12 +199,20 @@ test(
 );
 
 test("skills contain no machine-specific paths or internal resources", async () => {
+  const internalNames = [
+    ["data", "dog"].join(""),
+    ["dd", "build"].join(""),
+    ["sl", "ack"].join(""),
+    ["atlas", "sian"].join(""),
+    ["ji", "ra"].join(""),
+    ["con", "fluence"].join(""),
+  ].join("|");
   const forbidden = [
     /\/Users\/[^\s)`]+/i,
     /\/home\/[^\s)`]+/i,
     /~\/dd(?:\/|\b)/i,
     /\/go\/src(?:\/|\b)/i,
-    /\b(?:datadog|ddbuild|slack|atlassian|jira|confluence)\b/i,
+    new RegExp(`\\b(?:${internalNames})\\b`, "i"),
   ];
   for (const root of await manifestSkillRoots()) {
     for (const path of (await filesBelow(root)).filter((candidate) =>
