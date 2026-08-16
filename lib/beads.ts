@@ -121,8 +121,13 @@ function decodeIssues(value: unknown): BeadsIssue[] {
   return value.map(decodeIssue);
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function isMissingCliError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
 }
 
 export function createBeadsClient(
@@ -136,23 +141,52 @@ export function createBeadsClient(
     args: readonly string[],
     decode: (value: unknown) => T,
   ): Promise<BeadsResult<T>> {
+    let result: BeadsExecResult;
     try {
-      const result = await exec("bd", [...args, "--db", store]);
-      if (result.code !== 0) {
-        const detail =
-          result.stderr.trim() || `bd exited with code ${result.code}`;
-        return {
-          ok: false,
-          error: { operation, store, message: detail },
-        };
-      }
-
-      const value: unknown = JSON.parse(result.stdout);
-      return { ok: true, value: decode(value) };
+      result = await exec("bd", [...args, "--db", store]);
     } catch (error) {
       return {
         ok: false,
-        error: { operation, store, message: errorMessage(error) },
+        error: {
+          operation,
+          store,
+          message: isMissingCliError(error)
+            ? "bd CLI is unavailable"
+            : "bd execution failed",
+        },
+      };
+    }
+
+    if (result.code !== 0) {
+      return {
+        ok: false,
+        error: {
+          operation,
+          store,
+          message:
+            result.code === 127
+              ? "bd CLI is unavailable (exit code 127)"
+              : `bd exited with code ${result.code}`,
+        },
+      };
+    }
+
+    let value: unknown;
+    try {
+      value = JSON.parse(result.stdout);
+    } catch {
+      return {
+        ok: false,
+        error: { operation, store, message: "bd returned malformed JSON" },
+      };
+    }
+
+    try {
+      return { ok: true, value: decode(value) };
+    } catch {
+      return {
+        ok: false,
+        error: { operation, store, message: "bd returned an invalid response" },
       };
     }
   }

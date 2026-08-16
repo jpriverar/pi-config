@@ -158,7 +158,7 @@ test("rejects malformed ready records", async () => {
   if (!result.ok) {
     assert.equal(result.error.operation, "list ready issues");
     assert.equal(result.error.store, store);
-    assert.match(result.error.message, /title/);
+    assert.equal(result.error.message, "bd returned an invalid response");
   }
 });
 
@@ -176,12 +176,13 @@ test("returns contextual failures for a missing ready CLI", async () => {
   if (!result.ok) {
     assert.equal(result.error.operation, "list ready issues");
     assert.equal(result.error.store, store);
-    assert.match(result.error.message, /ENOENT/);
+    assert.equal(result.error.message, "bd CLI is unavailable");
   }
 });
 
 test("returns contextual failures for a non-zero ready exit", async () => {
-  const fake = fakeExec({ code: 1, stdout: "", stderr: "store unavailable" });
+  const sentinel = "SECRET TASK: investigate customer incident";
+  const fake = fakeExec({ code: 1, stdout: "", stderr: sentinel });
   const result = await createBeadsClient(fake.exec, {
     env: { BEADS_DIR: store },
   }).listReadyIssueIds();
@@ -190,40 +191,42 @@ test("returns contextual failures for a non-zero ready exit", async () => {
   if (!result.ok) {
     assert.equal(result.error.operation, "list ready issues");
     assert.equal(result.error.store, store);
-    assert.match(result.error.message, /store unavailable/);
+    assert.equal(result.error.message, "bd exited with code 1");
+    assert.doesNotMatch(result.error.message, /SECRET TASK/);
   }
 });
 
-test("turns list decoding and command failures into BeadsResult errors", async (t) => {
+test("turns list decoding and command failures into curated BeadsResult errors", async (t) => {
+  const sentinel = "SECRET TASK: investigate customer incident";
   const cases: Array<{
     name: string;
     result: BeadsExecResult;
-    message: RegExp;
+    message: string;
   }> = [
     {
       name: "malformed JSON",
-      result: { code: 0, stdout: "not json", stderr: "" },
-      message: /JSON/,
+      result: { code: 0, stdout: `{${sentinel}`, stderr: "" },
+      message: "bd returned malformed JSON",
     },
     {
       name: "unsupported status",
-      result: success([issue({ status: "unknown" })]),
-      message: /status/,
+      result: success([issue({ status: sentinel })]),
+      message: "bd returned an invalid response",
     },
     {
       name: "missing title",
-      result: success([issue({ title: undefined })]),
-      message: /title/,
+      result: success([issue({ title: undefined, labels: [sentinel] })]),
+      message: "bd returned an invalid response",
     },
     {
       name: "non-zero exit",
-      result: { code: 2, stdout: "", stderr: "database missing" },
-      message: /database missing/,
+      result: { code: 2, stdout: "", stderr: sentinel },
+      message: "bd exited with code 2",
     },
     {
       name: "missing-binary-shaped result",
-      result: { code: 127, stdout: "", stderr: "bd: command not found" },
-      message: /command not found/,
+      result: { code: 127, stdout: "", stderr: sentinel },
+      message: "bd CLI is unavailable (exit code 127)",
     },
   ];
 
@@ -238,10 +241,47 @@ test("turns list decoding and command failures into BeadsResult errors", async (
       if (!result.ok) {
         assert.equal(result.error.operation, "list issues");
         assert.equal(result.error.store, store);
-        assert.match(result.error.message, testCase.message);
+        assert.equal(result.error.message, testCase.message);
+        assert.doesNotMatch(result.error.message, /SECRET TASK/);
       }
     });
   }
+});
+
+test("does not expose arbitrary executor or decoder errors", async (t) => {
+  const sentinel = "SECRET TASK: investigate customer incident";
+
+  await t.test("executor throw", async () => {
+    const exec: BeadsExec = async () => {
+      throw new Error(sentinel);
+    };
+    const result = await createBeadsClient(exec, {
+      env: { BEADS_DIR: store },
+    }).listIssues();
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.error.message, "bd execution failed");
+      assert.doesNotMatch(result.error.message, /SECRET TASK/);
+    }
+  });
+
+  await t.test("decoder throw", async () => {
+    const fake = fakeExec(success([]));
+    const result = await createBeadsClient(fake.exec, {
+      env: { BEADS_DIR: store },
+    }).runBd("decode response", ["list", "--json"], () => {
+      throw new Error(sentinel);
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.error.operation, "decode response");
+      assert.equal(result.error.store, store);
+      assert.equal(result.error.message, "bd returned an invalid response");
+      assert.doesNotMatch(result.error.message, /SECRET TASK/);
+    }
+  });
 });
 
 test("classifies readiness and derives labels once in source order", () => {
