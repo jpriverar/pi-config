@@ -20,6 +20,7 @@ import {
   copyCredentialFiles,
   evaluateScenario,
   loadScenario,
+  persistAndEvaluateScenario,
   runCommand,
   type ScenarioSummary,
 } from "./skill-behavior.js";
@@ -65,6 +66,13 @@ test("behavior evaluator requires two relevant questions and rejects concrete ad
     ).passed,
     true,
   );
+  assert.equal(
+    evaluateScenario(
+      grill,
+      "What throughput do you need to support? Which failure modes could you tolerate?",
+    ).passed,
+    true,
+  );
 
   assert.equal(
     evaluateScenario(
@@ -80,6 +88,50 @@ test("behavior evaluator requires two relevant questions and rejects concrete ad
     ).passed,
     true,
   );
+  assert.equal(
+    evaluateScenario(
+      thinking,
+      "What evidence do you need to settle the decision? Do you think you could roll back safely?",
+    ).passed,
+    true,
+  );
+  assert.equal(
+    evaluateScenario(
+      thinking,
+      "What evidence supports your assumption that staging reduces risk? Which rollback constraint would settle the decision?",
+    ).passed,
+    true,
+  );
+});
+
+test("final transcript write cannot return a passing summary after timeout", async () => {
+  const scenario = await loadScenario("grill-me", scenariosDirectory);
+  const controller = new AbortController();
+  let releaseWrite!: () => void;
+  let reportWriteStarted!: () => void;
+  const writeStarted = new Promise<void>((resolve) => {
+    reportWriteStarted = resolve;
+  });
+  const writePending = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const operation = persistAndEvaluateScenario(
+    scenario,
+    "What throughput must this handle? Which failure mode can the design tolerate?",
+    "/external/transcript.txt",
+    controller.signal,
+    async () => {
+      reportWriteStarted();
+      await writePending;
+    },
+  );
+
+  await writeStarted;
+  const timeoutReason = new Error("final write timeout");
+  controller.abort(timeoutReason);
+  releaseWrite();
+
+  await assert.rejects(operation, (error) => error === timeoutReason);
 });
 
 test("baseline exit contract distinguishes expected absence from unexpected discovery", () => {

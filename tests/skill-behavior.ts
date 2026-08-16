@@ -193,6 +193,25 @@ export function evaluateScenario(
   };
 }
 
+export type TranscriptWriter = (
+  path: string,
+  contents: string,
+) => Promise<void>;
+
+export async function persistAndEvaluateScenario(
+  scenario: Scenario,
+  text: string,
+  transcriptPath: string,
+  signal: AbortSignal,
+  writer: TranscriptWriter = async (path, contents) =>
+    writeFile(path, contents),
+): Promise<ScenarioSummary> {
+  throwIfAborted(signal);
+  await writer(transcriptPath, `${text.trim()}\n`);
+  throwIfAborted(signal);
+  return evaluateScenario(scenario, text);
+}
+
 function isWithin(parent: string, candidate: string): boolean {
   const path = relative(parent, candidate);
   return path === "" || (!path.startsWith(`..${sep}`) && path !== "..");
@@ -745,11 +764,12 @@ async function runScenario(
     const text = (textResponse.data as { text?: unknown } | undefined)?.text;
     if (typeof text !== "string" || text.trim().length === 0)
       throw new Error(`${scenario.name} returned no final assistant text`);
-    await writeFile(
+    return persistAndEvaluateScenario(
+      scenario,
+      text,
       join(outputDirectory, `${scenario.name}.txt`),
-      `${text.trim()}\n`,
+      controller.signal,
     );
-    return evaluateScenario(scenario, text);
   } finally {
     clearTimeout(timer);
     await rpc?.stop(
