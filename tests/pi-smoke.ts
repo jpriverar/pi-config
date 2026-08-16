@@ -642,7 +642,7 @@ async function verifyContractHarness(
   assert.ok(
     editorLines
       .slice(0, -1)
-      .every((line: string) => line.includes("\u001b[48;2;30;30;30m")),
+      .every((line: string) => line.includes("\u001b[48;2;47;56;73m")),
   );
   assert.equal(editorLines.at(-1), "");
   assert.deepEqual(harness.footer()?.().render(80), []);

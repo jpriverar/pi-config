@@ -35,6 +35,10 @@ async function waitForAutocomplete(editor: StyledEditor): Promise<void> {
   assert.fail("autocomplete did not become visible");
 }
 
+test("uses the visible Modus blue-gray input surface", () => {
+  assert.equal(INPUT_BACKGROUND_ANSI, "\x1b[48;2;47;56;73m");
+});
+
 test("keeps the tinted background active after the fake cursor reset", () => {
   const editor = createEditor();
   editor.setText("hello");
