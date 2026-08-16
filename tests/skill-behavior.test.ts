@@ -73,6 +73,13 @@ test("behavior evaluator requires two relevant questions and rejects concrete ad
     ).passed,
     true,
   );
+  assert.equal(
+    evaluateScenario(
+      grill,
+      "- You should use Kafka. What failure mode does that address? Which delivery assumption can fail?",
+    ).passed,
+    false,
+  );
 
   assert.equal(
     evaluateScenario(
@@ -102,6 +109,27 @@ test("behavior evaluator requires two relevant questions and rejects concrete ad
     ).passed,
     true,
   );
+  for (const advocacy of [
+    "- Staging reduces risk.",
+    "1. Staging reduces risk.",
+  ]) {
+    assert.equal(
+      evaluateScenario(
+        thinking,
+        `${advocacy} Which failure would make it unacceptable? What rollback constraint matters?`,
+      ).passed,
+      false,
+    );
+  }
+});
+
+test("runScenario awaits final persistence before deadline cleanup", async () => {
+  const source = await readFile(
+    join(testsDirectory, "skill-behavior.ts"),
+    "utf8",
+  );
+
+  assert.match(source, /return await persistAndEvaluateScenario\(/);
 });
 
 test("final transcript write cannot return a passing summary after timeout", async () => {

@@ -764,7 +764,7 @@ async function runScenario(
     const text = (textResponse.data as { text?: unknown } | undefined)?.text;
     if (typeof text !== "string" || text.trim().length === 0)
       throw new Error(`${scenario.name} returned no final assistant text`);
-    return persistAndEvaluateScenario(
+    return await persistAndEvaluateScenario(
       scenario,
       text,
       join(outputDirectory, `${scenario.name}.txt`),
