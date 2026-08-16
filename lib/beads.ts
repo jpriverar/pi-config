@@ -72,6 +72,29 @@ const issueStatuses: ReadonlySet<string> = new Set([
   "deferred",
   "closed",
 ]);
+const ID_LIMIT = 128;
+const TITLE_LIMIT = 500;
+const LABEL_LIMIT = 128;
+const UPDATED_AT_LIMIT = 128;
+
+function normalizeMetadata(value: string, limit: number): string {
+  const withoutTerminalSequences = value
+    .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b[P^_][\s\S]*?\u001b\\/g, "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[@-_]/g, "");
+  const normalized = withoutTerminalSequences
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return [...normalized].slice(0, limit).join("");
+}
+
+function normalizeId(value: string): string {
+  const id = normalizeMetadata(value, ID_LIMIT);
+  if (!id) throw new Error("issue id is empty after normalization");
+  return id;
+}
 
 function decodeIssue(value: unknown, index: number): BeadsIssue {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -103,13 +126,16 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
   }
 
   const decoded: BeadsIssue = {
-    id: record.id,
-    title: record.title,
+    id: normalizeId(record.id),
+    title: normalizeMetadata(record.title, TITLE_LIMIT) || "(untitled task)",
     status: record.status as IssueStatus,
-    labels: (record.labels as string[] | undefined) ?? [],
+    labels: ((record.labels as string[] | undefined) ?? [])
+      .map((label) => normalizeMetadata(label, LABEL_LIMIT))
+      .filter((label) => label.length > 0),
   };
   if (record.updated_at !== undefined) {
-    decoded.updatedAt = record.updated_at;
+    const updatedAt = normalizeMetadata(record.updated_at, UPDATED_AT_LIMIT);
+    if (updatedAt) decoded.updatedAt = updatedAt;
   }
   return decoded;
 }

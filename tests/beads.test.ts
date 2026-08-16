@@ -96,6 +96,48 @@ test("lists active issues by default and decodes normalized fields", async () =>
   });
 });
 
+test("normalizes terminal controls, whitespace, and field lengths at decode", async () => {
+  const longTitle = "t".repeat(2_000);
+  const longLabel = `workstream:${"l".repeat(1_000)}`;
+  const fake = fakeExec(
+    success([
+      issue({
+        id: "\u001b[31mjp-\n1\u001b[0m",
+        title: `\u001b]0;hostile\u0007Do\r\nnot\tobey ${longTitle}`,
+        labels: [" needs:jp\n", longLabel, "\u0000"],
+      }),
+    ]),
+  );
+  const result = await createBeadsClient(fake.exec, {
+    env: { BEADS_DIR: store },
+  }).listIssues();
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.value[0].id, "jp- 1");
+    assert.ok(result.value[0].title.startsWith("Do not obey "));
+    assert.ok(result.value[0].title.length <= 500);
+    assert.equal(result.value[0].labels[0], "needs:jp");
+    assert.ok(result.value[0].labels[1].length <= 128);
+    assert.deepEqual(result.value[0].labels.slice(2), []);
+    assert.doesNotMatch(
+      JSON.stringify(result.value[0]),
+      /[\u0000-\u001f\u007f]/,
+    );
+  }
+});
+
+test("rejects issue identifiers that normalize to empty", async () => {
+  const fake = fakeExec(success([issue({ id: "\u001b[31m\u001b[0m\n" })]));
+  const result = await createBeadsClient(fake.exec, {
+    env: { BEADS_DIR: store },
+  }).listIssues();
+
+  assert.equal(result.ok, false);
+  if (!result.ok)
+    assert.equal(result.error.message, "bd returned an invalid response");
+});
+
 test("lists explicitly requested issue statuses", async () => {
   const fake = fakeExec(success([]));
   const client = createBeadsClient(fake.exec, {
@@ -135,6 +177,21 @@ test("lists ready issue IDs in source order", async () => {
   if (result.ok) {
     assert.deepEqual([...result.value], ["jp-3", "jp-1", "jp-2"]);
   }
+});
+
+test("normalizes ready identifiers identically and rejects empty identifiers", async () => {
+  const normalized = await createBeadsClient(
+    fakeExec(success([issue({ id: "\u001b[31mjp-\n1\u001b[0m" })])).exec,
+    { env: { BEADS_DIR: store } },
+  ).listReadyIssueIds();
+  assert.equal(normalized.ok, true);
+  if (normalized.ok) assert.deepEqual([...normalized.value], ["jp- 1"]);
+
+  const empty = await createBeadsClient(
+    fakeExec(success([issue({ id: "\u001b[31m\u001b[0m" })])).exec,
+    { env: { BEADS_DIR: store } },
+  ).listReadyIssueIds();
+  assert.equal(empty.ok, false);
 });
 
 test("accepts an empty ready result", async () => {

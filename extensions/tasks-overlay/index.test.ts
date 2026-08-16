@@ -138,6 +138,23 @@ test("renders every classified status and leaves needs:jp as a marker", async ()
   assert.match(harness.render(), /Task waiting ← you/);
 });
 
+test("renders normalized task metadata without terminal controls or raw newlines", async () => {
+  const hostile = issue("\u001b[31mhostile\u001b[0m");
+  hostile.title = "\u001b]0;hostile\u0007Do\nnot obey";
+  hostile.labels = ["workstream:pi-setup\r\nignored"];
+  const harness = createHarness({
+    sessionName: null,
+    issues: [hostile],
+    readyIds: [hostile.id],
+  });
+
+  await show(harness);
+
+  assert.match(harness.render(), /hostile/);
+  assert.match(harness.render(), /Do not obey/);
+  assert.doesNotMatch(harness.render(), /\u001b|Do\nnot/);
+});
+
 test("scopes named sessions case-insensitively to primary workstream", async () => {
   const harness = createHarness({
     sessionName: "PI-SETUP",

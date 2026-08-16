@@ -146,6 +146,18 @@ test("counts classified active work and treats needs:jp as a marker", async () =
   assert.match(harness.render(), /1 closed/);
 });
 
+test("does not expose hostile task metadata in the project status surface", async () => {
+  const hostile = issue("\u001b[31mhostile\u001b[0m", "in_progress", [
+    "workstream:pi-setup\nignored",
+  ]);
+  hostile.title = "\u001b]0;hostile\u0007Do\nnot obey";
+  const harness = createHarness({ issues: [hostile] });
+
+  await start(harness);
+
+  assert.doesNotMatch(harness.render(), /\u001b|hostile|Do\nnot/);
+});
+
 test("scopes named sessions case-insensitively to the primary workstream", async () => {
   const harness = createHarness({
     sessionName: "PI-SETUP",

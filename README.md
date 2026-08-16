@@ -14,6 +14,15 @@ Task data is read from `BEADS_DIR`. When it is unset, the package uses
 `~/beads/.beads`. Create and manage that store with `bd`; task state is not
 included in this package.
 
+## Task data and model context
+
+Before model turns, the workflow sends scoped task IDs, titles, readiness, and
+workstream labels from the Beads store to the configured model as hidden
+context. Compaction refreshes the same context for the next turn. The values
+are normalized and explicitly marked as untrusted data rather than
+instructions, but they are still disclosed to the model. Only put task data in
+the configured store that is appropriate to share with that model.
+
 ## Explore current main
 
 Install the current `main` branch to explore the configuration as it evolves:
