@@ -1,4 +1,8 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import {
   chmod,
@@ -8,14 +12,13 @@ import {
   readFile,
   realpath,
   rm,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import {
   basename,
+  delimiter,
   dirname,
-  isAbsolute,
   join,
   relative,
   resolve,
@@ -34,19 +37,19 @@ interface Options {
   output: string;
 }
 
-interface Scenario {
+export interface Scenario {
   name: SkillName;
   prompt: string;
   required: string[];
   forbidden: string[];
 }
 
-interface CriterionResult {
+export interface CriterionResult {
   criterion: string;
   passed: boolean;
 }
 
-interface ScenarioSummary {
+export interface ScenarioSummary {
   skill: SkillName;
   discovered: boolean;
   passed: boolean;
@@ -113,7 +116,7 @@ function section(markdown: string, heading: string): string {
   return match[1].trim();
 }
 
-async function loadScenario(
+export async function loadScenario(
   name: SkillName,
   scenariosDirectory: string,
 ): Promise<Scenario> {
@@ -134,6 +137,24 @@ async function loadScenario(
 }
 
 function evaluateCriterion(text: string, criterion: string): boolean {
+  if (criterion.startsWith("qualifying-questions>=")) {
+    const separator = criterion.indexOf(":");
+    if (separator < 0)
+      throw new Error(
+        `qualifying question criterion needs a topic regex: ${criterion}`,
+      );
+    const minimum = Number.parseInt(
+      criterion.slice("qualifying-questions>=".length, separator),
+      10,
+    );
+    if (!Number.isInteger(minimum))
+      throw new Error(`invalid qualifying question criterion: ${criterion}`);
+    const topic = new RegExp(criterion.slice(separator + 1), "i");
+    const questions = text.match(/[^\n.!?]*\?/g) ?? [];
+    return (
+      questions.filter((question) => topic.test(question)).length >= minimum
+    );
+  }
   if (criterion.startsWith("questions>=")) {
     const minimum = Number.parseInt(criterion.slice("questions>=".length), 10);
     if (!Number.isInteger(minimum))
@@ -149,7 +170,10 @@ function evaluateCriterion(text: string, criterion: string): boolean {
   throw new Error(`unknown criterion: ${criterion}`);
 }
 
-function evaluateScenario(scenario: Scenario, text: string): ScenarioSummary {
+export function evaluateScenario(
+  scenario: Scenario,
+  text: string,
+): ScenarioSummary {
   const required = scenario.required.map((criterion) => ({
     criterion,
     passed: evaluateCriterion(text, criterion),
@@ -215,23 +239,59 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-async function linkIfPresent(
+export async function copyCredentialFiles(
   sourceDirectory: string,
   destinationDirectory: string,
-  name: string,
 ): Promise<void> {
-  const source = join(sourceDirectory, name);
-  try {
-    await lstat(source);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
+  for (const name of ["auth.json", "models.json"]) {
+    const source = join(sourceDirectory, name);
+    try {
+      const contents = await readFile(source);
+      await writeFile(join(destinationDirectory, name), contents, {
+        mode: 0o600,
+      });
+      await chmod(join(destinationDirectory, name), 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
-  await symlink(source, join(destinationDirectory, name));
+}
+
+export function buildMinimalEnvironment(
+  source: NodeJS.ProcessEnv,
+  overrides: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const name of [
+    "HOME",
+    "PATH",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "LANG",
+    "LC_ALL",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "VOLTA_HOME",
+    "NODE_EXTRA_CA_CERTS",
+  ]) {
+    if (source[name] !== undefined) environment[name] = source[name];
+  }
+  return { ...environment, ...overrides };
+}
+
+function abortError(signal: AbortSignal, fallback: string): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error(fallback);
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortError(signal, "scenario aborted");
 }
 
 async function createFixture(
   root: string,
+  signal: AbortSignal,
 ): Promise<{ cwd: string; env: NodeJS.ProcessEnv }> {
   const cwd = join(root, "repository");
   const agentDirectory = join(root, "pi-agent");
@@ -246,11 +306,8 @@ async function createFixture(
 
   const sourceAgentDirectory =
     process.env.PI_SKILL_TEST_CREDENTIAL_DIR ?? join(homedir(), ".pi", "agent");
-  await Promise.all([
-    linkIfPresent(sourceAgentDirectory, agentDirectory, "auth.json"),
-    linkIfPresent(sourceAgentDirectory, agentDirectory, "models.json"),
-    linkIfPresent(sourceAgentDirectory, agentDirectory, "models-store.json"),
-  ]);
+  await copyCredentialFiles(sourceAgentDirectory, agentDirectory);
+  throwIfAborted(signal);
 
   await writeFile(
     join(beadsDirectory, "fixture-123.json"),
@@ -271,10 +328,10 @@ async function createFixture(
   );
   await chmod(fakeBd, 0o755);
 
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const env = buildMinimalEnvironment(process.env, {
     PI_CODING_AGENT_DIR: agentDirectory,
     PI_CODING_AGENT_SESSION_DIR: join(root, "sessions"),
+    PI_CLIENT_SESSION_ID: "skill-behavior-fixture",
     PI_OFFLINE: "1",
     PI_SKIP_VERSION_CHECK: "1",
     PI_TELEMETRY: "0",
@@ -284,48 +341,140 @@ async function createFixture(
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
     GIT_CEILING_DIRECTORIES: root,
-    PATH: `${binDirectory}${sep === "/" ? ":" : ";"}${process.env.PATH ?? ""}`,
-  };
+    PATH: `${binDirectory}${delimiter}${process.env.PATH ?? ""}`,
+  });
 
-  await run("git", ["init", "--initial-branch", "fixture-handoff"], cwd, env);
-  await run("git", ["config", "user.name", "Skill Fixture"], cwd, env);
-  await run(
+  await runCommand(
+    "git",
+    ["init", "--initial-branch", "fixture-handoff"],
+    cwd,
+    env,
+    signal,
+  );
+  await runCommand(
+    "git",
+    ["config", "user.name", "Skill Fixture"],
+    cwd,
+    env,
+    signal,
+  );
+  await runCommand(
     "git",
     ["config", "user.email", "fixture@example.invalid"],
     cwd,
     env,
+    signal,
   );
   await writeFile(join(cwd, "fixture-change.txt"), "before\n");
-  await run("git", ["add", "fixture-change.txt"], cwd, env);
-  await run("git", ["commit", "-m", "Created fixture"], cwd, env);
+  await runCommand("git", ["add", "fixture-change.txt"], cwd, env, signal);
+  await runCommand(
+    "git",
+    ["commit", "-m", "Created fixture"],
+    cwd,
+    env,
+    signal,
+  );
   await writeFile(join(cwd, "fixture-change.txt"), "before\nafter\n");
   return { cwd, env };
 }
 
-async function run(
+interface ProcessExit {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+async function waitForProcessGroupExit(pid: number): Promise<void> {
+  for (let attempt = 0; attempt < 80; attempt++) {
+    try {
+      process.kill(-pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  throw new Error(`process group ${pid} did not exit`);
+}
+
+async function terminateProcessGroup(
+  child: ChildProcess,
+  exited: Promise<ProcessExit>,
+): Promise<void> {
+  const pid = child.pid;
+  if (pid === undefined) {
+    await exited;
+    return;
+  }
+  signalProcessGroup(child, "SIGTERM");
+  await Promise.race([
+    exited,
+    new Promise((resolvePromise) => setTimeout(resolvePromise, 250)),
+  ]);
+  signalProcessGroup(child, "SIGKILL");
+  await exited;
+  await waitForProcessGroupExit(pid);
+}
+
+export async function runCommand(
   command: string,
   args: string[],
   cwd: string,
   env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
 ): Promise<void> {
-  await new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stderr = "";
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    child.once("error", reject);
-    child.once("exit", (code) =>
-      code === 0
-        ? resolvePromise()
-        : reject(new Error(`${command} exited ${code}: ${stderr}`)),
-    );
+  throwIfAborted(signal);
+  const child = spawn(command, args, {
+    cwd,
+    env,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  let stderr = "";
+  let spawnError: Error | undefined;
+  child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+  const exited = new Promise<ProcessExit>((resolvePromise) =>
+    child.once("close", (code, exitSignal) =>
+      resolvePromise({ code, signal: exitSignal }),
+    ),
+  );
+  let termination: Promise<void> | undefined;
+  const onAbort = () => {
+    termination ??= terminateProcessGroup(child, exited);
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  const result = await exited;
+  signal.removeEventListener("abort", onAbort);
+  if (signal.aborted) {
+    await termination;
+    throw abortError(signal, `${command} aborted`);
+  }
+  if (spawnError) throw spawnError;
+  if (result.code !== 0) {
+    throw new Error(
+      `${command} exited ${result.code} (signal=${result.signal}): ${stderr}`,
+    );
+  }
 }
 
-class RpcProcess {
+interface RpcProcessOptions {
+  executable?: string;
+  signal?: AbortSignal;
+}
+
+export class RpcProcess {
   private child: ChildProcessWithoutNullStreams;
   private decoder = new StringDecoder("utf8");
   private buffer = "";
@@ -333,6 +482,10 @@ class RpcProcess {
   private stderr = "";
   private stopped = false;
   private failure: Error | undefined;
+  private exited: Promise<ProcessExit>;
+  private stopPromise: Promise<void> | undefined;
+  private abortSignal: AbortSignal | undefined;
+  private abortListener: (() => void) | undefined;
   private pending = new Map<
     string,
     { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }
@@ -343,12 +496,23 @@ class RpcProcess {
     reject: (error: Error) => void;
   }> = [];
 
-  constructor(args: string[], cwd: string, env: NodeJS.ProcessEnv) {
-    this.child = spawn("pi", args, {
+  constructor(
+    args: string[],
+    cwd: string,
+    env: NodeJS.ProcessEnv,
+    options: RpcProcessOptions = {},
+  ) {
+    this.child = spawn(options.executable ?? "pi", args, {
       cwd,
       env,
+      detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    this.exited = new Promise<ProcessExit>((resolvePromise) =>
+      this.child.once("close", (code, signal) =>
+        resolvePromise({ code, signal }),
+      ),
+    );
     this.child.stdout.on("data", (chunk: Buffer) => this.consume(chunk));
     this.child.stderr.on("data", (chunk: Buffer) => {
       this.stderr = `${this.stderr}${chunk.toString()}`.slice(-16_384);
@@ -356,7 +520,7 @@ class RpcProcess {
     this.child.once("error", (error) =>
       this.fail(new Error(`failed to start pi: ${error.message}`)),
     );
-    this.child.once("exit", (code, signal) => {
+    this.child.once("close", (code, signal) => {
       if (!this.stopped)
         this.fail(
           new Error(
@@ -364,6 +528,21 @@ class RpcProcess {
           ),
         );
     });
+    this.abortSignal = options.signal;
+    if (this.abortSignal) {
+      this.abortListener = () => {
+        void this.stop(abortError(this.abortSignal!, "scenario aborted")).catch(
+          (error: unknown) =>
+            this.fail(
+              error instanceof Error ? error : new Error(String(error)),
+            ),
+        );
+      };
+      this.abortSignal.addEventListener("abort", this.abortListener, {
+        once: true,
+      });
+      if (this.abortSignal.aborted) this.abortListener();
+    }
   }
 
   private consume(chunk: Buffer): void {
@@ -466,43 +645,17 @@ class RpcProcess {
     );
   }
 
-  async stop(): Promise<void> {
-    if (this.stopped) return;
-    this.stopped = true;
-    this.child.stdin.end();
-    this.child.kill("SIGTERM");
-    await Promise.race([
-      new Promise<void>((resolvePromise) =>
-        this.child.once("exit", () => resolvePromise()),
-      ),
-      new Promise<void>((resolvePromise) =>
-        setTimeout(() => {
-          this.child.kill("SIGKILL");
-          resolvePromise();
-        }, 1_000),
-      ),
-    ]);
-  }
-}
-
-async function withTimeout<T>(
-  name: SkillName,
-  operation: () => Promise<T>,
-): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      operation(),
-      new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(new Error(`${name} exceeded ${scenarioTimeoutMs / 1_000}s`)),
-          scenarioTimeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
+  async stop(reason = new Error("RPC process stopped")): Promise<void> {
+    this.fail(reason);
+    if (!this.stopPromise) {
+      this.stopped = true;
+      if (this.abortSignal && this.abortListener) {
+        this.abortSignal.removeEventListener("abort", this.abortListener);
+      }
+      this.child.stdin.destroy();
+      this.stopPromise = terminateProcessGroup(this.child, this.exited);
+    }
+    await this.stopPromise;
   }
 }
 
@@ -514,85 +667,102 @@ async function runScenario(
   const fixtureRoot = await mkdtemp(
     join(tmpdir(), `pi-skill-${scenario.name}-`),
   );
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        new Error(`${scenario.name} exceeded ${scenarioTimeoutMs / 1_000}s`),
+      ),
+    scenarioTimeoutMs,
+  );
   let rpc: RpcProcess | undefined;
   try {
-    return await withTimeout(scenario.name, async () => {
-      const fixture = await createFixture(fixtureRoot);
-      const modelSetting = process.env.PI_SKILL_TEST_MODEL;
-      if (!modelSetting)
-        throw new Error("PI_SKILL_TEST_MODEL=<provider>/<model> is required");
-      const slash = modelSetting.indexOf("/");
-      if (slash <= 0 || slash === modelSetting.length - 1) {
-        throw new Error(
-          "PI_SKILL_TEST_MODEL must contain a provider and model separated by the first slash",
-        );
-      }
-      const provider = modelSetting.slice(0, slash);
-      const model = modelSetting.slice(slash + 1);
-      const args = [
-        "--mode",
-        "rpc",
-        "--no-session",
-        "--provider",
-        provider,
-        "--model",
-        model,
-        "--no-context-files",
-        "--no-approve",
-        "--offline",
-      ];
-      if (options.mode === "package") args.push("-e", options.packageArgument!);
-      rpc = new RpcProcess(args, fixture.cwd, fixture.env);
-      const commandResponse = await rpc.request("get_commands");
-      const commands = (
-        commandResponse.data as { commands?: RpcCommandEntry[] } | undefined
-      )?.commands;
-      if (!Array.isArray(commands))
-        throw new Error("get_commands returned no command list");
-      const discovered = commands.some(
-        (command) =>
-          command.name === `skill:${scenario.name}` &&
-          command.source === "skill",
+    const fixture = await createFixture(fixtureRoot, controller.signal);
+    throwIfAborted(controller.signal);
+    const modelSetting = process.env.PI_SKILL_TEST_MODEL;
+    if (!modelSetting)
+      throw new Error("PI_SKILL_TEST_MODEL=<provider>/<model> is required");
+    const slash = modelSetting.indexOf("/");
+    if (slash <= 0 || slash === modelSetting.length - 1) {
+      throw new Error(
+        "PI_SKILL_TEST_MODEL must contain a provider and model separated by the first slash",
       );
-
-      if (options.mode === "baseline") {
-        return {
-          skill: scenario.name,
-          discovered,
-          passed: !discovered,
-          required: [],
-          forbidden: [],
-        };
-      }
-      if (!discovered) {
-        return {
-          skill: scenario.name,
-          discovered: false,
-          passed: false,
-          required: [],
-          forbidden: [],
-        };
-      }
-
-      const settled = rpc.waitFor("agent_settled");
-      await rpc.request("prompt", {
-        message: `/skill:${scenario.name} ${scenario.prompt}`,
-      });
-      await settled;
-      const textResponse = await rpc.request("get_last_assistant_text");
-      const text = (textResponse.data as { text?: unknown } | undefined)?.text;
-      if (typeof text !== "string" || text.trim().length === 0)
-        throw new Error(`${scenario.name} returned no final assistant text`);
-      await writeFile(
-        join(outputDirectory, `${scenario.name}.txt`),
-        `${text.trim()}\n`,
-      );
-      return evaluateScenario(scenario, text);
+    }
+    const provider = modelSetting.slice(0, slash);
+    const model = modelSetting.slice(slash + 1);
+    const args = [
+      "--mode",
+      "rpc",
+      "--no-session",
+      "--provider",
+      provider,
+      "--model",
+      model,
+      "--no-context-files",
+      "--no-approve",
+      "--offline",
+    ];
+    if (options.mode === "package") args.push("-e", options.packageArgument!);
+    rpc = new RpcProcess(args, fixture.cwd, fixture.env, {
+      signal: controller.signal,
     });
+    const commandResponse = await rpc.request("get_commands");
+    const commands = (
+      commandResponse.data as { commands?: RpcCommandEntry[] } | undefined
+    )?.commands;
+    if (!Array.isArray(commands))
+      throw new Error("get_commands returned no command list");
+    const discovered = commands.some(
+      (command) =>
+        command.name === `skill:${scenario.name}` && command.source === "skill",
+    );
+
+    if (options.mode === "baseline") {
+      return {
+        skill: scenario.name,
+        discovered,
+        passed: !discovered,
+        required: [],
+        forbidden: [],
+      };
+    }
+    if (!discovered) {
+      return {
+        skill: scenario.name,
+        discovered: false,
+        passed: false,
+        required: [],
+        forbidden: [],
+      };
+    }
+
+    const settled = rpc.waitFor("agent_settled");
+    await rpc.request("prompt", {
+      message: `/skill:${scenario.name} ${scenario.prompt}`,
+    });
+    await settled;
+    const textResponse = await rpc.request("get_last_assistant_text");
+    const text = (textResponse.data as { text?: unknown } | undefined)?.text;
+    if (typeof text !== "string" || text.trim().length === 0)
+      throw new Error(`${scenario.name} returned no final assistant text`);
+    await writeFile(
+      join(outputDirectory, `${scenario.name}.txt`),
+      `${text.trim()}\n`,
+    );
+    return evaluateScenario(scenario, text);
   } finally {
-    await rpc?.stop();
+    clearTimeout(timer);
+    await rpc?.stop(
+      controller.signal.aborted
+        ? abortError(controller.signal, "scenario aborted")
+        : new Error("scenario complete"),
+    );
     await rm(fixtureRoot, { recursive: true, force: true });
   }
+}
+
+export function baselineExitCode(summaries: ScenarioSummary[]): 0 | 1 {
+  return summaries.some((summary) => summary.discovered) ? 0 : 1;
 }
 
 async function main(): Promise<void> {
@@ -618,13 +788,29 @@ async function main(): Promise<void> {
     `${JSON.stringify({ mode: options.mode, scenarios: summaries }, null, 2)}\n`,
   );
   if (options.mode === "baseline") {
-    throw new Error("baseline skills are intentionally undiscoverable");
+    const discovered = summaries
+      .filter((summary) => summary.discovered)
+      .map((summary) => summary.skill);
+    if (baselineExitCode(summaries) === 0) {
+      console.log(
+        `baseline unexpectedly discovered: ${discovered.join(", ")}; returning success so the wrapper fails`,
+      );
+      return;
+    }
+    throw new Error(
+      "baseline expected nonzero: all requested skills are undiscoverable",
+    );
   }
   if (summaries.some((summary) => !summary.passed))
     throw new Error("one or more skill behavior criteria failed");
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

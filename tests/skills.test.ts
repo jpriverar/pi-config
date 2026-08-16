@@ -3,10 +3,11 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test, { after } from "node:test";
+import { loadSkills, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -28,6 +29,10 @@ async function checkoutUpstream(): Promise<string> {
       await execFileAsync(
         "git",
         [
+          "-c",
+          "http.lowSpeedLimit=1024",
+          "-c",
+          "http.lowSpeedTime=30",
           "clone",
           "--depth",
           "1",
@@ -36,7 +41,7 @@ async function checkoutUpstream(): Promise<string> {
           "https://github.com/obra/superpowers.git",
           checkout,
         ],
-        { maxBuffer: 10 * 1024 * 1024 },
+        { maxBuffer: 10 * 1024 * 1024, timeout: 60_000 },
       );
 
       const [{ stdout: tag }, { stdout: commit }] = await Promise.all([
@@ -79,32 +84,6 @@ async function filesBelow(root: string): Promise<string[]> {
   return files.sort();
 }
 
-function frontmatter(
-  markdown: string,
-  path: string,
-): { name: string; description: string } {
-  const match = markdown.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
-  assert.ok(match, `${path} must begin with YAML frontmatter`);
-  const scalar = (field: string): string | undefined => {
-    const value = match[1]
-      .match(new RegExp(`^${field}:\\s*(.+?)\\s*$`, "m"))?.[1]
-      ?.trim();
-    if (!value) return undefined;
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      return value.slice(1, -1).trim();
-    }
-    return value;
-  };
-  const name = scalar("name");
-  const description = scalar("description");
-  assert.ok(name, `${path} must have name frontmatter`);
-  assert.ok(description, `${path} must have description frontmatter`);
-  return { name, description };
-}
-
 async function manifestSkillRoots(): Promise<string[]> {
   const pkg = JSON.parse(
     await readFile(join(repository, "package.json"), "utf8"),
@@ -125,90 +104,99 @@ async function manifestSkillRoots(): Promise<string[]> {
   });
 }
 
-test("every manifest skill path contains discoverable skills", async () => {
+test("Pi 0.84.1 discovers every manifest skill path without diagnostics", async () => {
   for (const root of await manifestSkillRoots()) {
     const rootInfo = await stat(root);
     assert.ok(
       rootInfo.isDirectory(),
       `${relative(repository, root)} must be a directory`,
     );
-    const manifests = (await filesBelow(root)).filter(
-      (path) => path === "SKILL.md" || path.endsWith(`${sep}SKILL.md`),
-    );
-    assert.ok(
-      manifests.length > 0,
-      `${relative(repository, root)} must contain a SKILL.md`,
+    const manifests = (await filesBelow(root))
+      .filter((path) => path === "SKILL.md" || path.endsWith(`${sep}SKILL.md`))
+      .map((path) => resolve(root, path))
+      .sort();
+    const loaded = loadSkillsFromDir({ dir: root, source: "path" });
+    assert.deepEqual(loaded.diagnostics, []);
+    assert.deepEqual(
+      loaded.skills.map((skill) => resolve(skill.filePath)).sort(),
+      manifests,
     );
   }
 });
 
-test("every skill has valid required frontmatter", async () => {
-  for (const root of await manifestSkillRoots()) {
-    for (const path of (await filesBelow(root)).filter((candidate) =>
-      candidate.endsWith("SKILL.md"),
-    )) {
-      const absolutePath = join(root, path);
-      const metadata = frontmatter(
-        await readFile(absolutePath, "utf8"),
-        relative(repository, absolutePath),
-      );
-      assert.match(
-        metadata.name,
-        skillNamePattern,
-        `${path} has an invalid skill name`,
-      );
-      assert.ok(
-        metadata.name.length <= 64,
-        `${path} skill name exceeds 64 characters`,
-      );
-      assert.ok(
-        metadata.description.length <= 1024,
-        `${path} description exceeds 1024 characters`,
+test("Pi 0.84.1 loads exact valid skill metadata from the package manifest", async () => {
+  const roots = await manifestSkillRoots();
+  const loaded = loadSkills({
+    cwd: repository,
+    agentDir: join(repository, ".test-agent-unused"),
+    skillPaths: roots,
+    includeDefaults: false,
+  });
+  assert.deepEqual(loaded.diagnostics, []);
+  const expectedCount = (
+    await Promise.all(
+      roots.map(
+        async (root) =>
+          (await filesBelow(root)).filter((path) => path.endsWith("SKILL.md"))
+            .length,
+      ),
+    )
+  ).reduce((total, count) => total + count, 0);
+  assert.equal(loaded.skills.length, expectedCount);
+  for (const skill of loaded.skills) {
+    assert.equal(skill.name, basename(skill.baseDir));
+    assert.match(skill.name, skillNamePattern);
+    assert.ok(skill.name.length <= 64);
+    assert.equal(skill.description, skill.description.trim());
+    assert.ok(skill.description.length > 0);
+    assert.ok(skill.description.length <= 1024);
+  }
+});
+
+test(
+  "vendored Superpowers is byte-for-byte upstream v6.3.0",
+  { timeout: 90_000 },
+  async () => {
+    const checkout = await checkoutUpstream();
+    const expectedRoot = join(checkout, "skills");
+    const actualRoot = join(repository, "skills", "superpowers");
+    const expectedFiles = await filesBelow(expectedRoot);
+    const actualFiles = (await filesBelow(actualRoot)).filter(
+      (path) => path !== "LICENSE",
+    );
+    assert.deepEqual(actualFiles, expectedFiles);
+
+    for (const path of expectedFiles) {
+      const [expected, actual, expectedInfo, actualInfo] = await Promise.all([
+        readFile(join(expectedRoot, path)),
+        readFile(join(actualRoot, path)),
+        stat(join(expectedRoot, path)),
+        stat(join(actualRoot, path)),
+      ]);
+      assert.deepEqual(actual, expected, `${path} differs from upstream`);
+      assert.equal(
+        actualInfo.mode & 0o111,
+        expectedInfo.mode & 0o111,
+        `${path} executable mode differs from upstream`,
       );
     }
-  }
-});
 
-test("vendored Superpowers is byte-for-byte upstream v6.3.0", async () => {
-  const checkout = await checkoutUpstream();
-  const expectedRoot = join(checkout, "skills");
-  const actualRoot = join(repository, "skills", "superpowers");
-  const expectedFiles = await filesBelow(expectedRoot);
-  const actualFiles = (await filesBelow(actualRoot)).filter(
-    (path) => path !== "LICENSE",
-  );
-  assert.deepEqual(actualFiles, expectedFiles);
-
-  for (const path of expectedFiles) {
-    const [expected, actual, expectedInfo, actualInfo] = await Promise.all([
-      readFile(join(expectedRoot, path)),
-      readFile(join(actualRoot, path)),
-      stat(join(expectedRoot, path)),
-      stat(join(actualRoot, path)),
+    const [upstreamLicense, vendoredLicense] = await Promise.all([
+      readFile(join(checkout, "LICENSE")),
+      readFile(join(actualRoot, "LICENSE")),
     ]);
-    assert.deepEqual(actual, expected, `${path} differs from upstream`);
+    assert.match(upstreamLicense.toString("utf8"), /MIT License/);
     assert.equal(
-      actualInfo.mode & 0o111,
-      expectedInfo.mode & 0o111,
-      `${path} executable mode differs from upstream`,
+      createHash("sha256").update(upstreamLicense).digest("hex"),
+      upstreamLicenseSha256,
     );
-  }
-
-  const [upstreamLicense, vendoredLicense] = await Promise.all([
-    readFile(join(checkout, "LICENSE")),
-    readFile(join(actualRoot, "LICENSE")),
-  ]);
-  assert.match(upstreamLicense.toString("utf8"), /MIT License/);
-  assert.equal(
-    createHash("sha256").update(upstreamLicense).digest("hex"),
-    upstreamLicenseSha256,
-  );
-  assert.deepEqual(
-    vendoredLicense,
-    upstreamLicense,
-    "vendored LICENSE differs from upstream",
-  );
-});
+    assert.deepEqual(
+      vendoredLicense,
+      upstreamLicense,
+      "vendored LICENSE differs from upstream",
+    );
+  },
+);
 
 test("skills contain no machine-specific paths or internal resources", async () => {
   const forbidden = [
