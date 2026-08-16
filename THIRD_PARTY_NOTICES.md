@@ -1,4 +1,10 @@
 # Third-Party Notices
 
-This repository does not currently include vendored third-party resources.
-Applicable notices will be added here before any such resources are introduced.
+## Modus themes colour palette
+
+The `modus-vivendi-tinted` theme uses colours from the Modus themes
+palette by Protesilaos Stavrou. The colour palette is dedicated to the
+public domain under Creative Commons Zero (CC0).
+
+Source: https://protesilaos.com/codelog/2022-05-10-modus-themes-palette-cc0/
+Palette: https://protesilaos.com/emacs/modus-themes-colors
