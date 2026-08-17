@@ -30,7 +30,6 @@ const approvedRootFiles = new Set([
 ]);
 const approvedRootDirectories = new Set([
   ".github",
-  "docs",
   "extensions",
   "lib",
   "scripts",

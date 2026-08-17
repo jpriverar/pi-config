@@ -119,7 +119,7 @@ test("package scripts cover the bootstrap release gates", () => {
   );
   assert.equal(
     pkg.scripts["format:check"],
-    "prettier --check package.json tsconfig.json 'extensions/**/*.ts' 'lib/**/*.ts' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' 'docs/**/*.md' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
+    "prettier --check package.json tsconfig.json 'extensions/**/*.ts' 'lib/**/*.ts' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
   );
   assert.match(pkg.scripts["verify:skills"], /--mode baseline/);
   assert.match(pkg.scripts["verify:skills"], /--mode package/);
@@ -249,15 +249,6 @@ test("rejects forbidden runtime state and work identifiers in tracked bootstrap 
       },
     );
   });
-});
-
-test("accepts tracked docs under the reviewed public docs root", () => {
-  const fixture = createFixture({
-    "docs/reviewed.md": "Reviewed public docs.\n",
-  });
-  const result = fixture.run();
-
-  assert.equal(result.status, 0, String(result.stderr));
 });
 
 test("accepts source placeholders used by the release tests", () => {

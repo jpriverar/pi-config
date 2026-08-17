@@ -15,7 +15,7 @@
     "test:file": "tsx --test",
     "test:bootstrap": "tsx --test tests/reconcile-personal-profile.test.ts tests/bootstrap-macos.test.ts",
     "typecheck": "tsc --noEmit",
-    "format:check": "prettier --check package.json tsconfig.json 'extensions/**/*.ts' 'lib/**/*.ts' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' 'docs/**/*.md' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
+    "format:check": "prettier --check package.json tsconfig.json 'extensions/**/*.ts' 'lib/**/*.ts' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
     "verify:portable": "node scripts/verify-portable.mjs",
     "verify:smoke": "tsx tests/pi-smoke.ts",
     "verify:skills": "bash -lc 'set -euo pipefail; : \"${PI_SKILL_TEST_MODEL:?PI_SKILL_TEST_MODEL=<provider>/<model> is required}\"; output_root=$(mktemp -d \"${TMPDIR:-/tmp}/pi-skill-behavior.XXXXXX\"); trap \"rm -rf \\\"$output_root\\\"\" EXIT; if tsx tests/skill-behavior.ts --mode baseline --output \"$output_root/baseline\"; then echo \"baseline unexpectedly discovered one or more skills\" >&2; exit 1; fi; tsx tests/skill-behavior.ts --mode package --package \"$PWD\" --output \"$output_root/package\"'",
