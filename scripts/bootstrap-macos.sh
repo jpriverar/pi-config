@@ -17,41 +17,86 @@ run_profile_command() {
   node "$RECONCILER" "$command" --agent-dir "$AGENT_DIR" --repo-dir "$REPO_ROOT"
 }
 
-check_work_marker_settings() {
+check_agent_dir_preflight() {
+  if [ -L "$AGENT_DIR" ]; then
+    fail "Cannot use symlinked personal Pi agent directory at $AGENT_DIR"
+  fi
+
+  if [ -e "$AGENT_DIR" ] && [ ! -d "$AGENT_DIR" ]; then
+    fail "Cannot use non-directory personal Pi agent directory at $AGENT_DIR"
+  fi
+}
+
+check_settings_preflight() {
   local file_path=$1
-  local packages_json
+  local package_count
+  local package_index
+  local source
   local work_marker=data
 
   [ -f "$file_path" ] || return 0
 
+  /usr/bin/plutil -convert json -o - "$file_path" >/dev/null 2>&1 ||
+    fail "Cannot parse personal Pi settings at $file_path"
+
   work_marker="${work_marker}dog"
-  packages_json=$(
-    /usr/bin/plutil -extract packages json -expect array -o - "$file_path" \
+  package_count=$(
+    /usr/bin/plutil -extract packages raw -expect array -o - "$file_path" \
       2>/dev/null
   ) || return 0
 
-  case "$packages_json" in
-    *"$work_marker"*) fail "Forbidden work-only package source in $file_path" ;;
-  esac
+  package_index=0
+  while [ "$package_index" -lt "$package_count" ]; do
+    if ! source=$(
+      /usr/bin/plutil -extract "packages.$package_index" raw -expect string -o - \
+        "$file_path" 2>/dev/null
+    ); then
+      package_index=$((package_index + 1))
+      continue
+    fi
+
+    if [ "$source" = "$REPO_ROOT" ]; then
+      package_index=$((package_index + 1))
+      continue
+    fi
+
+    case "$source" in
+      npm:*|git:github.com/*|https://github.com/*)
+        case "$source" in
+          *"$work_marker"*)
+            fail "Forbidden work-only package source at package index $package_index in $file_path"
+            ;;
+        esac
+        ;;
+      *)
+        fail "Unsupported local package source at package index $package_index in $file_path: $source"
+        ;;
+    esac
+
+    package_index=$((package_index + 1))
+  done
 }
 
-check_work_marker_mcp() {
+check_mcp_preflight() {
   local file_path=$1
-  local file_bytes
+  local file_json
   local work_marker=data
 
   [ -f "$file_path" ] || return 0
 
   work_marker="${work_marker}dog"
-  file_bytes=$(<"$file_path") || fail "cannot read personal Pi MCP at $file_path"
-  case "$file_bytes" in
-    *"$work_marker"*) fail "Forbidden work-only MCP marker in $file_path" ;;
+  file_json=$(
+    /usr/bin/plutil -convert json -o - "$file_path" 2>/dev/null
+  ) || fail "Cannot parse personal Pi MCP configuration at $file_path"
+  case "$file_json" in
+    *"$work_marker"*) fail "Forbidden work-only MCP configuration at $file_path" ;;
   esac
 }
 
-run_work_marker_preflight() {
-  check_work_marker_settings "$AGENT_DIR/settings.json"
-  check_work_marker_mcp "$AGENT_DIR/mcp.json"
+run_profile_preflight() {
+  check_agent_dir_preflight
+  check_settings_preflight "$AGENT_DIR/settings.json"
+  check_mcp_preflight "$AGENT_DIR/mcp.json"
 }
 
 ensure_formula() {
@@ -128,7 +173,7 @@ AGENT_DIR="$HOME/.pi/agent"
 RECONCILER="$REPO_ROOT/scripts/reconcile-personal-profile.mjs"
 export PI_CODING_AGENT_DIR="$AGENT_DIR"
 
-run_work_marker_preflight
+run_profile_preflight
 ensure_formula volta
 ensure_formula beads
 
@@ -164,8 +209,10 @@ run_step "shell reconciliation" \
   node "$RECONCILER" shell --zshrc "$HOME/.zshrc"
 
 printf '\nNext steps:\n'
-printf '  /login\n'
-printf '  /reload\n'
-printf '  cd %s && git pull --ff-only\n' "$REPO_ROOT"
+printf '  1. start a new shell or source ~/.zshrc\n'
+printf '  2. launch pi\n'
+printf '  3. run /login and choose a personal provider\n'
+printf '  4. configure personal MCP servers later if desired\n'
+printf '  5. use git pull --ff-only in this checkout and /reload to consume future code/resource updates\n'
 printf '\nRepository HEAD:\n'
 git -C "$REPO_ROOT" rev-parse HEAD

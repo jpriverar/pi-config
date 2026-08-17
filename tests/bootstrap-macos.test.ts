@@ -10,6 +10,7 @@ import {
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -185,6 +186,22 @@ async function expectedResolveRepoCommandLog(state: BootstrapState) {
     "uname -s",
     `git -C ${canonicalScriptsDir}/.. rev-parse --show-toplevel`,
   ];
+}
+
+function expectedSuccessOutput() {
+  return [
+    "",
+    "Next steps:",
+    "  1. start a new shell or source ~/.zshrc",
+    "  2. launch pi",
+    "  3. run /login and choose a personal provider",
+    "  4. configure personal MCP servers later if desired",
+    "  5. use git pull --ff-only in this checkout and /reload to consume future code/resource updates",
+    "",
+    "Repository HEAD:",
+    fakeHead,
+    "",
+  ].join("\n");
 }
 
 async function fixture(t: TestContext, options: FixtureOptions = {}) {
@@ -498,6 +515,225 @@ test("bootstrap rejects non-macOS hosts before checking Homebrew", async (t) => 
   assert.deepEqual(result.commandLog, ["uname -s"]);
 });
 
+test("bootstrap fails the shell preflight before mutation when the agent directory is a symlink", async (t) => {
+  const state = await fixture(t, { includeBrew: true });
+  const agentDir = join(state.homeDir, ".pi", "agent");
+  const targetAgentDir = join(state.homeDir, "target-agent");
+
+  await mkdir(join(state.homeDir, ".pi"), { recursive: true });
+  await mkdir(targetAgentDir, { recursive: true });
+  await symlink(targetAgentDir, agentDir);
+
+  const result = await invoke(state);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `Cannot use symlinked personal Pi agent directory at .*${String.raw`\.pi/agent`}`,
+    ),
+  );
+  assert.deepEqual(
+    result.commandLog,
+    await expectedResolveRepoCommandLog(state),
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("brew ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("volta ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("npm ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("pi ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("bd ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.includes(" shell ")),
+    false,
+  );
+  assert.equal(await pathExists(join(state.homeDir, ".zshrc")), false);
+  assert.equal(await pathExists(join(state.homeDir, "beads")), false);
+});
+
+test("bootstrap fails the shell preflight before mutation when settings JSON is malformed", async (t) => {
+  const initialSettingsBytes = "{\n";
+  const state = await fixture(t, {
+    includeBrew: true,
+    initialSettingsBytes,
+  });
+  const result = await invoke(state);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `Cannot parse personal Pi settings at .*${String.raw`settings\.json`}`,
+    ),
+  );
+  assert.equal(
+    await readFile(
+      join(state.homeDir, ".pi", "agent", "settings.json"),
+      "utf8",
+    ),
+    initialSettingsBytes,
+  );
+  assert.deepEqual(
+    result.commandLog,
+    await expectedResolveRepoCommandLog(state),
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("brew ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("volta ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("npm ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("pi ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("bd ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.includes(" shell ")),
+    false,
+  );
+  assert.equal(await pathExists(join(state.homeDir, ".zshrc")), false);
+  assert.equal(await pathExists(join(state.homeDir, "beads")), false);
+});
+
+test("bootstrap fails the shell preflight before mutation when MCP JSON is malformed", async (t) => {
+  const initialMcpBytes = "{\n";
+  const state = await fixture(t, {
+    includeBrew: true,
+    initialMcpBytes,
+  });
+  const result = await invoke(state);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `Cannot parse personal Pi MCP configuration at .*${String.raw`mcp\.json`}`,
+    ),
+  );
+  assert.equal(
+    await readFile(join(state.homeDir, ".pi", "agent", "mcp.json"), "utf8"),
+    initialMcpBytes,
+  );
+  assert.deepEqual(
+    result.commandLog,
+    await expectedResolveRepoCommandLog(state),
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("brew ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("volta ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("npm ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("pi ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("bd ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.includes(" shell ")),
+    false,
+  );
+  assert.equal(await pathExists(join(state.homeDir, ".zshrc")), false);
+  assert.equal(await pathExists(join(state.homeDir, "beads")), false);
+});
+
+test("bootstrap fails the shell preflight before mutation when settings contain an unsupported local package source", async (t) => {
+  const initialSettingsBytes = `${JSON.stringify(
+    {
+      packages: ["./personal-overlay", "npm:some-public-helper@1.2.3"],
+    },
+    null,
+    2,
+  )}\n`;
+  const state = await fixture(t, {
+    includeBrew: true,
+    initialSettingsBytes,
+  });
+  const result = await invoke(state);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `Unsupported local package source at package index 0 in .*${String.raw`settings\.json`}: \\.\/personal-overlay`,
+    ),
+  );
+  assert.equal(
+    await readFile(
+      join(state.homeDir, ".pi", "agent", "settings.json"),
+      "utf8",
+    ),
+    initialSettingsBytes,
+  );
+  assert.deepEqual(
+    result.commandLog,
+    await expectedResolveRepoCommandLog(state),
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("brew ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("volta ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("npm ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("pi ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("bd ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.includes(" shell ")),
+    false,
+  );
+  assert.equal(await pathExists(join(state.homeDir, ".zshrc")), false);
+  assert.equal(await pathExists(join(state.homeDir, "beads")), false);
+});
+
 test("bootstrap restores exact settings bytes when a package install fails", async (t) => {
   const originalSettingsBytes = [
     "{",
@@ -553,10 +789,7 @@ test("bootstrap runs the happy path in the reviewed command order", async (t) =>
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "");
   assert.deepEqual(result.commandLog, await expectedHappyPathCommandLog(state));
-  assert.match(result.stdout, /\/login/);
-  assert.match(result.stdout, /\/reload/);
-  assert.match(result.stdout, /git pull --ff-only/);
-  assert.match(result.stdout, new RegExp(fakeHead));
+  assert.equal(result.stdout, expectedSuccessOutput());
 
   const canonicalHomeDir = await realpath(state.homeDir);
   const settings = JSON.parse(
@@ -774,7 +1007,7 @@ test("bootstrap fails the shell preflight before mutation when work-only setting
   assert.match(
     result.stderr,
     new RegExp(
-      `Forbidden work-only package source in .*${String.raw`settings\.json`}`,
+      `Forbidden work-only package source at package index 0 in .*${String.raw`settings\.json`}`,
     ),
   );
   assert.deepEqual(
@@ -830,7 +1063,9 @@ test("bootstrap fails the shell preflight before mutation when work-only MCP byt
   assert.equal(result.stdout, "");
   assert.match(
     result.stderr,
-    new RegExp(`Forbidden work-only MCP marker in .*${String.raw`mcp\.json`}`),
+    new RegExp(
+      `Forbidden work-only MCP configuration at .*${String.raw`mcp\.json`}`,
+    ),
   );
   assert.deepEqual(
     result.commandLog,
