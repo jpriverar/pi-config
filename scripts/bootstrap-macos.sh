@@ -36,19 +36,19 @@ check_settings_preflight() {
 
   [ -f "$file_path" ] || return 0
 
-  /usr/bin/plutil -convert json -o - "$file_path" >/dev/null 2>&1 ||
+  "$PLUTIL" -lint "$file_path" >/dev/null 2>&1 ||
     fail "Cannot parse personal Pi settings at $file_path"
 
   work_marker="${work_marker}dog"
   package_count=$(
-    /usr/bin/plutil -extract packages raw -expect array -o - "$file_path" \
+    "$PLUTIL" -extract packages raw -expect array -o - "$file_path" \
       2>/dev/null
   ) || return 0
 
   package_index=0
   while [ "$package_index" -lt "$package_count" ]; do
     if ! source=$(
-      /usr/bin/plutil -extract "packages.$package_index" raw -expect string -o - \
+      "$PLUTIL" -extract "packages.$package_index" raw -expect string -o - \
         "$file_path" 2>/dev/null
     ); then
       package_index=$((package_index + 1))
@@ -85,8 +85,11 @@ check_mcp_preflight() {
   [ -f "$file_path" ] || return 0
 
   work_marker="${work_marker}dog"
+  "$PLUTIL" -lint "$file_path" >/dev/null 2>&1 ||
+    fail "Cannot parse personal Pi MCP configuration at $file_path"
+
   file_json=$(
-    /usr/bin/plutil -convert json -o - "$file_path" 2>/dev/null
+    "$PLUTIL" -convert json -o - "$file_path" 2>/dev/null
   ) || fail "Cannot parse personal Pi MCP configuration at $file_path"
   case "$file_json" in
     *"$work_marker"*) fail "Forbidden work-only MCP configuration at $file_path" ;;
@@ -171,6 +174,7 @@ REPO_ROOT=$(git -C "$SCRIPT_DIR/.." rev-parse --show-toplevel) || \
 
 AGENT_DIR="$HOME/.pi/agent"
 RECONCILER="$REPO_ROOT/scripts/reconcile-personal-profile.mjs"
+PLUTIL="${PI_BOOTSTRAP_PLUTIL:-/usr/bin/plutil}"
 export PI_CODING_AGENT_DIR="$AGENT_DIR"
 
 run_profile_preflight

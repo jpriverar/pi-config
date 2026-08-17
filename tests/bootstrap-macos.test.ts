@@ -46,6 +46,8 @@ type BootstrapState = {
   homeDir: string;
   installedFormulas: string[];
   piInstallCountPath: string;
+  plutilPath: string;
+  plutilScriptPath: string;
   repoRoot: string;
   scriptPath: string;
 };
@@ -148,6 +150,18 @@ function managedPackagePath(homeDir: string, packageName: string) {
   );
 }
 
+function settingsPathForState(state: BootstrapState) {
+  return join(state.homeDir, ".pi", "agent", "settings.json");
+}
+
+function mcpPathForState(state: BootstrapState) {
+  return join(state.homeDir, ".pi", "agent", "mcp.json");
+}
+
+function plutilCommand(...arguments_: string[]) {
+  return `plutil ${arguments_.join(" ")}`;
+}
+
 async function expectedHappyPathCommandLog(state: BootstrapState) {
   const reconcilerPath = join(
     state.repoRoot,
@@ -180,11 +194,15 @@ async function expectedHappyPathCommandLog(state: BootstrapState) {
   ];
 }
 
-async function expectedResolveRepoCommandLog(state: BootstrapState) {
+async function expectedResolveRepoCommandLog(
+  state: BootstrapState,
+  plutilCommands: string[] = [],
+) {
   const canonicalScriptsDir = await realpath(join(state.repoRoot, "scripts"));
   return [
     "uname -s",
     `git -C ${canonicalScriptsDir}/.. rev-parse --show-toplevel`,
+    ...plutilCommands,
   ];
 }
 
@@ -215,6 +233,8 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
   const homeDir = join(canonicalRoot, "home");
   const commandLogPath = join(canonicalRoot, "command.log");
   const piInstallCountPath = join(canonicalRoot, "pi-install-count");
+  const plutilPath = join(binDir, "plutil");
+  const plutilScriptPath = join(canonicalRoot, "fake-plutil.mjs");
 
   await Promise.all([
     mkdir(scriptsDir, { recursive: true }),
@@ -254,6 +274,106 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     await mkdir(dirname(targetPath), { recursive: true });
     await writeFile(targetPath, beadsFile.bytes);
   }
+
+  await writeFile(
+    plutilScriptPath,
+    String.raw`import { readFile } from "node:fs/promises";
+
+function fail(message) {
+  if (message) {
+    console.error(message);
+  }
+  process.exit(2);
+}
+
+function lookupKeyPath(value, keyPath) {
+  return keyPath.split(".").reduce((current, segment) => {
+    if (Array.isArray(current)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index)) {
+        throw new Error("invalid array index");
+      }
+      return current[index];
+    }
+
+    if (current && typeof current === "object") {
+      return current[segment];
+    }
+
+    return undefined;
+  }, value);
+}
+
+async function readJson(filePath) {
+  return JSON.parse(await readFile(filePath, "utf8"));
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+
+  if (args.length === 2 && args[0] === "-lint") {
+    await readJson(args[1]);
+    return;
+  }
+
+  if (
+    args.length === 5 &&
+    args[0] === "-convert" &&
+    args[1] === "json" &&
+    args[2] === "-o" &&
+    args[3] === "-"
+  ) {
+    const value = await readJson(args[4]);
+    process.stdout.write(JSON.stringify(value) + "\n");
+    return;
+  }
+
+  if (
+    args.length === 8 &&
+    args[0] === "-extract" &&
+    args[2] === "raw" &&
+    args[3] === "-expect" &&
+    args[5] === "-o" &&
+    args[6] === "-"
+  ) {
+    const value = lookupKeyPath(await readJson(args[7]), args[1]);
+
+    if (args[4] === "array") {
+      if (!Array.isArray(value)) {
+        process.exit(1);
+      }
+      process.stdout.write(String(value.length) + "\n");
+      return;
+    }
+
+    if (args[4] === "string") {
+      if (typeof value !== "string") {
+        process.exit(1);
+      }
+      process.stdout.write(String(value) + "\n");
+      return;
+    }
+  }
+
+  fail("unexpected plutil invocation: " + args.join(" "));
+}
+
+main().catch(() => process.exit(1));
+`,
+  );
+
+  await writeExecutable(
+    plutilPath,
+    `#!/bin/sh
+set -eu
+printf "plutil" >> "$BOOTSTRAP_COMMAND_LOG"
+for argument in "$@"; do
+  printf " %s" "$argument" >> "$BOOTSTRAP_COMMAND_LOG"
+done
+printf "\\n" >> "$BOOTSTRAP_COMMAND_LOG"
+exec "$BOOTSTRAP_REAL_NODE" "$BOOTSTRAP_FAKE_PLUTIL_PATH" "$@"
+`,
+  );
 
   await writeExecutable(
     join(binDir, "uname"),
@@ -459,6 +579,8 @@ exit 2
     homeDir,
     installedFormulas: options.installedFormulas ?? [],
     piInstallCountPath,
+    plutilPath,
+    plutilScriptPath,
     repoRoot,
     scriptPath,
   };
@@ -478,6 +600,8 @@ async function invoke(state: BootstrapState) {
       BOOTSTRAP_INSTALLED_FORMULAS: state.installedFormulas.join(" "),
       BOOTSTRAP_PI_INSTALL_COUNT_PATH: state.piInstallCountPath,
       BOOTSTRAP_REAL_NODE: process.execPath,
+      BOOTSTRAP_FAKE_PLUTIL_PATH: state.plutilScriptPath,
+      PI_BOOTSTRAP_PLUTIL: state.plutilPath,
     },
   });
 
@@ -513,6 +637,49 @@ test("bootstrap rejects non-macOS hosts before checking Homebrew", async (t) => 
   assert.equal(await pathExists(join(state.homeDir, "beads")), false);
   assert.equal(await pathExists(join(state.homeDir, ".zshrc")), false);
   assert.deepEqual(result.commandLog, ["uname -s"]);
+});
+
+test("bootstrap fixture routes settings preflight through the deterministic plutil override", async (t) => {
+  const state = await fixture(t, {
+    includeBrew: true,
+    initialSettingsBytes: `${JSON.stringify(
+      {
+        packages: ["./personal-overlay", "npm:some-public-helper@1.2.3"],
+      },
+      null,
+      2,
+    )}\n`,
+  });
+  const settingsPath = settingsPathForState(state);
+  const result = await invoke(state);
+
+  assert.equal(result.status, 1);
+  assert.deepEqual(
+    result.commandLog,
+    await expectedResolveRepoCommandLog(state, [
+      plutilCommand("-lint", settingsPath),
+      plutilCommand(
+        "-extract",
+        "packages",
+        "raw",
+        "-expect",
+        "array",
+        "-o",
+        "-",
+        settingsPath,
+      ),
+      plutilCommand(
+        "-extract",
+        "packages.0",
+        "raw",
+        "-expect",
+        "string",
+        "-o",
+        "-",
+        settingsPath,
+      ),
+    ]),
+  );
 });
 
 test("bootstrap fails the shell preflight before mutation when the agent directory is a symlink", async (t) => {
@@ -591,7 +758,9 @@ test("bootstrap fails the shell preflight before mutation when settings JSON is 
   );
   assert.deepEqual(
     result.commandLog,
-    await expectedResolveRepoCommandLog(state),
+    await expectedResolveRepoCommandLog(state, [
+      plutilCommand("-lint", settingsPathForState(state)),
+    ]),
   );
   assert.equal(
     result.commandLog.some((entry) => entry.startsWith("brew ")),
@@ -643,7 +812,9 @@ test("bootstrap fails the shell preflight before mutation when MCP JSON is malfo
   );
   assert.deepEqual(
     result.commandLog,
-    await expectedResolveRepoCommandLog(state),
+    await expectedResolveRepoCommandLog(state, [
+      plutilCommand("-lint", mcpPathForState(state)),
+    ]),
   );
   assert.equal(
     result.commandLog.some((entry) => entry.startsWith("brew ")),
@@ -686,6 +857,7 @@ test("bootstrap fails the shell preflight before mutation when settings contain 
     includeBrew: true,
     initialSettingsBytes,
   });
+  const settingsPath = settingsPathForState(state);
   const result = await invoke(state);
 
   assert.equal(result.status, 1);
@@ -706,7 +878,29 @@ test("bootstrap fails the shell preflight before mutation when settings contain 
   );
   assert.deepEqual(
     result.commandLog,
-    await expectedResolveRepoCommandLog(state),
+    await expectedResolveRepoCommandLog(state, [
+      plutilCommand("-lint", settingsPath),
+      plutilCommand(
+        "-extract",
+        "packages",
+        "raw",
+        "-expect",
+        "array",
+        "-o",
+        "-",
+        settingsPath,
+      ),
+      plutilCommand(
+        "-extract",
+        "packages.0",
+        "raw",
+        "-expect",
+        "string",
+        "-o",
+        "-",
+        settingsPath,
+      ),
+    ]),
   );
   assert.equal(
     result.commandLog.some((entry) => entry.startsWith("brew ")),
@@ -1002,6 +1196,7 @@ test("bootstrap fails the shell preflight before mutation when work-only setting
       "",
     ].join("\n"),
   });
+  const settingsPath = settingsPathForState(state);
   const result = await invoke(state);
 
   assert.equal(result.status, 1);
@@ -1014,7 +1209,29 @@ test("bootstrap fails the shell preflight before mutation when work-only setting
   );
   assert.deepEqual(
     result.commandLog,
-    await expectedResolveRepoCommandLog(state),
+    await expectedResolveRepoCommandLog(state, [
+      plutilCommand("-lint", settingsPath),
+      plutilCommand(
+        "-extract",
+        "packages",
+        "raw",
+        "-expect",
+        "array",
+        "-o",
+        "-",
+        settingsPath,
+      ),
+      plutilCommand(
+        "-extract",
+        "packages.0",
+        "raw",
+        "-expect",
+        "string",
+        "-o",
+        "-",
+        settingsPath,
+      ),
+    ]),
   );
   assert.equal(
     result.commandLog.some((entry) => entry.startsWith("brew ")),
@@ -1059,6 +1276,7 @@ test("bootstrap fails the shell preflight before mutation when work-only MCP byt
       2,
     )}\n`,
   });
+  const mcpPath = mcpPathForState(state);
   const result = await invoke(state);
 
   assert.equal(result.status, 1);
@@ -1071,7 +1289,10 @@ test("bootstrap fails the shell preflight before mutation when work-only MCP byt
   );
   assert.deepEqual(
     result.commandLog,
-    await expectedResolveRepoCommandLog(state),
+    await expectedResolveRepoCommandLog(state, [
+      plutilCommand("-lint", mcpPath),
+      plutilCommand("-convert", "json", "-o", "-", mcpPath),
+    ]),
   );
   assert.equal(
     result.commandLog.some((entry) => entry.startsWith("brew ")),
