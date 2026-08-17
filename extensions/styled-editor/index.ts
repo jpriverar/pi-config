@@ -14,14 +14,12 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { centralThemeBackground, fillThemeBackground } from "./central-theme.js";
-
 type AutocompleteEditorInternals = {
   autocompleteList?: Pick<Component, "render">;
   isShowingAutocomplete?: () => boolean;
 };
 
-const PROMPT_RAIL = " ";
+const PROMPT_RAIL = "█";
 const PROMPT_RAIL_RIGHT_PADDING = 1;
 
 function clampRenderedLines(lines: string[], width: number): string[] {
@@ -35,16 +33,41 @@ function fillLine(content: string, width: number): string {
   return `${truncated}${pad}`;
 }
 
-function renderEntryBlockLine(theme: Theme, content: string, width: number): string {
+const SGR_SEQUENCE = /\x1b\[([0-9;]*)m/g;
+
+function fillThemeBackground(
+  theme: Theme,
+  color: Parameters<Theme["bg"]>[0],
+  text: string,
+): string {
+  const backgroundAnsi = theme.getBgAnsi(color);
+  if (!backgroundAnsi) return text;
+
+  // Pi's fake cursor emits SGR 0, clearing an enclosing background.
+  const repaired = text.replace(SGR_SEQUENCE, (sequence, rawCodes: string) => {
+    const codes = rawCodes === "" ? [0] : rawCodes.split(";").map(Number);
+    return codes.includes(0) || codes.includes(49)
+      ? `${sequence}${backgroundAnsi}`
+      : sequence;
+  });
+  return theme.bg(color, repaired);
+}
+
+function renderEntryBlockLine(
+  theme: Theme,
+  content: string,
+  width: number,
+): string {
   const railWidth = Math.min(visibleWidth(PROMPT_RAIL), Math.max(0, width));
   const rightPaddingWidth = Math.min(
     PROMPT_RAIL_RIGHT_PADDING,
     Math.max(0, width - railWidth),
   );
   const bodyWidth = Math.max(0, width - railWidth - rightPaddingWidth);
-  const rail = railWidth > 0
-    ? centralThemeBackground(" ".repeat(railWidth), "borderAccent", "fgPrompt")
-    : "";
+  const rail =
+    railWidth > 0
+      ? theme.fg("borderAccent", PROMPT_RAIL.repeat(railWidth))
+      : "";
   const rightPadding = fillThemeBackground(
     theme,
     "userMessageBg",
@@ -86,7 +109,8 @@ class PromptEditor extends CustomEditor {
     }
 
     const autocompleteCount =
-      isShowingAutocomplete && typeof internals.autocompleteList?.render === "function"
+      isShowingAutocomplete &&
+      typeof internals.autocompleteList?.render === "function"
         ? internals.autocompleteList.render(width).length
         : 0;
     const editorFrame =
@@ -107,7 +131,9 @@ class PromptEditor extends CustomEditor {
     const paddedEntryLines = ["", ...entryLines, ""];
 
     const out = [
-      ...paddedEntryLines.map((line) => renderEntryBlockLine(this.uiTheme, line, width)),
+      ...paddedEntryLines.map((line) =>
+        renderEntryBlockLine(this.uiTheme, line, width),
+      ),
       ...autocompleteLines,
       // Keep terminal spacing outside the colored prompt block.
       "",
