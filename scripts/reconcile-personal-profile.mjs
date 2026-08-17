@@ -91,24 +91,59 @@ function isMissing(error) {
   );
 }
 
-/** @param {string} haystack @param {string} needle */
-function countOccurrences(haystack, needle) {
-  let count = 0;
-  let searchIndex = 0;
-
-  while (true) {
-    const matchIndex = haystack.indexOf(needle, searchIndex);
-    if (matchIndex === -1) {
-      return count;
-    }
-    count += 1;
-    searchIndex = matchIndex + needle.length;
-  }
-}
-
 /** @param {string[]} entries @param {string} expected */
 function countExactMatches(entries, expected) {
   return entries.filter((entry) => entry === expected).length;
+}
+
+/**
+ * @param {string} contents
+ * @returns {{ malformed: boolean; startMarkers: Array<{ start: number; end: number }>; endMarkers: Array<{ start: number; end: number }> }}
+ */
+function scanShellMarkers(contents) {
+  const startMarkers = [];
+  const endMarkers = [];
+  let offset = 0;
+
+  while (offset < contents.length) {
+    let lineEnd = offset;
+    while (
+      lineEnd < contents.length &&
+      contents[lineEnd] !== "\n" &&
+      contents[lineEnd] !== "\r"
+    ) {
+      lineEnd += 1;
+    }
+
+    let nextOffset = lineEnd;
+    if (nextOffset < contents.length) {
+      if (contents[nextOffset] === "\r" && contents[nextOffset + 1] === "\n") {
+        nextOffset += 2;
+      } else {
+        nextOffset += 1;
+      }
+    }
+
+    const line = contents.slice(offset, lineEnd);
+    if (
+      (line.includes(shellBlockStartMarker) &&
+        line !== shellBlockStartMarker) ||
+      (line.includes(shellBlockEndMarker) && line !== shellBlockEndMarker)
+    ) {
+      return { malformed: true, startMarkers, endMarkers };
+    }
+
+    if (line === shellBlockStartMarker) {
+      startMarkers.push({ start: offset, end: nextOffset });
+    }
+    if (line === shellBlockEndMarker) {
+      endMarkers.push({ start: offset, end: nextOffset });
+    }
+
+    offset = nextOffset;
+  }
+
+  return { malformed: false, startMarkers, endMarkers };
 }
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
@@ -340,10 +375,6 @@ export async function atomicWrite(
 }
 
 /**
- * @param {ReconcileOptions} options
- * @returns {Promise<{ changed: boolean; settingsPath: string }>}
- */
-/**
  * @param {ShellOptions} options
  * @returns {Promise<{ changed: boolean; backupPath?: string }>}
  */
@@ -375,30 +406,29 @@ export async function reconcileShell(options) {
   if (existingBytes === undefined) {
     nextBytes = managedShellBlock;
   } else {
-    const startCount = countOccurrences(existingBytes, shellBlockStartMarker);
-    const endCount = countOccurrences(existingBytes, shellBlockEndMarker);
+    const markerScan = scanShellMarkers(existingBytes);
+    const startCount = markerScan.startMarkers.length;
+    const endCount = markerScan.endMarkers.length;
+
+    if (markerScan.malformed) {
+      throw new Error(`Cannot reconcile managed shell block in ${zshrcPath}`);
+    }
 
     if (startCount === 0 && endCount === 0) {
       const separator =
-        existingBytes.length === 0 || existingBytes.endsWith("\n") ? "" : "\n";
+        existingBytes.length === 0 ||
+        existingBytes.endsWith("\n") ||
+        existingBytes.endsWith("\r")
+          ? ""
+          : "\n";
       nextBytes = `${existingBytes}${separator}${managedShellBlock}`;
     } else if (startCount === 1 && endCount === 1) {
-      const blockStart = existingBytes.lastIndexOf(
-        "\n",
-        existingBytes.indexOf(shellBlockStartMarker),
-      );
-      const startIndex = blockStart === -1 ? 0 : blockStart + 1;
-      const endMarkerIndex = existingBytes.indexOf(shellBlockEndMarker);
-      if (endMarkerIndex < startIndex) {
+      const [startMarker] = markerScan.startMarkers;
+      const [endMarker] = markerScan.endMarkers;
+      if (endMarker.start < startMarker.start) {
         throw new Error(`Cannot reconcile managed shell block in ${zshrcPath}`);
       }
-      let blockEnd = endMarkerIndex + shellBlockEndMarker.length;
-      if (existingBytes.startsWith("\r\n", blockEnd)) {
-        blockEnd += 2;
-      } else if (existingBytes.startsWith("\n", blockEnd)) {
-        blockEnd += 1;
-      }
-      nextBytes = `${existingBytes.slice(0, startIndex)}${managedShellBlock}${existingBytes.slice(blockEnd)}`;
+      nextBytes = `${existingBytes.slice(0, startMarker.start)}${managedShellBlock}${existingBytes.slice(endMarker.end)}`;
     } else {
       throw new Error(`Cannot reconcile managed shell block in ${zshrcPath}`);
     }

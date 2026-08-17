@@ -73,6 +73,23 @@ async function writeInstalledPackages(
   }
 }
 
+async function writeInstalledPackageBytes(
+  agentDir: string,
+  name: string,
+  bytes: string,
+) {
+  const packageJsonPath = join(
+    agentDir,
+    "npm",
+    "node_modules",
+    ...name.split("/"),
+    "package.json",
+  );
+  await mkdir(join(packageJsonPath, ".."), { recursive: true });
+  await writeFile(packageJsonPath, bytes);
+  return packageJsonPath;
+}
+
 test("fresh settings load the checkout and exact public packages", async (t) => {
   const state = await fixture();
   t.after(() => rm(state.root, { recursive: true, force: true }));
@@ -419,6 +436,47 @@ test("shell reconciliation rejects malformed marker counts without changing the 
   }
 });
 
+test("shell reconciliation rejects inline marker text without changing the file", async (t) => {
+  const state = await fixture();
+  t.after(() => rm(state.root, { recursive: true, force: true }));
+
+  const cases = [
+    {
+      name: "quoted start marker",
+      bytes: [
+        'echo "# >>> jpriverar pi bootstrap >>>"',
+        "# <<< jpriverar pi bootstrap <<<",
+        "after",
+        "",
+      ].join("\n"),
+    },
+    {
+      name: "quoted end marker",
+      bytes: [
+        "# >>> jpriverar pi bootstrap >>>",
+        'echo "# <<< jpriverar pi bootstrap <<<"',
+        "after",
+        "",
+      ].join("\n"),
+    },
+  ];
+
+  for (const { name, bytes } of cases) {
+    await t.test(name, async () => {
+      const zshrcPath = join(state.root, `${name}.zshrc`);
+      const backupPath = `${zshrcPath}.jpriverar-pi-bootstrap.bak`;
+      await writeFile(zshrcPath, bytes);
+
+      await assert.rejects(
+        reconcileShell({ zshrcPath }),
+        new Error(`Cannot reconcile managed shell block in ${zshrcPath}`),
+      );
+      assert.equal(await readFile(zshrcPath, "utf8"), bytes);
+      await assert.rejects(readFile(backupPath, "utf8"));
+    });
+  }
+});
+
 test("symlinked .zshrc files reject", async (t) => {
   const state = await fixture();
   t.after(() => rm(state.root, { recursive: true, force: true }));
@@ -522,6 +580,42 @@ test("installed package verification rejects missing managed settings sources", 
     new Error(
       `Managed core package source is not configured exactly once: ${state.repoDir}`,
     ),
+  );
+});
+
+test("installed package verification rejects malformed package metadata with the curated path error", async (t) => {
+  const state = await fixture();
+  t.after(() => rm(state.root, { recursive: true, force: true }));
+
+  const malformedPackage = MANAGED_NPM_PACKAGES[0];
+  await reconcileSettings(state);
+  await writeInstalledPackages(
+    state.agentDir,
+    Object.fromEntries(
+      MANAGED_NPM_PACKAGES.slice(1).map(({ name, version }) => [name, version]),
+    ),
+  );
+  const packageJsonPath = await writeInstalledPackageBytes(
+    state.agentDir,
+    malformedPackage.name,
+    '{\n  "name": "pi-mcp-adapter",\n  "token": "raw-json-must-not-leak",\n',
+  );
+
+  await assert.rejects(
+    async () => verifyInstalledPackages(state),
+    (error) => {
+      assert.equal(
+        error instanceof Error ? error.message : String(error),
+        `Cannot parse installed managed package metadata at ${packageJsonPath}`,
+      );
+      assert.equal(
+        error instanceof Error
+          ? error.message.includes("raw-json-must-not-leak")
+          : false,
+        false,
+      );
+      return true;
+    },
   );
 });
 
