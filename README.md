@@ -30,6 +30,8 @@ checkout as the local Pi package source, and five public npm package sources:
 It reconciles reviewed settings in `$HOME/.pi/agent`, manages one
 marker-delimited shell block for `VOLTA_HOME`, `PATH`, and `BEADS_DIR`, and
 uses an independent personal Beads store at `$HOME/beads/.beads`.
+It initializes only an empty personal Beads store with prefix `jp` and
+configures no remote.
 
 Provider setup stays personal and interactive through `/login`.
 Rerunning `./scripts/bootstrap-macos.sh` is safe: a successful second run leaves

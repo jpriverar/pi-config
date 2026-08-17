@@ -66,6 +66,7 @@ const placeholderValues = new Set([
   "your_api_key_here",
   "your_secret_here",
   "your_password_here",
+  "raw-json-must-not-leak",
 ]);
 
 function repositoryRoot() {
@@ -291,7 +292,11 @@ function validateUrls(path, text, errors) {
 }
 
 function validateUrl(path, value, vendored, errors) {
-  if (/^https?:\/\/host:port(?:\/|$)/.test(value) || value === "http://") {
+  if (
+    /^https?:\/\/host:port(?:\/|$)/.test(value) ||
+    value === "http://" ||
+    value.includes("${")
+  ) {
     return;
   }
   let url;
@@ -366,12 +371,6 @@ function main() {
     validateBinary(entry.path, content, errors);
     if (content.includes(0)) continue;
     const text = content.toString("utf8");
-    if (
-      entry.path.startsWith("tests/") &&
-      /\.(?:[cm]?[jt]s|tsx)$/.test(entry.path)
-    ) {
-      continue;
-    }
     validatePrivateLocations(entry.path, text, errors);
     validateCredentials(entry.path, text, errors);
     validateBootstrapArtifacts(entry.path, text, errors);

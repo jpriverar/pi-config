@@ -147,6 +147,7 @@ test("README documents the public macOS bootstrap flow and boundaries", () => {
     "Provider setup stays personal and interactive through `/login`.",
     "`$HOME/.pi/agent`",
     "`$HOME/beads/.beads`",
+    "It initializes only an empty personal Beads store with prefix `jp` and configures no remote.",
     "Rerunning `./scripts/bootstrap-macos.sh` is safe: a successful second run leaves the managed configuration byte-identical.",
     "If existing managed state conflicts with the reviewed personal-only boundaries, the bootstrap refuses the conflict instead of guessing.",
     "Update by running `git pull --ff-only` in the same checkout, then `/reload` inside Pi.",
@@ -164,6 +165,17 @@ test("README documents the public macOS bootstrap flow and boundaries", () => {
   assert.equal(
     readme.includes("The macOS bootstrap is intentionally not included."),
     false,
+  );
+});
+
+test("rejects forbidden literals in tracked test sources", () => {
+  const privateLocation = ["/", "Users", "/", "person", "/src"].join("");
+
+  assertRejectedWithRule(
+    {
+      "tests/forbidden-source.ts": `export const leak = ${JSON.stringify(privateLocation)};\n`,
+    },
+    /tests\/forbidden-source\.ts: absolute macOS home path/,
   );
 });
 
@@ -252,12 +264,53 @@ test("accepts source placeholders used by the release tests", () => {
   const fixture = createFixture({
     "tests/source-placeholders.ts": [
       'const workMarker = ["data", "dog"].join("");',
+      'const protocol = ["https", "://"].join("");',
+      'const hostSuffix = [".", "example", ".com"].join("");',
       "const authConfig = {",
-      "  baseUrl: `https://${workMarker}.example.com`,",
-      "  tokenRef: `${workMarker}-token`,",
+      "  baseUrl: `${protocol}${workMarker}${hostSuffix}`,",
+      '  tokenRef: "${TOKEN_REF}",',
       "};",
-      'const malformedPackage = `{\\n  "name": "pi-mcp-adapter",\\n  "token": "raw-json-must-not-leak"\\n}`;',
+      'const sensitive = ["to", "ken"].join("");',
+      'const rawValue = ["raw", "-json", "-must", "-not", "-leak"].join("");',
+      'const malformedPackage = `{\\n  "name": "pi-mcp-adapter",\\n  "${sensitive}": "${rawValue}"\\n}`;',
+      "void authConfig;",
       "void malformedPackage;",
+      "",
+    ].join("\n"),
+  });
+  const result = fixture.run();
+
+  assert.equal(result.status, 0, String(result.stderr));
+});
+
+test("accepts tracked test-source template URLs that are not literal hosts", () => {
+  const workIdentifier = ["data", "dog"].join("");
+  const templateUrl = ["https", "://", "${workMarker}", ".example.com"].join(
+    "",
+  );
+  const fixture = createFixture({
+    "tests/source-template-url.ts": [
+      `const workMarker = ${JSON.stringify(workIdentifier)};`,
+      `const baseUrl = \`${templateUrl}\`;`,
+      "void baseUrl;",
+      "",
+    ].join("\n"),
+  });
+  const result = fixture.run();
+
+  assert.equal(result.status, 0, String(result.stderr));
+});
+
+test("accepts tracked test-source redaction markers for credential-shaped fixtures", () => {
+  const sensitive = ["to", "ken"].join("");
+  const redaction = ["raw", "-json", "-must", "-not", "-leak"].join("");
+  const fixture = createFixture({
+    "tests/source-redaction.ts": [
+      "const packageBytes = '",
+      `  "name": "pi-mcp-adapter",\\n`,
+      `  "${sensitive}": "${redaction}",\\n`,
+      "';",
+      "void packageBytes;",
       "",
     ].join("\n"),
   });
