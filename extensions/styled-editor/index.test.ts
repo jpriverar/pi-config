@@ -3,11 +3,11 @@ import test from "node:test";
 
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
-import { centralThemeBackground } from "./central-theme.js";
 import styledEditor from "./index.js";
 
 const BACKGROUND = "\x1b[48;5;17m";
 const RESET_BACKGROUND = "\x1b[49m";
+const RAIL = "\x1b[36m█\x1b[39m";
 
 const editorTheme = {
   borderColor: (text: string) => text,
@@ -29,9 +29,11 @@ function createHarness() {
   const editorFactories: Array<Function | undefined> = [];
   const footerFactories: Function[] = [];
   const notifications: Array<[string, string]> = [];
+  const foregroundCalls: Array<[string, string]> = [];
   const theme = {
-    fg(_color: string, text: string) {
-      return text;
+    fg(color: string, text: string) {
+      foregroundCalls.push([color, text]);
+      return `\x1b[36m${text}\x1b[39m`;
     },
     bg(color: string, text: string) {
       assert.equal(color, "userMessageBg");
@@ -76,6 +78,7 @@ function createHarness() {
     context,
     editorFactories,
     footerFactories,
+    foregroundCalls,
     handlers,
     notifications,
   };
@@ -104,16 +107,20 @@ async function waitForAutocomplete(editor: any): Promise<void> {
 }
 
 test("matches the private prompt renderer", async () => {
-  const editor = await start(createHarness());
+  const harness = createHarness();
+  const editor = await start(harness);
   editor.setText("hello");
 
   const lines = editor.render(40);
   const inputLines = lines.slice(0, -1);
-  const rail = centralThemeBackground(" ", "borderAccent", "fgPrompt");
   const contentLine = inputLines.find((line: string) => line.includes("hello"));
 
   assert.ok(contentLine);
-  assert.ok(inputLines.every((line: string) => line.startsWith(rail)));
+  assert.ok(inputLines.every((line: string) => line.startsWith(RAIL)));
+  assert.deepEqual(
+    harness.foregroundCalls,
+    inputLines.map(() => ["borderAccent", "█"]),
+  );
   assert.ok(inputLines.every((line: string) => line.includes(BACKGROUND)));
   assert.ok(
     inputLines.every(
