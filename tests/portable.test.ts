@@ -4,6 +4,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -15,7 +16,10 @@ import { fileURLToPath } from "node:url";
 
 const repository = dirname(dirname(fileURLToPath(import.meta.url)));
 const verifier = join(repository, "scripts", "verify-portable.mjs");
+const packageJsonPath = join(repository, "package.json");
+const readmePath = join(repository, "README.md");
 const temporaryDirectories: string[] = [];
+const workMarker = ["data", "dog"].join("");
 
 function createFixture(files: Record<string, string | Buffer> = {}): {
   root: string;
@@ -60,6 +64,18 @@ function assertRejected(
   assert.match(String(result.stderr), /[^\s]+: .+/);
 }
 
+function assertRejectedWithRule(
+  files: Record<string, string | Buffer>,
+  rule: RegExp,
+  configure?: (root: string) => void,
+) {
+  const fixture = createFixture(files);
+  configure?.(fixture.root);
+  const result = fixture.run();
+  assert.notEqual(result.status, 0, String(result.stdout));
+  assert.match(String(result.stderr), rule);
+}
+
 test.after(() => {
   for (const directory of temporaryDirectories) {
     rmSync(directory, { recursive: true, force: true });
@@ -91,6 +107,162 @@ test("accepts the immutable reviewed vendor executable set", () => {
   execFileSync("git", ["add", "."], { cwd: fixture.root });
 
   const result = fixture.run();
+  assert.equal(result.status, 0, String(result.stderr));
+});
+
+test("package scripts cover the bootstrap release gates", () => {
+  const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+
+  assert.equal(
+    pkg.scripts["test:bootstrap"],
+    "tsx --test tests/reconcile-personal-profile.test.ts tests/bootstrap-macos.test.ts",
+  );
+  assert.equal(
+    pkg.scripts["format:check"],
+    "prettier --check package.json tsconfig.json 'extensions/**/*.ts' 'lib/**/*.ts' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' 'docs/**/*.md' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
+  );
+  assert.match(pkg.scripts["verify:skills"], /--mode baseline/);
+  assert.match(pkg.scripts["verify:skills"], /--mode package/);
+  assert.match(pkg.scripts["verify:skills"], /--package "\$PWD"/);
+  assert.match(pkg.scripts["verify:skills"], /PI_SKILL_TEST_MODEL/);
+});
+
+test("README documents the public macOS bootstrap flow and boundaries", () => {
+  const readme = readFileSync(readmePath, "utf8");
+  const normalizedReadme = readme.replace(/\s+/g, " ");
+
+  assert.match(
+    readme,
+    /```sh\nset -euo pipefail\ngit clone https:\/\/github\.com\/jpriverar\/pi-config\.git\ncd pi-config\n\.\/scripts\/bootstrap-macos\.sh\n```/,
+  );
+  for (const snippet of [
+    "Homebrew is the only prerequisite.",
+    "The script installs and owns Node.js 22.19.0 via Volta, Pi 0.84.1, this checkout as the local Pi package source, and five public npm package sources:",
+    "- `npm:pi-mcp-adapter@2.26.0`",
+    "- `npm:pi-subagents@0.50.0`",
+    "- `npm:context-mode@1.0.169`",
+    "- `npm:pi-markdown-preview@0.14.1`",
+    "- `npm:@juicesharp/rpiv-ask-user-question@2.6.1`",
+    "Any clone path is valid; whichever checkout you bootstrap becomes the local package source that Pi loads.",
+    "Provider setup stays personal and interactive through `/login`.",
+    "`$HOME/.pi/agent`",
+    "`$HOME/beads/.beads`",
+    "Rerunning `./scripts/bootstrap-macos.sh` is safe: a successful second run leaves the managed configuration byte-identical.",
+    "If existing managed state conflicts with the reviewed personal-only boundaries, the bootstrap refuses the conflict instead of guessing.",
+    "Update by running `git pull --ff-only` in the same checkout, then `/reload` inside Pi.",
+    "To roll back, check out an earlier repository commit in the same checkout and run `/reload` again.",
+    "Pi's generated npm workspace currently records caret dependency ranges even when settings contain versioned sources.",
+    "The bootstrap verifies the final resolved package versions after Pi finishes package operations.",
+    "It excludes work configuration, copied history, credentials, providers, MCP setup, and Beads remotes.",
+  ]) {
+    assert.equal(
+      normalizedReadme.includes(snippet),
+      true,
+      `missing README snippet: ${snippet}`,
+    );
+  }
+  assert.equal(
+    readme.includes("The macOS bootstrap is intentionally not included."),
+    false,
+  );
+});
+
+test("accepts the reviewed bootstrap artifacts and still rejects unrelated scripts executables", () => {
+  const fixture = createFixture({
+    "README.md": [
+      "# Public bootstrap",
+      "Clone https://github.com/jpriverar/pi-config.git",
+      "Provider setup stays personal and interactive through /login.",
+      "Pi keeps its managed state under $HOME/.pi/agent.",
+      "Beads keeps its personal store under $HOME/beads/.beads.",
+      "Update with git pull --ff-only and then /reload.",
+      "No credentials are included.",
+      "",
+    ].join("\n"),
+    "scripts/bootstrap-macos.sh": [
+      "#!/bin/sh",
+      "set -eu",
+      'printf "%s\\n" "$HOME/.pi/agent"',
+      'printf "%s\\n" "$HOME/beads/.beads"',
+      'printf "%s\\n" "Run /login after bootstrap"',
+      "",
+    ].join("\n"),
+  });
+  chmodSync(join(fixture.root, "scripts", "bootstrap-macos.sh"), 0o755);
+  execFileSync("git", ["add", "."], { cwd: fixture.root });
+
+  const result = fixture.run();
+  assert.equal(result.status, 0, String(result.stderr));
+
+  assertRejectedWithRule(
+    { "scripts/other.sh": "#!/bin/sh\n" },
+    /scripts\/other\.sh: executable mode is not reviewed/,
+    (root) => {
+      chmodSync(join(root, "scripts", "other.sh"), 0o755);
+      execFileSync("git", ["add", "scripts/other.sh"], { cwd: root });
+    },
+  );
+});
+
+test("rejects forbidden runtime state and work identifiers in tracked bootstrap artifacts", async (t) => {
+  await t.test("runtime state under the personal Pi root", () => {
+    assertRejectedWithRule(
+      {
+        "README.md": [
+          "Public bootstrap docs",
+          "Do not copy $HOME/.pi/agent/auth.json into this package.",
+          "",
+        ].join("\n"),
+      },
+      /README\.md: bootstrap runtime-state reference is forbidden/,
+    );
+  });
+
+  await t.test("work-only package source in the bootstrap script", () => {
+    assertRejectedWithRule(
+      {
+        "scripts/bootstrap-macos.sh": [
+          "#!/bin/sh",
+          "set -eu",
+          `pi install npm:@${workMarker}/private-plugin@1.0.0`,
+          "",
+        ].join("\n"),
+      },
+      /scripts\/bootstrap-macos\.sh: bootstrap work-only identifier is forbidden/,
+      (root) => {
+        chmodSync(join(root, "scripts", "bootstrap-macos.sh"), 0o755);
+        execFileSync("git", ["add", "scripts/bootstrap-macos.sh"], {
+          cwd: root,
+        });
+      },
+    );
+  });
+});
+
+test("accepts tracked docs under the reviewed public docs root", () => {
+  const fixture = createFixture({
+    "docs/reviewed.md": "Reviewed public docs.\n",
+  });
+  const result = fixture.run();
+
+  assert.equal(result.status, 0, String(result.stderr));
+});
+
+test("accepts source placeholders used by the release tests", () => {
+  const fixture = createFixture({
+    "tests/source-placeholders.ts": [
+      'const workMarker = ["data", "dog"].join("");',
+      "const authConfig = {",
+      "  baseUrl: `https://${workMarker}.example.com`,",
+      "  tokenRef: `${workMarker}-token`,",
+      "};",
+      'const malformedPackage = `{\\n  "name": "pi-mcp-adapter",\\n  "token": "raw-json-must-not-leak"\\n}`;',
+      "void malformedPackage;",
+      "",
+    ].join("\n"),
+  });
+  const result = fixture.run();
+
   assert.equal(result.status, 0, String(result.stderr));
 });
 
