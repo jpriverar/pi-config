@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   truncateToWidth,
+  visibleWidth,
   type EditorTheme,
   type TUI,
 } from "@earendil-works/pi-tui";
@@ -19,6 +20,11 @@ type AutocompleteRenderer = {
 type EditorAutocompleteInternals = {
   autocompleteList?: AutocompleteRenderer;
   autocompleteState?: unknown;
+};
+
+type InputStyle = {
+  backgroundAnsi(): string;
+  accent(text: string): string;
 };
 
 function autocompleteLineCount(editor: StyledEditor, width: number): number {
@@ -36,21 +42,43 @@ function autocompleteLineCount(editor: StyledEditor, width: number): number {
 }
 
 export class StyledEditor extends CustomEditor {
-  constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) {
+  constructor(
+    tui: TUI,
+    theme: EditorTheme,
+    keybindings: KeybindingsManager,
+    private readonly inputStyle: InputStyle,
+  ) {
     super(tui, theme, keybindings);
   }
 
   override render(width: number): string[] {
     const lines = super.render(width);
     const autocompleteRows = autocompleteLineCount(this, width);
-    const inputRowCount = lines.length - autocompleteRows;
+    const inputRows = lines.slice(0, lines.length - autocompleteRows);
+    const accent = this.inputStyle.accent("█");
+    const accentWidth = visibleWidth(accent);
+    const bodyWidth = Math.max(0, width - accentWidth);
+    const backgroundAnsi = this.inputStyle.backgroundAnsi();
+
+    const styledInput = inputRows.map((line, index) => {
+      if (width <= 0) return "";
+      if (bodyWidth === 0) return truncateToWidth(accent, width, "");
+
+      const isBorderRow =
+        inputRows.length >= 3 &&
+        (index === 0 || index === inputRows.length - 1);
+      const content = isBorderRow ? "" : ` ${line}`;
+      const fitted = truncateToWidth(content, bodyWidth, "");
+      const padded = `${fitted}${" ".repeat(
+        Math.max(0, bodyWidth - visibleWidth(fitted)),
+      )}`;
+      return `${accent}${tintInputLine(padded, backgroundAnsi)}`;
+    });
 
     return [
+      ...styledInput,
       ...lines
-        .slice(0, inputRowCount)
-        .map((line) => tintInputLine(truncateToWidth(line, width, ""))),
-      ...lines
-        .slice(inputRowCount)
+        .slice(inputRows.length)
         .map((line) => truncateToWidth(line, width, "")),
       "",
     ];
@@ -72,7 +100,11 @@ export function createStyledEditorExtension() {
 
     const install = (ctx: ExtensionContext) => {
       ctx.ui.setEditorComponent(
-        (tui, theme, keybindings) => new StyledEditor(tui, theme, keybindings),
+        (tui, theme, keybindings) =>
+          new StyledEditor(tui, theme, keybindings, {
+            backgroundAnsi: () => ctx.ui.theme.getBgAnsi("userMessageBg"),
+            accent: (text) => ctx.ui.theme.fg("accent", text),
+          }),
       );
     };
 

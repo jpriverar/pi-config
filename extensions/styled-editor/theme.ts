@@ -1,12 +1,11 @@
 const FULL_SGR_RESET = /\x1b\[(?:0)?m/g;
 
-export const INPUT_BACKGROUND_ANSI = "\x1b[48;2;47;56;73m";
 export const ANSI_RESET = "\x1b[0m";
 
-export function tintInputLine(line: string): string {
+export function tintInputLine(line: string, backgroundAnsi: string): string {
   const backgroundSafeLine = line.replace(
     FULL_SGR_RESET,
-    `${ANSI_RESET}${INPUT_BACKGROUND_ANSI}`,
+    `${ANSI_RESET}${backgroundAnsi}`,
   );
-  return `${INPUT_BACKGROUND_ANSI}${backgroundSafeLine}${ANSI_RESET}`;
+  return `${backgroundAnsi}${backgroundSafeLine}${ANSI_RESET}`;
 }

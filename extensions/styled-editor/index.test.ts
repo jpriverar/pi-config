@@ -5,7 +5,14 @@ import { CustomEditor, InteractiveMode } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import { createStyledEditorExtension, StyledEditor } from "./index.js";
-import { INPUT_BACKGROUND_ANSI } from "./theme.js";
+import { ANSI_RESET } from "./theme.js";
+
+const TEST_BACKGROUND_ANSI = "\x1b[48;5;17m";
+const TEST_ACCENT_ANSI = "\x1b[38;5;51m";
+const inputStyle = {
+  backgroundAnsi: () => TEST_BACKGROUND_ANSI,
+  accent: (text: string) => `${TEST_ACCENT_ANSI}${text}\x1b[39m`,
+};
 
 const editorTheme = {
   borderColor: (text: string) => text,
@@ -24,7 +31,12 @@ function createEditor(): StyledEditor {
     requestRender() {},
   };
   const keybindings = { matches: () => false };
-  return new StyledEditor(tui as any, editorTheme, keybindings as any);
+  return new StyledEditor(
+    tui as any,
+    editorTheme,
+    keybindings as any,
+    inputStyle,
+  );
 }
 
 async function waitForAutocomplete(editor: StyledEditor): Promise<void> {
@@ -35,8 +47,13 @@ async function waitForAutocomplete(editor: StyledEditor): Promise<void> {
   assert.fail("autocomplete did not become visible");
 }
 
-test("uses the visible Modus blue-gray input surface", () => {
-  assert.equal(INPUT_BACKGROUND_ANSI, "\x1b[48;2;47;56;73m");
+test("uses the supplied theme colors for the input surface", () => {
+  const lines = createEditor().render(20).slice(0, -1);
+
+  assert.ok(lines.every((line) => line.includes(TEST_BACKGROUND_ANSI)));
+  assert.ok(
+    lines.every((line) => line.startsWith(`${TEST_ACCENT_ANSI}█\x1b[39m`)),
+  );
 });
 
 test("keeps the tinted background active after the fake cursor reset", () => {
@@ -48,7 +65,7 @@ test("keeps the tinted background active after the fake cursor reset", () => {
   assert.ok(contentLine);
   assert.match(contentLine, /\x1b\[7m/);
   assert.ok(
-    contentLine.includes(`\x1b[0m${INPUT_BACKGROUND_ANSI}`),
+    contentLine.includes(`${ANSI_RESET}${TEST_BACKGROUND_ANSI}`),
     "the full cursor reset must immediately restore the input background",
   );
 });
@@ -59,7 +76,12 @@ test("puts a plain spacer below and outside the tinted input block", () => {
 
   assert.equal(lines.at(-1), "");
   assert.ok(
-    lines.slice(0, -1).every((line) => line.startsWith(INPUT_BACKGROUND_ANSI)),
+    lines
+      .slice(0, -1)
+      .every((line) => line.startsWith(`${TEST_ACCENT_ANSI}█\x1b[39m`)),
+  );
+  assert.ok(
+    lines.slice(0, -1).every((line) => line.includes(TEST_BACKGROUND_ANSI)),
   );
 });
 
@@ -102,7 +124,7 @@ test("keeps Pi 0.84.1 autocomplete rows visible and outside the tint", async () 
     stripTerminalSequences(line).includes("/alpha"),
   );
   assert.ok(alphaLine, "autocomplete row should remain in the output");
-  assert.ok(!alphaLine.startsWith(INPUT_BACKGROUND_ANSI));
+  assert.ok(!alphaLine.includes(TEST_BACKGROUND_ANSI));
   assert.equal(lines.at(-1), "");
   assert.ok(lines.every((line) => visibleWidth(line) <= 14));
 });
@@ -113,6 +135,8 @@ test("installs once per session, hides the footer, and toggles only styled/defau
   const events = new Map<string, Handler>();
   const commands = new Map<string, { handler: Handler }>();
   let scheduled = 0;
+  let backgroundAnsi = "\x1b[48;5;17m";
+  let accentAnsi = "\x1b[38;5;51m";
   const pi = {
     on(name: string, handler: Handler) {
       events.set(name, handler);
@@ -126,6 +150,16 @@ test("installs once per session, hides the footer, and toggles only styled/defau
   const context = {
     mode: "tui",
     ui: {
+      theme: {
+        getBgAnsi(name: string) {
+          assert.equal(name, "userMessageBg");
+          return backgroundAnsi;
+        },
+        fg(name: string, text: string) {
+          assert.equal(name, "accent");
+          return `${accentAnsi}${text}\x1b[39m`;
+        },
+      },
       setEditorComponent(factory: unknown) {
         editorFactories.push(factory);
       },
@@ -147,6 +181,26 @@ test("installs once per session, hides the footer, and toggles only styled/defau
   assert.equal(typeof editorFactories[0], "function");
   assert.equal(footerFactories.length, 1);
   assert.deepEqual((footerFactories[0] as Function)().render(80), []);
+
+  const editor = (editorFactories[0] as Function)(
+    { terminal: { rows: 24 }, requestRender() {} },
+    editorTheme,
+    { matches: () => false },
+  ) as StyledEditor;
+  const inputLines = editor.render(20).slice(0, -1);
+  assert.ok(inputLines.every((line) => line.includes(backgroundAnsi)));
+  assert.ok(
+    inputLines.every((line) => line.startsWith(`${accentAnsi}█\x1b[39m`)),
+  );
+  assert.ok(
+    inputLines.every((line) => !stripTerminalSequences(line).includes("─")),
+  );
+
+  backgroundAnsi = "\x1b[48;5;22m";
+  accentAnsi = "\x1b[38;5;45m";
+  const recolored = editor.render(20);
+  assert.ok(recolored.some((line) => line.includes(backgroundAnsi)));
+  assert.ok(recolored.some((line) => line.includes(accentAnsi)));
 
   const prompt = commands.get("prompt");
   assert.ok(prompt);
@@ -186,7 +240,12 @@ test("Pi 0.84.1 custom editors dynamically receive shortcuts wired after install
   install.call(
     mode,
     (runtimeTui: any, runtimeTheme: any, runtimeKeybindings: any) =>
-      new StyledEditor(runtimeTui, runtimeTheme, runtimeKeybindings),
+      new StyledEditor(
+        runtimeTui,
+        runtimeTheme,
+        runtimeKeybindings,
+        inputStyle,
+      ),
   );
   const customEditor = mode.editor as StyledEditor;
 

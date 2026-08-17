@@ -352,6 +352,9 @@ function plainTheme() {
     fg(_color: string, text: string) {
       return text;
     },
+    getBgAnsi(_color: string) {
+      return "\x1b[48;5;17m";
+    },
     bold(text: string) {
       return text;
     },
@@ -642,7 +645,15 @@ async function verifyContractHarness(
   assert.ok(
     editorLines
       .slice(0, -1)
-      .every((line: string) => line.includes("\u001b[48;2;47;56;73m")),
+      .every((line: string) => line.includes("\u001b[48;5;17m")),
+  );
+  assert.ok(
+    editorLines.slice(0, -1).every((line: string) => line.startsWith("█")),
+  );
+  assert.ok(
+    editorLines
+      .slice(0, -1)
+      .every((line: string) => !stripTerminalSequences(line).includes("─")),
   );
   assert.equal(editorLines.at(-1), "");
   assert.deepEqual(harness.footer()?.().render(80), []);
