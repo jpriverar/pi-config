@@ -654,7 +654,7 @@ async function verifyContractHarness(
   assert.ok(
     editorLines
       .slice(0, -1)
-      .every((line: string) => stripTerminalSequences(line).startsWith("  ")),
+      .every((line: string) => stripTerminalSequences(line).startsWith("█ ")),
   );
   assert.ok(
     editorLines
