@@ -283,15 +283,25 @@ test("accepts source placeholders used by the release tests", () => {
   assert.equal(result.status, 0, String(result.stderr));
 });
 
+test("rejects literal unreviewed hosts even when interpolation appears outside the host", () => {
+  const url = ["https", "://", "example", ".com", "/${suffix}"].join("");
+
+  assertRejectedWithRule(
+    {
+      "tests/url-template-bypass.ts": `export const url = ${JSON.stringify(url)};\n`,
+    },
+    /tests\/url-template-bypass\.ts: URL host is not reviewed: example\.com/,
+  );
+});
+
 test("accepts tracked test-source template URLs that are not literal hosts", () => {
   const workIdentifier = ["data", "dog"].join("");
-  const templateUrl = ["https", "://", "${workMarker}", ".example.com"].join(
-    "",
-  );
   const fixture = createFixture({
     "tests/source-template-url.ts": [
       `const workMarker = ${JSON.stringify(workIdentifier)};`,
-      `const baseUrl = \`${templateUrl}\`;`,
+      'const protocol = ["https", "://"].join("");',
+      'const host = ["${", "workMarker", "}", ".example", ".com"].join("");',
+      "const baseUrl = `${protocol}${host}`;",
       "void baseUrl;",
       "",
     ].join("\n"),

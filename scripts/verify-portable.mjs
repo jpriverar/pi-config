@@ -292,11 +292,7 @@ function validateUrls(path, text, errors) {
 }
 
 function validateUrl(path, value, vendored, errors) {
-  if (
-    /^https?:\/\/host:port(?:\/|$)/.test(value) ||
-    value === "http://" ||
-    value.includes("${")
-  ) {
+  if (/^https?:\/\/host:port(?:\/|$)/.test(value) || value === "http://") {
     return;
   }
   let url;

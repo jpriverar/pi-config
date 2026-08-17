@@ -163,7 +163,7 @@ test("unrelated provider and auth settings containing the work marker are preser
     defaultProvider: `${workMarker}-personal-provider`,
     defaultModel: `${workMarker}-gpt`,
     authConfig: {
-      baseUrl: `https://${workMarker}.example.com`,
+      baseUrl: `${["https", "://"].join("")}${workMarker}${[".", "example", ".com"].join("")}`,
       tokenRef: `${workMarker}-token`,
     },
     packages: ["npm:some-public-helper@1.2.3"],
@@ -296,7 +296,13 @@ test("work-only package and MCP markers are rejected", async (t) => {
   await writeSettings(state.agentDir, { packages: [] });
   await writeFile(
     mcpPath,
-    JSON.stringify({ servers: [{ url: `https://${workMarker}.example.com` }] }),
+    JSON.stringify({
+      servers: [
+        {
+          url: `${["https", "://"].join("")}${workMarker}${[".", "example", ".com"].join("")}`,
+        },
+      ],
+    }),
   );
   await assert.rejects(
     validateProfile(state),

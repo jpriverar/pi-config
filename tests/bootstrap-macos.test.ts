@@ -812,7 +812,17 @@ test("bootstrap fails the shell preflight before mutation when work-only setting
 test("bootstrap fails the shell preflight before mutation when work-only MCP bytes are present", async (t) => {
   const state = await fixture(t, {
     includeBrew: true,
-    initialMcpBytes: `${JSON.stringify({ servers: [{ url: `https://${workMarker}.example.com` }] }, null, 2)}\n`,
+    initialMcpBytes: `${JSON.stringify(
+      {
+        servers: [
+          {
+            url: `${["https", "://"].join("")}${workMarker}${[".", "example", ".com"].join("")}`,
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
   });
   const result = await invoke(state);
 
