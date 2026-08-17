@@ -674,9 +674,10 @@ test("bootstrap fails the shell preflight before mutation when MCP JSON is malfo
 });
 
 test("bootstrap fails the shell preflight before mutation when settings contain an unsupported local package source", async (t) => {
+  const unsupportedSource = "./personal-overlay";
   const initialSettingsBytes = `${JSON.stringify(
     {
-      packages: ["./personal-overlay", "npm:some-public-helper@1.2.3"],
+      packages: [unsupportedSource, "npm:some-public-helper@1.2.3"],
     },
     null,
     2,
@@ -692,9 +693,10 @@ test("bootstrap fails the shell preflight before mutation when settings contain 
   assert.match(
     result.stderr,
     new RegExp(
-      `Unsupported local package source at package index 0 in .*${String.raw`settings\.json`}: \\.\/personal-overlay`,
+      `Unsupported local package source at package index 0 in .*${String.raw`settings\.json`}`,
     ),
   );
+  assert.doesNotMatch(result.stderr, new RegExp(unsupportedSource));
   assert.equal(
     await readFile(
       join(state.homeDir, ".pi", "agent", "settings.json"),

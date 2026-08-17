@@ -69,7 +69,7 @@ check_settings_preflight() {
         esac
         ;;
       *)
-        fail "Unsupported local package source at package index $package_index in $file_path: $source"
+        fail "Unsupported local package source at package index $package_index in $file_path"
         ;;
     esac
 
