@@ -180,9 +180,64 @@ export default function tasksOverlay(pi: ExtensionAPI) {
     );
   }
 
+  async function switchProject(ctx: ExtensionContext): Promise<void> {
+    const issues = await getIssues();
+    if (!issues) {
+      ctx.ui.notify("Projects unavailable", "warning");
+      return;
+    }
+
+    const projects = new Map<
+      string,
+      {
+        name: string;
+        counts: Record<Readiness, number>;
+      }
+    >();
+    for (const issue of issues) {
+      const name = primaryWorkstream(issue);
+      if (!name) continue;
+
+      const key = name.toLowerCase();
+      let project = projects.get(key);
+      if (!project) {
+        project = {
+          name,
+          counts: { in_progress: 0, blocked: 0, ready: 0, waiting: 0 },
+        };
+        projects.set(key, project);
+      }
+      project.counts[issue.readiness]++;
+    }
+
+    const global = "Global / no project";
+    const labels = [global];
+    const namesByLabel = new Map<string, string>();
+    for (const project of projects.values()) {
+      const label = `${project.name} — In progress: ${project.counts.in_progress} • Blocked: ${project.counts.blocked} • Ready: ${project.counts.ready} • Waiting: ${project.counts.waiting}`;
+      labels.push(label);
+      namesByLabel.set(label, project.name);
+    }
+
+    const selected = await ctx.ui.select("Switch project", labels);
+    if (selected === undefined) return;
+
+    const current = pi.getSessionName() ?? "";
+    const next = selected === global ? "" : namesByLabel.get(selected);
+    if (next === undefined || next.toLowerCase() === current.toLowerCase())
+      return;
+
+    pi.setSessionName(next);
+  }
+
   pi.registerCommand("tasks", {
     description: "Show project task list as an overlay",
     handler: async (_args, ctx) => showOverlay(ctx),
+  });
+
+  pi.registerCommand("project", {
+    description: "Switch project task scope",
+    handler: async (_args, ctx) => switchProject(ctx),
   });
 
   pi.registerShortcut(Key.ctrlAlt("t"), {
