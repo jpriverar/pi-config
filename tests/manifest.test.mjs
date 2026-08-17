@@ -19,7 +19,10 @@ const expectedSkills = [
   "./skills/handoff",
 ];
 
-const expectedThemes = ["./themes/modus-vivendi-tinted.json"];
+const expectedThemes = [
+  "./themes/modus-vivendi-tinted.json",
+  "./themes/gold-rush.json",
+];
 
 const packageJsonUrl = new URL("../package.json", import.meta.url);
 

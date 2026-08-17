@@ -25,7 +25,7 @@ const publicResources = {
     "./skills/thinking-partner",
     "./skills/handoff",
   ],
-  themes: ["./themes/modus-vivendi-tinted.json"],
+  themes: ["./themes/modus-vivendi-tinted.json", "./themes/gold-rush.json"],
 };
 
 async function discoverSkillFiles(path: string): Promise<string[]> {
@@ -112,10 +112,15 @@ test("resolves every explicit manifest resource", async () => {
     );
   }
 
-  const theme = JSON.parse(
-    await readFile(resolve(repository, publicResources.themes[0]), "utf8"),
+  const themeNames = await Promise.all(
+    publicResources.themes.map(async (themePath) => {
+      const theme = JSON.parse(
+        await readFile(resolve(repository, themePath), "utf8"),
+      );
+      return theme.name;
+    }),
   );
-  assert.equal(theme.name, "modus-vivendi-tinted");
+  assert.deepEqual(themeNames, ["modus-vivendi-tinted", "gold-rush"]);
 });
 
 test("imports and registers every manifest extension without collisions", async () => {

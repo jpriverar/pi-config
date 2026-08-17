@@ -101,7 +101,7 @@ test("fresh settings load the checkout and exact public packages", async (t) => 
 
   assert.equal(result.changed, true);
   assert.deepEqual(settings, {
-    theme: "modus-vivendi-tinted",
+    theme: "gold-rush",
     defaultThinkingLevel: "high",
     packages: [
       state.repoDir,

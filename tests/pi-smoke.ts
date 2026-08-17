@@ -40,7 +40,7 @@ const publicManifest = {
     "./skills/thinking-partner",
     "./skills/handoff",
   ],
-  themes: ["./themes/modus-vivendi-tinted.json"],
+  themes: ["./themes/modus-vivendi-tinted.json", "./themes/gold-rush.json"],
 };
 
 function packageArgument(argv: string[]): string {
@@ -740,7 +740,7 @@ async function main() {
 
     await verifyContractHarness(packagePath, workspace, fakeBd);
     console.log(
-      `Pi package smoke verified (${publicManifest.extensions.length} extensions, ${publicManifest.skills.length} skill roots, ${publicManifest.themes.length} theme)`,
+      `Pi package smoke verified (${publicManifest.extensions.length} extensions, ${publicManifest.skills.length} skill roots, ${publicManifest.themes.length} themes)`,
     );
   } finally {
     guardedCleanup(root);

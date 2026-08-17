@@ -27,9 +27,10 @@ checkout as the local Pi package source, and five public npm package sources:
 - `npm:pi-markdown-preview@0.14.1`
 - `npm:@juicesharp/rpiv-ask-user-question@2.6.1`
 
-It reconciles reviewed settings in `$HOME/.pi/agent`, manages one
-marker-delimited shell block for `VOLTA_HOME`, `PATH`, and `BEADS_DIR`, and
-uses an independent personal Beads store at `$HOME/beads/.beads`.
+It reconciles reviewed settings in `$HOME/.pi/agent`, including the
+`gold-rush` theme, manages one marker-delimited shell block for `VOLTA_HOME`,
+`PATH`, and `BEADS_DIR`, and uses an independent personal Beads store at
+`$HOME/beads/.beads`.
 It initializes only an empty personal Beads store with prefix `jp` and
 configures no remote.
 
@@ -71,7 +72,7 @@ The package manifest loads:
   progress, the styled editor, task workflow, project status, and `/tasks`;
 - four skill roots: Superpowers, critical review, collaborative thinking, and
   handoffs;
-- the `modus-vivendi-tinted` theme.
+- the `modus-vivendi-tinted` and `gold-rush` themes.
 
 Use `pi config` to enable or disable individual package resources after
 installation.
