@@ -5,7 +5,10 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const authoredExecutable = "scripts/refresh-superpowers.sh";
+const authoredExecutables = new Set([
+  "scripts/refresh-superpowers.sh",
+  "scripts/bootstrap-macos.sh",
+]);
 const reviewedVendorExecutables = new Set([
   "skills/superpowers/brainstorming/scripts/start-server.sh",
   "skills/superpowers/brainstorming/scripts/stop-server.sh",
@@ -42,6 +45,8 @@ const allowedUrlHosts = new Set([
   "protesilaos.com",
 ]);
 const reviewedVendorPrefix = "skills/superpowers/";
+const bootstrapArtifacts = new Set(["README.md", "scripts/bootstrap-macos.sh"]);
+const forbiddenWorkMarker = ["data", "dog"].join("");
 const reviewedVendorUrlHosts = new Set([
   "agentskills.io",
   "code.claude.com",
@@ -60,6 +65,7 @@ const placeholderValues = new Set([
   "your_api_key_here",
   "your_secret_here",
   "your_password_here",
+  "raw-json-must-not-leak",
 ]);
 
 function repositoryRoot() {
@@ -104,7 +110,10 @@ function validateTrackedPath(entry, errors) {
   if (mode === "120000") report(errors, path, "tracked symlink is forbidden");
   if (mode === "160000") report(errors, path, "Git submodule is forbidden");
   if (mode.endsWith("755")) {
-    if (path !== authoredExecutable && !reviewedVendorExecutables.has(path)) {
+    if (
+      !authoredExecutables.has(path) &&
+      !reviewedVendorExecutables.has(path)
+    ) {
       report(errors, path, "executable mode is not reviewed");
     }
   } else if (mode !== "100644") {
@@ -227,6 +236,30 @@ function urlsInText(text) {
   );
 }
 
+function validateBootstrapArtifacts(path, text, errors) {
+  if (!bootstrapArtifacts.has(path)) return;
+
+  const runtimeStateReferences = [
+    new RegExp(
+      String.raw`(?:\$HOME|~)\/\.pi\/agent\/(?:auth\.json|models\.json|mcp\.json|sessions?(?:\/|$)|missions(?:\/|$)|run-history(?:\/|$)|research(?:\/|$)|cache(?:\/|$)|subagent-artifacts(?:\/|$))`,
+    ),
+    new RegExp(
+      String.raw`(?:\$HOME|~)\/beads\/\.beads\/(?:issues\.jsonl|remotes(?:\/|$))`,
+    ),
+  ];
+  if (runtimeStateReferences.some((pattern) => pattern.test(text))) {
+    report(errors, path, "bootstrap runtime-state reference is forbidden");
+  }
+
+  const workIdentifier = new RegExp(
+    String.raw`(^|[^A-Za-z0-9])${forbiddenWorkMarker}([^A-Za-z0-9]|$)`,
+    "i",
+  );
+  if (workIdentifier.test(text)) {
+    report(errors, path, "bootstrap work-only identifier is forbidden");
+  }
+}
+
 function validateUrls(path, text, errors) {
   const vendored = path.startsWith(reviewedVendorPrefix);
   if (path === "package-lock.json") {
@@ -335,6 +368,7 @@ function main() {
     const text = content.toString("utf8");
     validatePrivateLocations(entry.path, text, errors);
     validateCredentials(entry.path, text, errors);
+    validateBootstrapArtifacts(entry.path, text, errors);
     validateUrls(entry.path, text, errors);
   }
   validateManifest(root, entries, errors);
