@@ -54,10 +54,14 @@ function createHarness(
       if (options.unavailable === query) {
         return { code: 1, stdout: "", stderr: "private failure" };
       }
+      const statusIndex = args.indexOf("-s");
+      const activeStatuses = new Set(
+        statusIndex === -1 ? [] : args[statusIndex + 1].split(","),
+      );
       const selected =
         query === "ready"
           ? issues.filter((item) => readyIds.has(item.id))
-          : issues;
+          : issues.filter((item) => activeStatuses.has(item.status));
       return {
         code: 0,
         stdout: JSON.stringify(selected.map(rawIssue)),
@@ -180,6 +184,27 @@ test("project picker groups primary workstreams and shows readiness counts", asy
   assert.deepEqual(harness.renamedSessions, ["Alpha"]);
 });
 
+test("project picker sorts workstreams case-insensitively by canonical name", async () => {
+  const harness = createHarness({
+    sessionName: "other",
+    issues: [
+      issue("zulu", "open", ["workstream:Zulu"]),
+      issue("alpha-first", "open", ["workstream:aLPHa"]),
+      issue("beta", "open", ["workstream:Beta"]),
+      issue("alpha-second", "blocked", ["workstream:ALPHA"]),
+    ],
+    select: selectProject("aLPHa"),
+  });
+
+  await switchProject(harness);
+
+  assert.deepEqual(
+    harness.selections[0].items.map((item) => item.split(" —")[0]),
+    [GLOBAL_PROJECT, "aLPHa", "Beta", "Zulu"],
+  );
+  assert.deepEqual(harness.renamedSessions, ["aLPHa"]);
+});
+
 test("project selection uses the canonical name behind its decorated label", async () => {
   const harness = createHarness({
     sessionName: "pi-setup",
@@ -221,6 +246,23 @@ test("project picker offers only Global when no issue has a workstream", async (
 
   assert.deepEqual(harness.selections[0].items, [GLOBAL_PROJECT]);
   assert.deepEqual(harness.renamedSessions, []);
+});
+
+test("project picker excludes workstreams represented only by closed tasks", async () => {
+  const harness = createHarness({
+    sessionName: null,
+    issues: [
+      issue("closed", "closed", ["workstream:Closed Project"]),
+      issue("open", "open", ["workstream:Active Project"]),
+    ],
+  });
+
+  await switchProject(harness);
+
+  assert.deepEqual(
+    harness.selections[0].items.map((item) => item.split(" —")[0]),
+    [GLOBAL_PROJECT, "Active Project"],
+  );
 });
 
 test("selecting the current project is a no-op case-insensitively", async () => {

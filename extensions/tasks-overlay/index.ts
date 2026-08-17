@@ -213,7 +213,12 @@ export default function tasksOverlay(pi: ExtensionAPI) {
     const global = "Global / no project";
     const labels = [global];
     const namesByLabel = new Map<string, string>();
-    for (const project of projects.values()) {
+    const sortedProjects = [...projects.values()].sort((left, right) => {
+      const leftName = left.name.toLowerCase();
+      const rightName = right.name.toLowerCase();
+      return leftName < rightName ? -1 : leftName > rightName ? 1 : 0;
+    });
+    for (const project of sortedProjects) {
       const label = `${project.name} — In progress: ${project.counts.in_progress} • Blocked: ${project.counts.blocked} • Ready: ${project.counts.ready} • Waiting: ${project.counts.waiting}`;
       labels.push(label);
       namesByLabel.set(label, project.name);
