@@ -259,12 +259,6 @@ async function loadProfileState(options, fileOperations) {
   const settings = isRecord(settingsResult.value) ? settingsResult.value : {};
 
   validatePackageSources(settings, settingsPath, repoDir, workMarker);
-  const { packages: _packages, ...otherSettings } = settings;
-  if (containsWorkMarker(otherSettings, workMarker)) {
-    throw new Error(
-      `Forbidden work-only personal Pi settings at ${settingsPath}`,
-    );
-  }
 
   const mcpResult = await readJsonIfPresent(
     mcpPath,

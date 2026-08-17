@@ -100,6 +100,39 @@ test("existing settings preserve unrelated entries and reruns are idempotent", a
   assert.equal(secondBytes, firstBytes);
 });
 
+test("unrelated provider and auth settings containing the work marker are preserved", async (t) => {
+  const state = await fixture();
+  t.after(() => rm(state.root, { recursive: true, force: true }));
+
+  const workMarker = ["data", "dog"].join("");
+  const existing = {
+    defaultProvider: `${workMarker}-personal-provider`,
+    defaultModel: `${workMarker}-gpt`,
+    authConfig: {
+      baseUrl: `https://${workMarker}.example.com`,
+      tokenRef: `${workMarker}-token`,
+    },
+    packages: ["npm:some-public-helper@1.2.3"],
+  };
+
+  await writeSettings(state.agentDir, existing);
+
+  const result = await reconcileSettings(state);
+  const settings = JSON.parse(
+    await readFile(join(state.agentDir, "settings.json"), "utf8"),
+  );
+
+  assert.equal(result.changed, true);
+  assert.equal(settings.defaultProvider, existing.defaultProvider);
+  assert.equal(settings.defaultModel, existing.defaultModel);
+  assert.deepEqual(settings.authConfig, existing.authConfig);
+  assert.deepEqual(settings.packages, [
+    "npm:some-public-helper@1.2.3",
+    state.repoDir,
+    ...MANAGED_NPM_PACKAGES.map(({ source }) => source),
+  ]);
+});
+
 test("malformed settings reject with the curated path error", async (t) => {
   const state = await fixture();
   t.after(() => rm(state.root, { recursive: true, force: true }));
