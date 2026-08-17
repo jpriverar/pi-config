@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CustomEditor, InteractiveMode } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
-import { createStyledEditorExtension, StyledEditor } from "./index.js";
-import { ANSI_RESET } from "./theme.js";
+import { centralThemeBackground } from "./central-theme.js";
+import styledEditor from "./index.js";
 
-const TEST_BACKGROUND_ANSI = "\x1b[48;5;17m";
-const TEST_ACCENT_ANSI = "\x1b[38;5;51m";
-const inputStyle = {
-  backgroundAnsi: () => TEST_BACKGROUND_ANSI,
-  accent: (text: string) => `${TEST_ACCENT_ANSI}${text}\x1b[39m`,
-};
+const BACKGROUND = "\x1b[48;5;17m";
+const RESET_BACKGROUND = "\x1b[49m";
 
 const editorTheme = {
   borderColor: (text: string) => text,
@@ -25,21 +20,82 @@ const editorTheme = {
   },
 };
 
-function createEditor(): StyledEditor {
-  const tui = {
-    terminal: { rows: 24 },
-    requestRender() {},
+function createHarness() {
+  const handlers = new Map<
+    string,
+    (event: unknown, context: any) => Promise<void> | void
+  >();
+  const commands = new Map<string, { handler: Function }>();
+  const editorFactories: Array<Function | undefined> = [];
+  const footerFactories: Function[] = [];
+  const notifications: Array<[string, string]> = [];
+  const theme = {
+    fg(_color: string, text: string) {
+      return text;
+    },
+    bg(color: string, text: string) {
+      assert.equal(color, "userMessageBg");
+      return `${BACKGROUND}${text}${RESET_BACKGROUND}`;
+    },
+    getBgAnsi(color: string) {
+      assert.equal(color, "userMessageBg");
+      return BACKGROUND;
+    },
   };
-  const keybindings = { matches: () => false };
-  return new StyledEditor(
-    tui as any,
-    editorTheme,
-    keybindings as any,
-    inputStyle,
-  );
+  const context = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      theme,
+      setEditorComponent(factory: Function | undefined) {
+        editorFactories.push(factory);
+      },
+      setFooter(factory: Function) {
+        footerFactories.push(factory);
+      },
+      notify(message: string, level: string) {
+        notifications.push([message, level]);
+      },
+    },
+  };
+  const pi = {
+    on(
+      name: string,
+      handler: (event: unknown, context: any) => Promise<void> | void,
+    ) {
+      handlers.set(name, handler);
+    },
+    registerCommand(name: string, command: { handler: Function }) {
+      commands.set(name, command);
+    },
+  };
+
+  styledEditor(pi as any);
+  return {
+    commands,
+    context,
+    editorFactories,
+    footerFactories,
+    handlers,
+    notifications,
+  };
 }
 
-async function waitForAutocomplete(editor: StyledEditor): Promise<void> {
+function instantiate(factory: Function) {
+  return factory({ terminal: { rows: 24 }, requestRender() {} }, editorTheme, {
+    matches: () => false,
+  });
+}
+
+async function start(harness: ReturnType<typeof createHarness>) {
+  await harness.handlers.get("session_start")?.({}, harness.context);
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  const factory = harness.editorFactories.at(-1);
+  assert.equal(typeof factory, "function");
+  return instantiate(factory as Function);
+}
+
+async function waitForAutocomplete(editor: any): Promise<void> {
   for (let attempt = 0; attempt < 10; attempt++) {
     if (editor.isShowingAutocomplete()) return;
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -47,60 +103,43 @@ async function waitForAutocomplete(editor: StyledEditor): Promise<void> {
   assert.fail("autocomplete did not become visible");
 }
 
-test("uses the supplied theme colors for the input surface", () => {
-  const lines = createEditor().render(20).slice(0, -1);
-
-  assert.ok(lines.every((line) => line.includes(TEST_BACKGROUND_ANSI)));
-  assert.ok(
-    lines.every((line) => line.startsWith(`${TEST_ACCENT_ANSI}█\x1b[39m`)),
-  );
-});
-
-test("keeps the tinted background active after the fake cursor reset", () => {
-  const editor = createEditor();
+test("matches the private prompt renderer", async () => {
+  const editor = await start(createHarness());
   editor.setText("hello");
 
-  const lines = editor.render(20);
-  const contentLine = lines.find((line) => line.includes("hello"));
+  const lines = editor.render(40);
+  const inputLines = lines.slice(0, -1);
+  const rail = centralThemeBackground(" ", "borderAccent", "fgPrompt");
+  const contentLine = inputLines.find((line: string) => line.includes("hello"));
+
   assert.ok(contentLine);
-  assert.match(contentLine, /\x1b\[7m/);
+  assert.ok(inputLines.every((line: string) => line.startsWith(rail)));
+  assert.ok(inputLines.every((line: string) => line.includes(BACKGROUND)));
   assert.ok(
-    contentLine.includes(`${ANSI_RESET}${TEST_BACKGROUND_ANSI}`),
-    "the full cursor reset must immediately restore the input background",
+    inputLines.every(
+      (line: string) => !stripTerminalSequences(line).includes("─"),
+    ),
   );
-});
-
-test("puts a plain spacer below and outside the tinted input block", () => {
-  const editor = createEditor();
-  const lines = editor.render(12);
-
+  assert.ok(contentLine.includes(`\x1b[0m${BACKGROUND}`));
   assert.equal(lines.at(-1), "");
-  assert.ok(
-    lines
-      .slice(0, -1)
-      .every((line) => line.startsWith(`${TEST_ACCENT_ANSI}█\x1b[39m`)),
-  );
-  assert.ok(
-    lines.slice(0, -1).every((line) => line.includes(TEST_BACKGROUND_ANSI)),
-  );
+  assert.ok(lines.every((line: string) => visibleWidth(line) <= 40));
 });
 
-test("keeps narrow renders within width", () => {
-  const editor = createEditor();
+test("keeps narrow prompt renders within width", async () => {
+  const editor = await start(createHarness());
   editor.setText("a long prompt that must wrap safely");
 
-  for (const width of [1, 2, 3, 8]) {
+  for (const width of [0, 1, 2, 3, 8]) {
     const lines = editor.render(width);
-    assert.ok(lines.length >= 4);
     assert.ok(
-      lines.every((line) => visibleWidth(line) <= width),
+      lines.every((line: string) => visibleWidth(line) <= width),
       `render exceeded width ${width}`,
     );
   }
 });
 
-test("keeps Pi 0.84.1 autocomplete rows visible and outside the tint", async () => {
-  const editor = createEditor();
+test("keeps autocomplete outside the prompt background", async () => {
+  const editor = await start(createHarness());
   editor.setAutocompleteProvider({
     async getSuggestions() {
       return {
@@ -111,7 +150,7 @@ test("keeps Pi 0.84.1 autocomplete rows visible and outside the tint", async () 
         ],
       };
     },
-    applyCompletion(lines, cursorLine, cursorCol) {
+    applyCompletion(lines: string[], cursorLine: number, cursorCol: number) {
       return { lines, cursorLine, cursorCol };
     },
   });
@@ -119,144 +158,46 @@ test("keeps Pi 0.84.1 autocomplete rows visible and outside the tint", async () 
   editor.handleInput("/");
   await waitForAutocomplete(editor);
 
-  const lines = editor.render(14);
-  const alphaLine = lines.find((line) =>
-    stripTerminalSequences(line).includes("/alpha"),
-  );
-  assert.ok(alphaLine, "autocomplete row should remain in the output");
-  assert.ok(!alphaLine.includes(TEST_BACKGROUND_ANSI));
-  assert.equal(lines.at(-1), "");
-  assert.ok(lines.every((line) => visibleWidth(line) <= 14));
+  const alphaLine = editor
+    .render(20)
+    .find((line: string) => stripTerminalSequences(line).includes("/alpha"));
+  assert.ok(alphaLine);
+  assert.ok(!alphaLine.includes(BACKGROUND));
 });
 
-type Handler = (event: any, context: any) => void | Promise<void>;
+test("reinstalls for shortcuts and identity changes and supports explicit prompt toggles", async () => {
+  const harness = createHarness();
+  await start(harness);
 
-test("installs once per session, hides the footer, and toggles only styled/default", async () => {
-  const events = new Map<string, Handler>();
-  const commands = new Map<string, { handler: Handler }>();
-  let scheduled = 0;
-  let backgroundAnsi = "\x1b[48;5;17m";
-  let accentAnsi = "\x1b[38;5;51m";
-  const pi = {
-    on(name: string, handler: Handler) {
-      events.set(name, handler);
-    },
-    registerCommand(name: string, command: { handler: Handler }) {
-      commands.set(name, command);
-    },
-  };
-  const editorFactories: Array<unknown> = [];
-  const footerFactories: Array<unknown> = [];
-  const context = {
-    mode: "tui",
-    ui: {
-      theme: {
-        getBgAnsi(name: string) {
-          assert.equal(name, "userMessageBg");
-          return backgroundAnsi;
-        },
-        fg(name: string, text: string) {
-          assert.equal(name, "accent");
-          return `${accentAnsi}${text}\x1b[39m`;
-        },
-      },
-      setEditorComponent(factory: unknown) {
-        editorFactories.push(factory);
-      },
-      setFooter(factory: unknown) {
-        footerFactories.push(factory);
-      },
-    },
-  };
+  assert.ok(harness.editorFactories.length >= 2);
+  assert.deepEqual(harness.footerFactories.at(-1)?.().render(80), []);
 
-  (createStyledEditorExtension as any)(() => scheduled++)(pi as any);
-  await events.get("session_start")?.({}, context);
+  const beforeModel = harness.editorFactories.length;
+  await harness.handlers.get("model_select")?.({}, harness.context);
+  assert.equal(harness.editorFactories.length, beforeModel + 1);
 
-  assert.equal(
-    scheduled,
-    0,
-    "session startup must not depend on timer ordering",
-  );
-  assert.equal(editorFactories.length, 1);
-  assert.equal(typeof editorFactories[0], "function");
-  assert.equal(footerFactories.length, 1);
-  assert.deepEqual((footerFactories[0] as Function)().render(80), []);
+  const beforeThinking = harness.editorFactories.length;
+  await harness.handlers.get("thinking_level_select")?.({}, harness.context);
+  assert.equal(harness.editorFactories.length, beforeThinking + 1);
 
-  const editor = (editorFactories[0] as Function)(
-    { terminal: { rows: 24 }, requestRender() {} },
-    editorTheme,
-    { matches: () => false },
-  ) as StyledEditor;
-  const inputLines = editor.render(20).slice(0, -1);
-  assert.ok(inputLines.every((line) => line.includes(backgroundAnsi)));
-  assert.ok(
-    inputLines.every((line) => line.startsWith(`${accentAnsi}█\x1b[39m`)),
-  );
-  assert.ok(
-    inputLines.every((line) => !stripTerminalSequences(line).includes("─")),
-  );
-
-  backgroundAnsi = "\x1b[48;5;22m";
-  accentAnsi = "\x1b[38;5;45m";
-  const recolored = editor.render(20);
-  assert.ok(recolored.some((line) => line.includes(backgroundAnsi)));
-  assert.ok(recolored.some((line) => line.includes(accentAnsi)));
-
-  const prompt = commands.get("prompt");
+  const prompt = harness.commands.get("prompt");
   assert.ok(prompt);
-  await prompt.handler("", context);
-  assert.equal(editorFactories.at(-1), undefined);
-  await prompt.handler("", context);
-  assert.equal(typeof editorFactories.at(-1), "function");
-});
+  await prompt.handler("off", harness.context);
+  assert.equal(harness.editorFactories.at(-1), undefined);
+  await prompt.handler("off", harness.context);
+  assert.equal(harness.editorFactories.at(-1), undefined);
+  await prompt.handler("on", harness.context);
+  assert.equal(typeof harness.editorFactories.at(-1), "function");
+  await prompt.handler("toggle", harness.context);
+  assert.equal(harness.editorFactories.at(-1), undefined);
+  await prompt.handler("on", harness.context);
+  assert.equal(typeof harness.editorFactories.at(-1), "function");
 
-test("Pi 0.84.1 custom editors dynamically receive shortcuts wired after installation", () => {
-  const tui = {
-    terminal: { rows: 24 },
-    requestRender() {},
-    setFocus() {},
-  };
-  const keybindings = { matches: () => false };
-  const defaultEditor = new CustomEditor(
-    tui as any,
-    editorTheme,
-    keybindings as any,
-  );
-  const editorContainer = {
-    clear() {},
-    addChild() {},
-  };
-  const mode = {
-    editor: defaultEditor,
-    defaultEditor,
-    editorContainer,
-    ui: tui,
-    keybindings,
-    autocompleteProvider: undefined,
-    disposeActiveSelector() {},
-  };
-
-  const install = (InteractiveMode.prototype as any).setCustomEditorComponent;
-  install.call(
-    mode,
-    (runtimeTui: any, runtimeTheme: any, runtimeKeybindings: any) =>
-      new StyledEditor(
-        runtimeTui,
-        runtimeTheme,
-        runtimeKeybindings,
-        inputStyle,
-      ),
-  );
-  const customEditor = mode.editor as StyledEditor;
-
-  let shortcutCalls = 0;
-  defaultEditor.onExtensionShortcut = (data) => {
-    if (data !== "ctrl+shift+q") return false;
-    shortcutCalls++;
-    return true;
-  };
-  customEditor.handleInput("ctrl+shift+q");
-
-  assert.equal(shortcutCalls, 1);
-  assert.equal(customEditor.getText(), "");
+  assert.deepEqual(harness.notifications.slice(-5), [
+    ["prompt off", "info"],
+    ["prompt off", "info"],
+    ["prompt on", "info"],
+    ["prompt off", "info"],
+    ["prompt on", "info"],
+  ]);
 });

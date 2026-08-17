@@ -1,129 +1,166 @@
+// Prompt editor adapted directly from Tahir Butt's tb-pi PromptEditor.
+
 import {
   CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
   type KeybindingsManager,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
-  truncateToWidth,
-  visibleWidth,
+  type Component,
   type EditorTheme,
   type TUI,
+  truncateToWidth,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
+import { centralThemeBackground, fillThemeBackground } from "./central-theme.js";
 
-import { tintInputLine } from "./theme.js";
-
-type AutocompleteRenderer = {
-  render(width: number): string[];
+type AutocompleteEditorInternals = {
+  autocompleteList?: Pick<Component, "render">;
+  isShowingAutocomplete?: () => boolean;
 };
 
-type EditorAutocompleteInternals = {
-  autocompleteList?: AutocompleteRenderer;
-  autocompleteState?: unknown;
-};
+const PROMPT_RAIL = " ";
+const PROMPT_RAIL_RIGHT_PADDING = 1;
 
-type InputStyle = {
-  backgroundAnsi(): string;
-  accent(text: string): string;
-};
-
-function autocompleteLineCount(editor: StyledEditor, width: number): number {
-  if (!editor.isShowingAutocomplete()) return 0;
-
-  // Pi 0.84.1 exposes autocomplete visibility but not the rendered row count.
-  // Keep the one private-field cast here so only the input block receives the tint.
-  const internals = editor as unknown as EditorAutocompleteInternals;
-  if (!internals.autocompleteState || !internals.autocompleteList) return 0;
-
-  const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
-  const padding = Math.min(editor.getPaddingX(), maxPadding);
-  const contentWidth = Math.max(1, width - padding * 2);
-  return internals.autocompleteList.render(contentWidth).length;
+function clampRenderedLines(lines: string[], width: number): string[] {
+  const maxWidth = Math.max(0, width);
+  return lines.map((line) => truncateToWidth(line, maxWidth, ""));
 }
 
-export class StyledEditor extends CustomEditor {
+function fillLine(content: string, width: number): string {
+  const truncated = truncateToWidth(content, Math.max(0, width), "");
+  const pad = " ".repeat(Math.max(0, width - visibleWidth(truncated)));
+  return `${truncated}${pad}`;
+}
+
+function renderEntryBlockLine(theme: Theme, content: string, width: number): string {
+  const railWidth = Math.min(visibleWidth(PROMPT_RAIL), Math.max(0, width));
+  const rightPaddingWidth = Math.min(
+    PROMPT_RAIL_RIGHT_PADDING,
+    Math.max(0, width - railWidth),
+  );
+  const bodyWidth = Math.max(0, width - railWidth - rightPaddingWidth);
+  const rail = railWidth > 0
+    ? centralThemeBackground(" ".repeat(railWidth), "borderAccent", "fgPrompt")
+    : "";
+  const rightPadding = fillThemeBackground(
+    theme,
+    "userMessageBg",
+    " ".repeat(rightPaddingWidth),
+  );
+  return `${rail}${rightPadding}${fillThemeBackground(
+    theme,
+    "userMessageBg",
+    fillLine(content, bodyWidth),
+  )}`;
+}
+
+class PromptEditor extends CustomEditor {
+  private readonly uiTheme: Theme;
+
   constructor(
     tui: TUI,
-    theme: EditorTheme,
+    editorTheme: EditorTheme,
     keybindings: KeybindingsManager,
-    private readonly inputStyle: InputStyle,
+    uiTheme: Theme,
   ) {
-    super(tui, theme, keybindings);
+    super(tui, editorTheme, keybindings, { paddingX: 0 });
+    this.uiTheme = uiTheme;
+    this.borderColor = editorTheme.borderColor;
   }
 
-  override render(width: number): string[] {
-    const lines = super.render(width);
-    const autocompleteRows = autocompleteLineCount(this, width);
-    const inputRows = lines.slice(0, lines.length - autocompleteRows);
-    const accent = this.inputStyle.accent("█");
-    const accentWidth = visibleWidth(accent);
-    const bodyWidth = Math.max(0, width - accentWidth);
-    const backgroundAnsi = this.inputStyle.backgroundAnsi();
+  render(width: number): string[] {
+    if (width <= 0) return [""];
 
-    const styledInput = inputRows.map((line, index) => {
-      if (width <= 0) return "";
-      if (bodyWidth === 0) return truncateToWidth(accent, width, "");
+    const rendered = super.render(width);
+    const internals = this as unknown as AutocompleteEditorInternals;
+    const isShowingAutocomplete =
+      typeof internals.isShowingAutocomplete === "function"
+        ? Boolean(internals.isShowingAutocomplete())
+        : false;
 
-      const isBorderRow =
-        inputRows.length >= 3 &&
-        (index === 0 || index === inputRows.length - 1);
-      const content = isBorderRow ? "" : ` ${line}`;
-      const fitted = truncateToWidth(content, bodyWidth, "");
-      const padded = `${fitted}${" ".repeat(
-        Math.max(0, bodyWidth - visibleWidth(fitted)),
-      )}`;
-      return `${accent}${tintInputLine(padded, backgroundAnsi)}`;
-    });
+    if (rendered.length < 2) {
+      return clampRenderedLines(super.render(width), width);
+    }
 
-    return [
-      ...styledInput,
-      ...lines
-        .slice(inputRows.length)
-        .map((line) => truncateToWidth(line, width, "")),
+    const autocompleteCount =
+      isShowingAutocomplete && typeof internals.autocompleteList?.render === "function"
+        ? internals.autocompleteList.render(width).length
+        : 0;
+    const editorFrame =
+      autocompleteCount > 0 && autocompleteCount < rendered.length
+        ? rendered.slice(0, -autocompleteCount)
+        : rendered;
+    const autocompleteLines =
+      autocompleteCount > 0 && autocompleteCount < rendered.length
+        ? rendered.slice(-autocompleteCount)
+        : [];
+
+    if (editorFrame.length < 2) {
+      return clampRenderedLines(rendered, width);
+    }
+
+    const editorLines = editorFrame.slice(1, -1);
+    const entryLines = editorLines.length > 0 ? editorLines : [""];
+    const paddedEntryLines = ["", ...entryLines, ""];
+
+    const out = [
+      ...paddedEntryLines.map((line) => renderEntryBlockLine(this.uiTheme, line, width)),
+      ...autocompleteLines,
+      // Keep terminal spacing outside the colored prompt block.
       "",
     ];
+    return clampRenderedLines(out, width);
   }
 }
 
-function hiddenFooter() {
-  return {
-    invalidate() {},
-    render(): string[] {
-      return [];
+let enabled = true;
+
+function installEditor(ctx: ExtensionContext): void {
+  if (!ctx.hasUI || !enabled) return;
+  ctx.ui.setEditorComponent(
+    (tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) =>
+      new PromptEditor(tui, theme, keybindings, ctx.ui.theme),
+  );
+}
+
+export default function styledEditor(pi: ExtensionAPI): void {
+  pi.on("session_start", async (_event, ctx) => {
+    installEditor(ctx);
+    // Pi wires extension shortcuts after session_start handlers finish. Reinstall
+    // on the next event-loop turn so CustomEditor copies the populated handler.
+    setTimeout(() => installEditor(ctx), 0);
+    ctx.ui.setFooter(() => ({
+      render: () => [],
+      invalidate: () => {},
+    }));
+  });
+
+  pi.on("model_select", async (_event, ctx) => {
+    installEditor(ctx);
+  });
+
+  pi.on("thinking_level_select", async (_event, ctx) => {
+    installEditor(ctx);
+  });
+
+  pi.registerCommand("prompt", {
+    description: "Toggle the dimmed prompt entry block",
+    handler: async (args, ctx) => {
+      const input = args.trim().toLowerCase();
+      if (input === "off" || input === "disable") enabled = false;
+      else if (input === "on" || input === "enable") enabled = true;
+      else enabled = !enabled;
+
+      if (enabled) {
+        installEditor(ctx);
+        ctx.ui.notify("prompt on", "info");
+      } else {
+        ctx.ui.setEditorComponent(undefined);
+        ctx.ui.notify("prompt off", "info");
+      }
     },
-  };
+  });
 }
-
-export function createStyledEditorExtension() {
-  return function styledEditorExtension(pi: ExtensionAPI): void {
-    let styled = true;
-
-    const install = (ctx: ExtensionContext) => {
-      ctx.ui.setEditorComponent(
-        (tui, theme, keybindings) =>
-          new StyledEditor(tui, theme, keybindings, {
-            backgroundAnsi: () => ctx.ui.theme.getBgAnsi("userMessageBg"),
-            accent: (text) => ctx.ui.theme.fg("accent", text),
-          }),
-      );
-    };
-
-    pi.registerCommand("prompt", {
-      description: "Toggle the styled prompt",
-      handler: async (_args, ctx) => {
-        styled = !styled;
-        if (styled) install(ctx);
-        else ctx.ui.setEditorComponent(undefined);
-      },
-    });
-
-    pi.on("session_start", (_event, ctx) => {
-      if (ctx.mode !== "tui") return;
-
-      ctx.ui.setFooter(() => hiddenFooter());
-      if (styled) install(ctx);
-    });
-  };
-}
-
-export default createStyledEditorExtension();

@@ -17,6 +17,7 @@ const reviewedVendorExecutables = new Set([
 ]);
 const approvedRootFiles = new Set([
   ".gitignore",
+  ".prettierignore",
   "LICENSE",
   "README.md",
   "THIRD_PARTY_NOTICES.md",

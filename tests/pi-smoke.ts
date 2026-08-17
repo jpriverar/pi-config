@@ -352,6 +352,9 @@ function plainTheme() {
     fg(_color: string, text: string) {
       return text;
     },
+    bg(_color: string, text: string) {
+      return `\x1b[48;5;17m${text}\x1b[49m`;
+    },
     getBgAnsi(_color: string) {
       return "\x1b[48;5;17m";
     },
@@ -432,6 +435,7 @@ async function createContractHarness(
     },
   };
   const context = {
+    hasUI: true,
     mode: "tui",
     model: undefined,
     getContextUsage() {
@@ -648,7 +652,9 @@ async function verifyContractHarness(
       .every((line: string) => line.includes("\u001b[48;5;17m")),
   );
   assert.ok(
-    editorLines.slice(0, -1).every((line: string) => line.startsWith("█")),
+    editorLines
+      .slice(0, -1)
+      .every((line: string) => stripTerminalSequences(line).startsWith("  ")),
   );
   assert.ok(
     editorLines

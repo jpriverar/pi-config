@@ -15,6 +15,15 @@ Creative Commons Zero (CC0-1.0).
 Source: https://protesilaos.com/codelog/2022-05-10-modus-themes-palette-cc0/
 Palette: https://protesilaos.com/emacs/modus-themes-colors
 
+## Styled prompt renderer
+
+The styled prompt implementation is copied from JP Rivera's existing work
+profile. That implementation was adapted by Tahir Butt from the
+`PolishedEditor` rendering in `lmilojevicc/pi-zentui`, which is licensed under
+the MIT License.
+
+Source: https://github.com/lmilojevicc/pi-zentui
+
 ## Superpowers v6.3.0
 
 The vendored Superpowers skills are copyright Jesse Vincent and contributors

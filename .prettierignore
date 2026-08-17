@@ -1,0 +1,3 @@
+# Preserve the authorized work-profile implementation byte-for-byte.
+extensions/styled-editor/index.ts
+extensions/styled-editor/central-theme.ts
