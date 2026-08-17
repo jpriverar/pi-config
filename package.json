@@ -38,7 +38,8 @@
       "./skills/handoff"
     ],
     "themes": [
-      "./themes/modus-vivendi-tinted.json"
+      "./themes/modus-vivendi-tinted.json",
+      "./themes/gold-rush.json"
     ]
   },
   "peerDependencies": {

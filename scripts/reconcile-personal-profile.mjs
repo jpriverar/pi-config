@@ -522,7 +522,7 @@ export async function reconcileSettings(options) {
   const state = await loadProfileState({ agentDir, repoDir }, fileOperations);
   const nextSettings = {
     ...state.settings,
-    theme: "modus-vivendi-tinted",
+    theme: "gold-rush",
     defaultThinkingLevel: "high",
     packages: reconcilePackages(
       Array.isArray(state.settings.packages) ? state.settings.packages : [],
