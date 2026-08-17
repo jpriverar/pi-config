@@ -9,6 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 /**
  * @typedef {object} FileOperations
@@ -22,6 +23,7 @@ import { dirname, join } from "node:path";
 
 /** @typedef {{ agentDir: string; repoDir: string }} ProfileOptions */
 /** @typedef {{ agentDir: string; repoDir: string; fileOperations?: FileOperations }} ReconcileOptions */
+/** @typedef {{ fileOperations?: FileOperations; zshrcPath: string }} ShellOptions */
 /** @typedef {{ settings: Record<string, unknown>; settingsBytes: string | undefined; settingsPath: string }} ProfileState */
 /** @typedef {{ bytes: string | undefined; value: unknown }} JsonReadResult */
 
@@ -68,6 +70,17 @@ const managedSourcesByName = new Map(
   MANAGED_NPM_PACKAGES.map(({ name, source }) => [name, source]),
 );
 
+const shellBlockStartMarker = "# >>> jpriverar pi bootstrap >>>";
+const shellBlockEndMarker = "# <<< jpriverar pi bootstrap <<<";
+const managedShellBlock = [
+  shellBlockStartMarker,
+  'export VOLTA_HOME="$HOME/.volta"',
+  'export PATH="$VOLTA_HOME/bin:$PATH"',
+  'export BEADS_DIR="$HOME/beads/.beads"',
+  shellBlockEndMarker,
+  "",
+].join("\n");
+
 /** @param {unknown} error */
 function isMissing(error) {
   return (
@@ -76,6 +89,26 @@ function isMissing(error) {
     "code" in error &&
     error.code === "ENOENT"
   );
+}
+
+/** @param {string} haystack @param {string} needle */
+function countOccurrences(haystack, needle) {
+  let count = 0;
+  let searchIndex = 0;
+
+  while (true) {
+    const matchIndex = haystack.indexOf(needle, searchIndex);
+    if (matchIndex === -1) {
+      return count;
+    }
+    count += 1;
+    searchIndex = matchIndex + needle.length;
+  }
+}
+
+/** @param {string[]} entries @param {string} expected */
+function countExactMatches(entries, expected) {
+  return entries.filter((entry) => entry === expected).length;
 }
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
@@ -310,6 +343,150 @@ export async function atomicWrite(
  * @param {ReconcileOptions} options
  * @returns {Promise<{ changed: boolean; settingsPath: string }>}
  */
+/**
+ * @param {ShellOptions} options
+ * @returns {Promise<{ changed: boolean; backupPath?: string }>}
+ */
+export async function reconcileShell(options) {
+  const { fileOperations = defaultFileOperations, zshrcPath } = options;
+  let shellStat;
+  try {
+    shellStat = await fileOperations.lstat(zshrcPath);
+  } catch (error) {
+    if (!isMissing(error)) {
+      throw error;
+    }
+  }
+
+  if (shellStat?.isSymbolicLink()) {
+    throw new Error(`Cannot use symlinked shell profile at ${zshrcPath}`);
+  }
+
+  let existingBytes;
+  try {
+    existingBytes = await fileOperations.readFile(zshrcPath, "utf8");
+  } catch (error) {
+    if (!isMissing(error)) {
+      throw error;
+    }
+  }
+
+  let nextBytes;
+  if (existingBytes === undefined) {
+    nextBytes = managedShellBlock;
+  } else {
+    const startCount = countOccurrences(existingBytes, shellBlockStartMarker);
+    const endCount = countOccurrences(existingBytes, shellBlockEndMarker);
+
+    if (startCount === 0 && endCount === 0) {
+      const separator =
+        existingBytes.length === 0 || existingBytes.endsWith("\n") ? "" : "\n";
+      nextBytes = `${existingBytes}${separator}${managedShellBlock}`;
+    } else if (startCount === 1 && endCount === 1) {
+      const blockStart = existingBytes.lastIndexOf(
+        "\n",
+        existingBytes.indexOf(shellBlockStartMarker),
+      );
+      const startIndex = blockStart === -1 ? 0 : blockStart + 1;
+      const endMarkerIndex = existingBytes.indexOf(shellBlockEndMarker);
+      if (endMarkerIndex < startIndex) {
+        throw new Error(`Cannot reconcile managed shell block in ${zshrcPath}`);
+      }
+      let blockEnd = endMarkerIndex + shellBlockEndMarker.length;
+      if (existingBytes.startsWith("\r\n", blockEnd)) {
+        blockEnd += 2;
+      } else if (existingBytes.startsWith("\n", blockEnd)) {
+        blockEnd += 1;
+      }
+      nextBytes = `${existingBytes.slice(0, startIndex)}${managedShellBlock}${existingBytes.slice(blockEnd)}`;
+    } else {
+      throw new Error(`Cannot reconcile managed shell block in ${zshrcPath}`);
+    }
+  }
+
+  if (existingBytes === nextBytes) {
+    return { changed: false };
+  }
+
+  await fileOperations.mkdir(dirname(zshrcPath), { recursive: true });
+
+  let backupPath;
+  if (existingBytes !== undefined) {
+    backupPath = `${zshrcPath}.jpriverar-pi-bootstrap.bak`;
+    try {
+      await atomicWrite(backupPath, existingBytes, fileOperations);
+    } catch {
+      throw new Error(`Cannot back up shell profile at ${backupPath}`);
+    }
+  }
+
+  try {
+    await atomicWrite(zshrcPath, nextBytes, fileOperations);
+  } catch {
+    throw new Error(`Cannot replace shell profile at ${zshrcPath}`);
+  }
+
+  return backupPath ? { changed: true, backupPath } : { changed: true };
+}
+
+/** @param {ProfileOptions} options */
+export async function verifyInstalledPackages(options) {
+  const state = await loadProfileState(options, defaultFileOperations);
+  const configuredPackages = Array.isArray(state.settings.packages)
+    ? state.settings.packages.filter((entry) => typeof entry === "string")
+    : [];
+
+  if (countExactMatches(configuredPackages, options.repoDir) !== 1) {
+    throw new Error(
+      `Managed core package source is not configured exactly once: ${options.repoDir}`,
+    );
+  }
+
+  for (const { name, source, version } of MANAGED_NPM_PACKAGES) {
+    if (countExactMatches(configuredPackages, source) !== 1) {
+      throw new Error(
+        `Managed package source is not configured exactly once: ${source}`,
+      );
+    }
+
+    const packageJsonPath = join(
+      options.agentDir,
+      "npm",
+      "node_modules",
+      ...name.split("/"),
+      "package.json",
+    );
+
+    let installedPackage;
+    try {
+      installedPackage = JSON.parse(
+        await defaultFileOperations.readFile(packageJsonPath, "utf8"),
+      );
+    } catch (error) {
+      if (isMissing(error)) {
+        throw new Error(`Managed package is not installed: ${name}`);
+      }
+      throw new Error(
+        `Cannot parse installed managed package metadata at ${packageJsonPath}`,
+      );
+    }
+
+    const installedVersion =
+      isRecord(installedPackage) && typeof installedPackage.version === "string"
+        ? installedPackage.version
+        : undefined;
+    if (installedVersion !== version) {
+      throw new Error(
+        `Resolved ${name}@${installedVersion}; expected ${version}`,
+      );
+    }
+  }
+}
+
+/**
+ * @param {ReconcileOptions} options
+ * @returns {Promise<{ changed: boolean; settingsPath: string }>}
+ */
 export async function reconcileSettings(options) {
   const { agentDir, repoDir, fileOperations = defaultFileOperations } = options;
   const state = await loadProfileState({ agentDir, repoDir }, fileOperations);
@@ -346,4 +523,67 @@ export async function reconcileSettings(options) {
     changed: true,
     settingsPath: state.settingsPath,
   };
+}
+
+/** @param {string[]} args @param {string} flagName */
+function requiredFlag(args, flagName) {
+  const flagIndex = args.indexOf(flagName);
+  if (flagIndex === -1 || args[flagIndex + 1] === undefined) {
+    throw new Error(`Missing required flag ${flagName} for ${args[0]}`);
+  }
+  return args[flagIndex + 1];
+}
+
+/** @param {string[]} args */
+export async function main(args) {
+  const [command] = args;
+
+  if (command === "validate") {
+    await validateProfile({
+      agentDir: requiredFlag(args, "--agent-dir"),
+      repoDir: requiredFlag(args, "--repo-dir"),
+    });
+    console.log(JSON.stringify({ changed: false }));
+    return;
+  }
+
+  if (command === "settings") {
+    const result = await reconcileSettings({
+      agentDir: requiredFlag(args, "--agent-dir"),
+      repoDir: requiredFlag(args, "--repo-dir"),
+    });
+    console.log(JSON.stringify({ changed: result.changed }));
+    return;
+  }
+
+  if (command === "verify") {
+    await verifyInstalledPackages({
+      agentDir: requiredFlag(args, "--agent-dir"),
+      repoDir: requiredFlag(args, "--repo-dir"),
+    });
+    console.log(JSON.stringify({ changed: false }));
+    return;
+  }
+
+  if (command === "shell") {
+    const result = await reconcileShell({
+      zshrcPath: requiredFlag(args, "--zshrc"),
+    });
+    console.log(JSON.stringify({ changed: result.changed }));
+    return;
+  }
+
+  throw new Error(command ? `Unknown command: ${command}` : "Unknown command");
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  main(process.argv.slice(2)).catch((error) => {
+    console.error(
+      error instanceof Error ? error.message : "Profile reconciliation failed",
+    );
+    process.exitCode = 1;
+  });
 }
