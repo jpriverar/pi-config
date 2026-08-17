@@ -752,6 +752,63 @@ test("bootstrap ignores unrelated settings fields containing the work marker dur
   );
 });
 
+test("bootstrap fails the shell preflight before mutation when work-only settings package sources use split-line JSON", async (t) => {
+  const state = await fixture(t, {
+    includeBrew: true,
+    initialSettingsBytes: [
+      "{",
+      '  "packages"',
+      "  :",
+      "  [",
+      `    "npm:@${workMarker}/private-plugin@1.0.0"`,
+      "  ],",
+      '  "defaultProvider": "personal-provider"',
+      "}",
+      "",
+    ].join("\n"),
+  });
+  const result = await invoke(state);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `Forbidden work-only package source in .*${String.raw`settings\.json`}`,
+    ),
+  );
+  assert.deepEqual(
+    result.commandLog,
+    await expectedResolveRepoCommandLog(state),
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("brew ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("volta ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("npm ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("pi ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.startsWith("bd ")),
+    false,
+  );
+  assert.equal(
+    result.commandLog.some((entry) => entry.includes(" shell ")),
+    false,
+  );
+  assert.equal(await pathExists(join(state.homeDir, ".zshrc")), false);
+  assert.equal(await pathExists(join(state.homeDir, "beads")), false);
+});
+
 test("bootstrap fails the shell preflight before mutation when work-only MCP bytes are present", async (t) => {
   const state = await fixture(t, {
     includeBrew: true,

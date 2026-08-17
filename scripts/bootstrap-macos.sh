@@ -19,29 +19,20 @@ run_profile_command() {
 
 check_work_marker_settings() {
   local file_path=$1
-  local in_packages=0
-  local line
+  local packages_json
   local work_marker=data
 
   [ -f "$file_path" ] || return 0
 
   work_marker="${work_marker}dog"
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      *'"packages"'*'['*) in_packages=1 ;;
-    esac
+  packages_json=$(
+    /usr/bin/plutil -extract packages json -expect array -o - "$file_path" \
+      2>/dev/null
+  ) || return 0
 
-    if [ "$in_packages" -eq 1 ]; then
-      case "$line" in
-        *"$work_marker"*)
-          fail "Forbidden work-only package source in $file_path"
-          ;;
-      esac
-      case "$line" in
-        *']'*) in_packages=0 ;;
-      esac
-    fi
-  done < "$file_path" || fail "cannot read personal Pi settings at $file_path"
+  case "$packages_json" in
+    *"$work_marker"*) fail "Forbidden work-only package source in $file_path" ;;
+  esac
 }
 
 check_work_marker_mcp() {
