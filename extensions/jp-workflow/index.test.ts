@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { BeadsIssue } from "../../lib/beads.js";
+import { SESSION_PROJECT_ENTRY_TYPE } from "../../lib/session-project.js";
 import jpWorkflow from "./index.js";
 
 const store = "/tmp/personal/.beads";
@@ -34,6 +35,7 @@ function createHarness(
   options: {
     sessionName?: string;
     branch?: any[];
+    entries?: any[];
     issues?: BeadsIssue[];
     readyIds?: string[];
     exec?: (
@@ -99,7 +101,11 @@ function createHarness(
     },
   };
   const context = {
-    sessionManager: { getBranch: () => branch },
+    sessionManager: {
+      getBranch: () => branch,
+      getEntries: () => options.entries ?? branch,
+      getSessionName: () => options.sessionName,
+    },
     ui: {
       notify(message: string, type: string) {
         notifications.push({ message, type });
@@ -151,6 +157,156 @@ function issue(
   return { id, title, status, labels };
 }
 
+function projectEntry(data: unknown) {
+  return {
+    type: "custom",
+    customType: SESSION_PROJECT_ENTRY_TYPE,
+    data,
+  };
+}
+
+const scopedIssues = [
+  issue(
+    "jp-a101",
+    "open",
+    ["workstream:alpha"],
+    "Repair alpha deployment checks",
+  ),
+  issue(
+    "jp-b202",
+    "open",
+    ["workstream:beta"],
+    "Document beta release process",
+  ),
+];
+
+test("startup transcript uses explicit scope instead of the generated display name", async () => {
+  const harness = createHarness({
+    sessionName: "alpha-580c8e67",
+    entries: [projectEntry({ version: 1, workstream: "alpha" })],
+    issues: scopedIssues,
+  });
+
+  await start(harness);
+  const output = renderCard(harness);
+
+  assert.match(output, /WORK STATE • alpha/);
+  assert.match(output, /jp-a101/);
+  assert.match(output, /Repair alpha deployment checks/);
+  assert.doesNotMatch(output, /jp-b202|Document beta release process/);
+});
+
+test("hidden per-turn state uses explicit scope instead of a manual display name", async () => {
+  const harness = createHarness({
+    sessionName: "manual investigation",
+    entries: [projectEntry({ version: 1, workstream: "alpha" })],
+    issues: scopedIssues,
+  });
+
+  const hidden = await harness.handlers.get("before_agent_start")?.(
+    {},
+    harness.context,
+  );
+
+  assert.equal(hidden.message.display, false);
+  assert.match(hidden.message.content, /Work state — alpha/);
+  assert.match(hidden.message.content, /jp-a101/);
+  assert.match(hidden.message.content, /Repair alpha deployment checks/);
+  assert.doesNotMatch(
+    hidden.message.content,
+    /jp-b202|Document beta release process/,
+  );
+});
+
+test("post-compaction state uses explicit scope and remains queued for next turn", async () => {
+  const harness = createHarness({
+    sessionName: "unrelated-display-name",
+    entries: [projectEntry({ version: 1, workstream: "alpha" })],
+    issues: scopedIssues,
+  });
+
+  await harness.handlers.get("session_compact")?.({}, harness.context);
+
+  assert.equal(harness.sent.length, 1);
+  assert.deepEqual(harness.sent[0].options, { deliverAs: "nextTurn" });
+  assert.equal(harness.sent[0].message.display, false);
+  assert.match(harness.sent[0].message.content, /Work state — alpha/);
+  assert.match(harness.sent[0].message.content, /jp-a101/);
+  assert.match(
+    harness.sent[0].message.content,
+    /Repair alpha deployment checks/,
+  );
+  assert.doesNotMatch(
+    harness.sent[0].message.content,
+    /jp-b202|Document beta release process/,
+  );
+});
+
+test("explicit global scope ignores the display name and renders global active work", async () => {
+  const harness = createHarness({
+    sessionName: "alpha-580c8e67",
+    entries: [projectEntry({ version: 1, workstream: null })],
+    issues: scopedIssues,
+  });
+
+  const hidden = await harness.handlers.get("before_agent_start")?.(
+    {},
+    harness.context,
+  );
+
+  assert.match(
+    hidden.message.content,
+    /\[alpha\].*Repair alpha deployment checks/,
+  );
+  assert.match(
+    hidden.message.content,
+    /\[beta\].*Document beta release process/,
+  );
+  assert.doesNotMatch(hidden.message.content, /Work state — alpha-580c8e67/);
+});
+
+test("legacy sessions retain exact display-name scoping", async () => {
+  const harness = createHarness({
+    sessionName: "alpha-580c8e67",
+    issues: scopedIssues,
+  });
+
+  const hidden = await harness.handlers.get("before_agent_start")?.(
+    {},
+    harness.context,
+  );
+
+  assert.match(hidden.message.content, /Work state — alpha-580c8e67/);
+  assert.match(
+    hidden.message.content,
+    /No tracked work for project 'alpha-580c8e67'/,
+  );
+  assert.doesNotMatch(hidden.message.content, /jp-a101|jp-b202/);
+});
+
+test("malformed explicit metadata does not fall back to the display name", async () => {
+  const harness = createHarness({
+    sessionName: "alpha",
+    entries: [projectEntry({ version: 1, workstream: "" })],
+    issues: scopedIssues,
+  });
+
+  const hidden = await harness.handlers.get("before_agent_start")?.(
+    {},
+    harness.context,
+  );
+
+  assert.match(
+    hidden.message.content,
+    /\[alpha\].*Repair alpha deployment checks/,
+  );
+  assert.match(
+    hidden.message.content,
+    /\[beta\].*Document beta release process/,
+  );
+  assert.doesNotMatch(hidden.message.content, /Work state — alpha/);
+});
+
 test("visible startup table contains every active task exactly once and puts inbox last", async () => {
   const issues = [
     issue("jp-doing", "in_progress", ["workstream:alpha"]),
@@ -183,7 +339,10 @@ test("hidden context remains capped while the visible table remains complete", a
   );
   const harness = createHarness({ issues });
 
-  const hidden = await harness.handlers.get("before_agent_start")?.();
+  const hidden = await harness.handlers.get("before_agent_start")?.(
+    {},
+    harness.context,
+  );
   await start(harness);
   const visible = renderCard(harness);
 
@@ -202,8 +361,11 @@ test("treats hostile task metadata as escaped non-instructional model data", asy
   );
   const harness = createHarness({ issues: [hostile] });
 
-  const hidden = await harness.handlers.get("before_agent_start")?.();
-  await harness.handlers.get("session_compact")?.();
+  const hidden = await harness.handlers.get("before_agent_start")?.(
+    {},
+    harness.context,
+  );
+  await harness.handlers.get("session_compact")?.({}, harness.context);
   await start(harness);
   const visible = renderCard(harness);
 
@@ -243,7 +405,10 @@ test("multiple workstream labels preserve source order and the first controls sc
 
   await start(global);
   await start(scoped);
-  const hidden = await global.handlers.get("before_agent_start")?.();
+  const hidden = await global.handlers.get("before_agent_start")?.(
+    {},
+    global.context,
+  );
 
   assert.match(renderCard(global), /ZETA — 1/);
   assert.doesNotMatch(renderCard(global), /ALPHA — 1/);
@@ -289,7 +454,10 @@ test("empty and unavailable Beads produce stable states without throwing", async
     await start(harness);
 
     assert.match(renderCard(harness), /Store is empty/);
-    const hidden = await harness.handlers.get("before_agent_start")?.();
+    const hidden = await harness.handlers.get("before_agent_start")?.(
+      {},
+      harness.context,
+    );
     assert.match(hidden.message.content, /Store is empty/);
   });
 
@@ -308,7 +476,10 @@ test("empty and unavailable Beads produce stable states without throwing", async
     );
     assert.doesNotMatch(harness.notifications[0].message, /SECRET TASK/);
 
-    const hidden = await harness.handlers.get("before_agent_start")?.();
+    const hidden = await harness.handlers.get("before_agent_start")?.(
+      {},
+      harness.context,
+    );
     assert.match(
       hidden.message.content,
       /Unavailable: list issues.*\/tmp\/personal\/\.beads.*bd CLI is unavailable/,
