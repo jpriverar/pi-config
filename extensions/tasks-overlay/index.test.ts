@@ -453,7 +453,45 @@ test("renders normalized task metadata without terminal controls or raw newlines
   assert.doesNotMatch(harness.render(), /\u001b|Do\nnot/);
 });
 
-test("scopes named sessions case-insensitively to primary workstream", async () => {
+test("explicit scope overrides a generated display name", async () => {
+  const harness = createHarness({
+    sessionName: "pi-setup-580c8e67",
+    entries: [projectEntry("pi-setup")],
+    issues: [
+      issue("scoped", "open", ["workstream:pi-setup"]),
+      issue("display-name", "blocked", ["workstream:pi-setup-580c8e67"]),
+      issue("unrelated", "in_progress", ["workstream:other"]),
+    ],
+    readyIds: ["scoped"],
+  });
+
+  await show(harness);
+
+  assert.match(harness.render(), /Tasks — pi-setup/);
+  assert.match(harness.render(), /Task scoped/);
+  assert.doesNotMatch(harness.render(), /display-name|unrelated/);
+});
+
+test("explicit global scope ignores a display name", async () => {
+  const harness = createHarness({
+    sessionName: "manual display name",
+    entries: [projectEntry(null)],
+    issues: [
+      issue("alpha", "in_progress", ["workstream:alpha"]),
+      issue("beta", "blocked", ["workstream:beta"]),
+      issue("inbox", "open", []),
+    ],
+  });
+
+  await show(harness);
+
+  assert.match(harness.render(), /Task alpha/);
+  assert.match(harness.render(), /Task beta/);
+  assert.match(harness.render(), /Task inbox/);
+  assert.doesNotMatch(harness.render(), /Tasks — manual display name/);
+});
+
+test("legacy exact-name sessions still filter case-insensitively", async () => {
   const harness = createHarness({
     sessionName: "PI-SETUP",
     issues: [
@@ -474,6 +512,23 @@ test("scopes named sessions case-insensitively to primary workstream", async () 
   assert.doesNotMatch(harness.render(), /secondary|unrelated/);
 });
 
+test("malformed explicit metadata does not route by display name", async () => {
+  const harness = createHarness({
+    sessionName: "pi-setup-580c8e67",
+    entries: [projectEntry("")],
+    issues: [
+      issue("alpha", "in_progress", ["workstream:alpha"]),
+      issue("beta", "blocked", ["workstream:beta"]),
+    ],
+  });
+
+  await show(harness);
+
+  assert.match(harness.render(), /Task alpha/);
+  assert.match(harness.render(), /Task beta/);
+  assert.doesNotMatch(harness.render(), /Tasks — pi-setup-580c8e67/);
+});
+
 test("unnamed sessions show all active work", async () => {
   const harness = createHarness({
     sessionName: null,
@@ -491,13 +546,16 @@ test("unnamed sessions show all active work", async () => {
   assert.match(harness.render(), /Task inbox/);
 });
 
-test("empty results notify instead of opening an overlay", async () => {
-  const harness = createHarness({ sessionName: null });
+test("empty results notify with the resolved workstream", async () => {
+  const harness = createHarness({
+    sessionName: "pi-setup-580c8e67",
+    entries: [projectEntry("pi-setup")],
+  });
   await show(harness);
 
   assert.equal(harness.render(), "");
   assert.deepEqual(harness.notifications, [
-    { message: "No open tasks", type: "info" },
+    { message: "No open tasks for pi-setup", type: "info" },
   ]);
 });
 

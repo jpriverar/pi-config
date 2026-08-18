@@ -10,6 +10,11 @@ process.env.BEADS_DIR = "/tmp/personal/.beads";
 
 type Handler = (event?: unknown, context?: any) => Promise<unknown> | unknown;
 type Query = "active" | "ready" | "closed";
+type Entry = {
+  type: "custom";
+  customType: string;
+  data: unknown;
+};
 
 const rawIssue = (issue: BeadsIssue) => ({
   id: issue.id,
@@ -33,6 +38,7 @@ function createHarness(
     closed?: BeadsIssue[];
     unavailable?: Query;
     sessionName?: string;
+    entries?: readonly Entry[];
   } = {},
 ) {
   const handlers = new Map<string, Handler>();
@@ -80,6 +86,10 @@ function createHarness(
   };
 
   const context = {
+    sessionManager: {
+      getEntries: () => options.entries ?? [],
+      getSessionName: () => sessionName || undefined,
+    },
     model: {
       id: "claude-opus-4-6",
       name: "Claude Opus 4.6 (AI Gateway, 1M)",
@@ -127,6 +137,14 @@ async function start(harness: ReturnType<typeof createHarness>) {
   await harness.handlers.get("session_start")?.({}, harness.context);
 }
 
+function projectEntry(workstream: unknown): Entry {
+  return {
+    type: "custom",
+    customType: "jp-project-scope",
+    data: { version: 1, workstream },
+  };
+}
+
 test("counts classified active work and treats needs:jp as a marker", async () => {
   const harness = createHarness({
     issues: [
@@ -161,7 +179,64 @@ test("does not expose hostile task metadata in the project status surface", asyn
   assert.doesNotMatch(harness.render(), /\u001b|hostile|Do\nnot/);
 });
 
-test("scopes named sessions case-insensitively to the primary workstream", async () => {
+test("explicit scope drives counts while the generated name stays visible", async () => {
+  const harness = createHarness({
+    sessionName: "pi-setup-580c8e67",
+    entries: [projectEntry("pi-setup")],
+    issues: [
+      issue("scoped", "in_progress", ["workstream:pi-setup"]),
+      issue("display-name", "blocked", ["workstream:pi-setup-580c8e67"]),
+      issue("unrelated", "open", ["workstream:other"]),
+    ],
+    readyIds: ["unrelated"],
+    closed: [issue("done", "closed", ["workstream:PI-SETUP"])],
+  });
+
+  await start(harness);
+
+  assert.match(harness.render(), /pi-setup-580c8e67/);
+  assert.match(harness.render(), /1 in-progress/);
+  assert.match(harness.render(), /1 closed/);
+  assert.doesNotMatch(harness.render(), /blocked|ready|waiting/);
+});
+
+test("session name changes visible identity without changing explicit scope", async () => {
+  const harness = createHarness({
+    sessionName: "pi-setup-580c8e67",
+    entries: [projectEntry("pi-setup")],
+    issues: [
+      issue("scoped", "in_progress", ["workstream:pi-setup"]),
+      issue("manual-name", "blocked", ["workstream:investigate-crash"]),
+    ],
+  });
+
+  await start(harness);
+  harness.setSessionName("investigate-crash");
+  await harness.handlers.get("session_info_changed")?.({}, harness.context);
+
+  assert.match(harness.render(), /investigate-crash/);
+  assert.match(harness.render(), /1 in-progress/);
+  assert.doesNotMatch(harness.render(), /pi-setup-580c8e67|blocked/);
+});
+
+test("explicit global scope counts all work while displaying the name", async () => {
+  const harness = createHarness({
+    sessionName: "manual display name",
+    entries: [projectEntry(null)],
+    issues: [
+      issue("alpha", "in_progress", ["workstream:alpha"]),
+      issue("beta", "blocked", ["workstream:beta"]),
+    ],
+  });
+
+  await start(harness);
+
+  assert.match(harness.render(), /manual display name/);
+  assert.match(harness.render(), /1 in-progress/);
+  assert.match(harness.render(), /1 blocked/);
+});
+
+test("legacy exact-name sessions still drive identity and scope", async () => {
   const harness = createHarness({
     sessionName: "PI-SETUP",
     issues: [

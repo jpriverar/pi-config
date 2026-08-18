@@ -70,7 +70,7 @@ export default function tasksOverlay(pi: ExtensionAPI) {
   }
 
   async function showOverlay(ctx: ExtensionContext): Promise<void> {
-    const project = pi.getSessionName() ?? undefined;
+    const project = resolveSessionProject(ctx.sessionManager).workstream;
     const issues = await getIssues(project);
 
     if (!issues) {
