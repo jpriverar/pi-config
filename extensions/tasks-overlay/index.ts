@@ -17,6 +17,12 @@ import {
   type ClassifiedIssue,
   type Readiness,
 } from "../../lib/beads.js";
+import {
+  generateSessionProjectName,
+  persistSessionProject,
+  resolveSessionProject,
+  type SessionProjectWriter,
+} from "../../lib/session-project.js";
 
 const STATUS_ICON: Record<Readiness, string> = {
   in_progress: "◐",
@@ -30,6 +36,12 @@ function primaryWorkstream(issue: ClassifiedIssue): string | undefined {
 }
 
 export default function tasksOverlay(pi: ExtensionAPI) {
+  const projectWriter = {
+    appendCustomEntry(customType: string, data: unknown): unknown {
+      pi.appendEntry(customType, data);
+      return undefined;
+    },
+  } satisfies SessionProjectWriter;
   const client = createBeadsClient(async (command, args) => {
     const result = await pi.exec(command, [...args]);
     return {
@@ -227,12 +239,27 @@ export default function tasksOverlay(pi: ExtensionAPI) {
     const selected = await ctx.ui.select("Switch project", labels);
     if (selected === undefined) return;
 
-    const current = pi.getSessionName() ?? "";
-    const next = selected === global ? "" : namesByLabel.get(selected);
-    if (next === undefined || next.toLowerCase() === current.toLowerCase())
+    const current = resolveSessionProject(ctx.sessionManager);
+    if (selected === global) {
+      if (current.source === "explicit" && current.workstream === undefined)
+        return;
+
+      persistSessionProject(projectWriter, null);
+      pi.setSessionName("");
+      return;
+    }
+
+    const next = namesByLabel.get(selected);
+    if (next === undefined) return;
+    if (
+      current.source === "explicit" &&
+      current.workstream !== undefined &&
+      next.toLowerCase() === current.workstream.toLowerCase()
+    )
       return;
 
-    pi.setSessionName(next);
+    persistSessionProject(projectWriter, next);
+    pi.setSessionName(generateSessionProjectName(ctx.sessionManager, next));
   }
 
   pi.registerCommand("tasks", {
@@ -248,5 +275,17 @@ export default function tasksOverlay(pi: ExtensionAPI) {
   pi.registerShortcut(Key.ctrlAlt("t"), {
     description: "Show project task list",
     handler: async (ctx) => showOverlay(ctx),
+  });
+
+  pi.on("session_start", async (event, ctx) => {
+    if (event.reason !== "fork") return;
+
+    const project = resolveSessionProject(ctx.sessionManager);
+    if (project.source !== "explicit" || project.workstream === undefined)
+      return;
+
+    pi.setSessionName(
+      generateSessionProjectName(ctx.sessionManager, project.workstream),
+    );
   });
 }

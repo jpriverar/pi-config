@@ -8,9 +8,16 @@ process.env.BEADS_DIR = "/tmp/personal/.beads";
 
 type Query = "active" | "ready";
 
+type Handler = (event: any, context: any) => Promise<void> | void;
 type RegisteredAction = {
   description: string;
   handler: (...args: any[]) => Promise<void>;
+};
+
+type Entry = {
+  type: "custom";
+  customType: string;
+  data: unknown;
 };
 
 const rawIssue = (issue: BeadsIssue) => ({
@@ -33,17 +40,26 @@ function createHarness(
     issues?: BeadsIssue[];
     readyIds?: string[];
     sessionName?: string | null;
+    sessionId?: string;
+    entries?: readonly Entry[];
     unavailable?: Query;
     select?: (items: string[]) => string | undefined;
   } = {},
 ) {
   const commands = new Map<string, RegisteredAction>();
   const shortcuts = new Map<string, RegisteredAction>();
+  const handlers = new Map<string, Handler>();
   const notifications: Array<{ message: string; type: string }> = [];
   const calls: string[][] = [];
   const renamedSessions: string[] = [];
+  const appendedEntries: Entry[] = [];
+  const entries = [...(options.entries ?? [])];
   const selections: Array<{ title: string; items: string[] }> = [];
   let rendered = "";
+  let sessionName =
+    options.sessionName === null
+      ? undefined
+      : (options.sessionName ?? "pi-setup");
   const issues = options.issues ?? [];
   const readyIds = new Set(options.readyIds ?? []);
 
@@ -69,12 +85,19 @@ function createHarness(
       };
     },
     getSessionName() {
-      return options.sessionName === null
-        ? undefined
-        : (options.sessionName ?? "pi-setup");
+      return sessionName;
     },
     setSessionName(name: string) {
       renamedSessions.push(name);
+      sessionName = name || undefined;
+    },
+    appendEntry(customType: string, data: unknown) {
+      const entry: Entry = { type: "custom", customType, data };
+      appendedEntries.push(entry);
+      entries.push(entry);
+    },
+    on(event: string, handler: Handler) {
+      handlers.set(event, handler);
     },
     registerCommand(name: string, command: RegisteredAction) {
       commands.set(name, command);
@@ -93,6 +116,12 @@ function createHarness(
     },
   };
   const context = {
+    sessionManager: {
+      getEntries: () => entries,
+      getSessionName: () => sessionName,
+      getSessionId: () =>
+        options.sessionId ?? "019ff29e-4652-7c2d-90c5-bdf1580c8e67",
+    },
     ui: {
       notify(message: string, type: string) {
         notifications.push({ message, type });
@@ -110,9 +139,11 @@ function createHarness(
 
   tasksOverlay(pi as any);
   return {
+    appendedEntries,
     calls,
     commands,
     context,
+    handlers,
     notifications,
     renamedSessions,
     render: () => rendered,
@@ -131,6 +162,23 @@ async function switchProject(harness: ReturnType<typeof createHarness>) {
   const command = harness.commands.get("project");
   assert.ok(command);
   await command.handler("", harness.context);
+}
+
+async function startSession(
+  harness: ReturnType<typeof createHarness>,
+  reason: "startup" | "reload" | "new" | "resume" | "fork",
+) {
+  const handler = harness.handlers.get("session_start");
+  assert.ok(handler);
+  await handler({ type: "session_start", reason }, harness.context);
+}
+
+function projectEntry(workstream: unknown): Entry {
+  return {
+    type: "custom",
+    customType: "jp-project-scope",
+    data: { version: 1, workstream },
+  };
 }
 
 test("registers task and project commands with only the task shortcut", () => {
@@ -181,7 +229,7 @@ test("project picker groups primary workstreams and shows readiness counts", asy
   );
   assert.match(harness.selections[0].items[2], /Beta.*In progress: 1/);
   assert.equal(harness.selections[0].items.length, 3);
-  assert.deepEqual(harness.renamedSessions, ["Alpha"]);
+  assert.deepEqual(harness.renamedSessions, ["Alpha-580c8e67"]);
 });
 
 test("project picker sorts workstreams case-insensitively by canonical name", async () => {
@@ -202,19 +250,20 @@ test("project picker sorts workstreams case-insensitively by canonical name", as
     harness.selections[0].items.map((item) => item.split(" —")[0]),
     [GLOBAL_PROJECT, "aLPHa", "Beta", "Zulu"],
   );
-  assert.deepEqual(harness.renamedSessions, ["aLPHa"]);
+  assert.deepEqual(harness.renamedSessions, ["aLPHa-580c8e67"]);
 });
 
-test("project selection uses the canonical name behind its decorated label", async () => {
+test("project selection persists canonical scope and generates a unique name", async () => {
   const harness = createHarness({
-    sessionName: "pi-setup",
-    issues: [issue("one", "open", ["workstream:My Project"])],
-    select: selectProject("My Project"),
+    sessionName: "other",
+    issues: [issue("one", "open", ["workstream:pi-setup"])],
+    select: selectProject("pi-setup"),
   });
 
   await switchProject(harness);
 
-  assert.deepEqual(harness.renamedSessions, ["My Project"]);
+  assert.deepEqual(harness.appendedEntries, [projectEntry("pi-setup")]);
+  assert.deepEqual(harness.renamedSessions, ["pi-setup-580c8e67"]);
 });
 
 test("selecting Global clears the project scope", async () => {
@@ -225,14 +274,29 @@ test("selecting Global clears the project scope", async () => {
 
   await switchProject(harness);
 
+  assert.deepEqual(harness.appendedEntries, [projectEntry(null)]);
   assert.deepEqual(harness.renamedSessions, [""]);
 });
 
-test("cancelling project selection does not rename", async () => {
+test("selecting Global when already explicitly global is a no-op", async () => {
+  const harness = createHarness({
+    entries: [projectEntry(null)],
+    issues: [issue("one")],
+    select: (items) => items[0],
+  });
+
+  await switchProject(harness);
+
+  assert.deepEqual(harness.appendedEntries, []);
+  assert.deepEqual(harness.renamedSessions, []);
+});
+
+test("cancelling project selection does not mutate project scope", async () => {
   const harness = createHarness({ issues: [issue("one")] });
 
   await switchProject(harness);
 
+  assert.deepEqual(harness.appendedEntries, []);
   assert.deepEqual(harness.renamedSessions, []);
 });
 
@@ -265,16 +329,31 @@ test("project picker excludes workstreams represented only by closed tasks", asy
   );
 });
 
-test("selecting the current project is a no-op case-insensitively", async () => {
+test("selecting an explicit current project is a case-insensitive no-op", async () => {
   const harness = createHarness({
-    sessionName: "ALPHA",
+    sessionName: "manual display name",
+    entries: [projectEntry("ALPHA")],
     issues: [issue("one", "open", ["workstream:Alpha"])],
     select: selectProject("Alpha"),
   });
 
   await switchProject(harness);
 
+  assert.deepEqual(harness.appendedEntries, []);
   assert.deepEqual(harness.renamedSessions, []);
+});
+
+test("selecting a legacy exact-name project upgrades its scope", async () => {
+  const harness = createHarness({
+    sessionName: "Alpha",
+    issues: [issue("one", "open", ["workstream:Alpha"])],
+    select: selectProject("Alpha"),
+  });
+
+  await switchProject(harness);
+
+  assert.deepEqual(harness.appendedEntries, [projectEntry("Alpha")]);
+  assert.deepEqual(harness.renamedSessions, ["Alpha-580c8e67"]);
 });
 
 for (const unavailable of ["active", "ready"] as const) {
@@ -288,10 +367,51 @@ for (const unavailable of ["active", "ready"] as const) {
     await assert.doesNotReject(switchProject(harness));
 
     assert.deepEqual(harness.selections, []);
+    assert.deepEqual(harness.appendedEntries, []);
     assert.deepEqual(harness.renamedSessions, []);
     assert.deepEqual(harness.notifications, [
       { message: "Projects unavailable", type: "warning" },
     ]);
+  });
+}
+
+test("forking an explicitly scoped session regenerates its unique name", async () => {
+  const harness = createHarness({
+    sessionName: "manual copied name",
+    sessionId: "019ff29e-4652-7c2d-90c5-123456789abc",
+    entries: [projectEntry("pi-setup")],
+  });
+
+  await startSession(harness, "fork");
+
+  assert.deepEqual(harness.appendedEntries, []);
+  assert.deepEqual(harness.renamedSessions, ["pi-setup-56789abc"]);
+});
+
+for (const [label, options] of [
+  ["explicit global", { entries: [projectEntry(null)] }],
+  ["malformed metadata", { entries: [projectEntry("")] }],
+  ["legacy display name", { sessionName: "pi-setup" }],
+  ["absent metadata", { sessionName: null }],
+] as const) {
+  test(`forking with ${label} does not rename`, async () => {
+    const harness = createHarness(options);
+
+    await startSession(harness, "fork");
+
+    assert.deepEqual(harness.appendedEntries, []);
+    assert.deepEqual(harness.renamedSessions, []);
+  });
+}
+
+for (const reason of ["startup", "reload", "new", "resume"] as const) {
+  test(`${reason} does not rename an explicitly scoped session`, async () => {
+    const harness = createHarness({ entries: [projectEntry("pi-setup")] });
+
+    await startSession(harness, reason);
+
+    assert.deepEqual(harness.appendedEntries, []);
+    assert.deepEqual(harness.renamedSessions, []);
   });
 }
 
