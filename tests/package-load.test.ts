@@ -15,6 +15,7 @@ const publicResources = {
     "./extensions/permission-gate/index.ts",
     "./extensions/plan-progress/index.ts",
     "./extensions/styled-editor/index.ts",
+    "./extensions/herdr-ask-user-bridge/index.ts",
     "./extensions/jp-workflow/index.ts",
     "./extensions/project-status/index.ts",
     "./extensions/tasks-overlay/index.ts",
@@ -44,6 +45,7 @@ function createPiHarness() {
   const commands = new Map<string, any>();
   const shortcuts = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
+  const eventHandlers = new Map<string, Function[]>();
   const entryRenderers = new Map<string, Function>();
   const duplicate = (kind: string, name: string) => {
     throw new Error(`duplicate ${kind} registration: ${name}`);
@@ -67,6 +69,14 @@ function createPiHarness() {
     },
     on(name: string, handler: Function) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+    },
+    events: {
+      on(name: string, handler: Function) {
+        eventHandlers.set(name, [...(eventHandlers.get(name) ?? []), handler]);
+      },
+      emit(name: string, payload: unknown) {
+        for (const handler of eventHandlers.get(name) ?? []) handler(payload);
+      },
     },
     appendEntry() {},
     sendMessage() {},
