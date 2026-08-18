@@ -20,6 +20,7 @@ import {
   type BeadsIssue,
   type ClassifiedIssue,
 } from "../../lib/beads.js";
+import { resolveSessionProject } from "../../lib/session-project.js";
 
 const READY_CAP = 5;
 const SCOPED_READY_CAP = 8;
@@ -752,7 +753,9 @@ export default function jpWorkflow(pi: ExtensionAPI) {
     if (alreadyStarted()) return;
 
     try {
-      const state = await queryState(pi.getSessionName());
+      const state = await queryState(
+        resolveSessionProject(context.sessionManager).workstream,
+      );
       setTimeout(() => {
         if (!alreadyStarted()) pi.appendEntry(STARTUP_ENTRY, { state });
       }, 0);
@@ -764,12 +767,16 @@ export default function jpWorkflow(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("before_agent_start", async () => {
+  pi.on("before_agent_start", async (_event, context) => {
     try {
       return {
         message: {
           customType: "jp-work",
-          content: renderHiddenState(await queryState(pi.getSessionName())),
+          content: renderHiddenState(
+            await queryState(
+              resolveSessionProject(context.sessionManager).workstream,
+            ),
+          ),
           display: false,
         },
       };
@@ -784,9 +791,11 @@ export default function jpWorkflow(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_compact", async () => {
+  pi.on("session_compact", async (_event, context) => {
     try {
-      const state = await queryState(pi.getSessionName());
+      const state = await queryState(
+        resolveSessionProject(context.sessionManager).workstream,
+      );
       pi.sendMessage(
         {
           customType: "jp-work-compact",

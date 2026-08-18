@@ -10,6 +10,7 @@ import {
   createBeadsClient,
   type ClassifiedIssue,
 } from "../../lib/beads.js";
+import { resolveSessionProject } from "../../lib/session-project.js";
 
 const WIDGET_KEY = "project-status";
 
@@ -48,7 +49,7 @@ export default function projectStatus(pi: ExtensionAPI) {
       stderr: result.stderr,
     };
   });
-  let currentProject: string | undefined;
+  let currentSessionName: string | undefined;
   let currentTaskState: TaskState = "unavailable";
 
   async function getCounts(project?: string): Promise<TaskState> {
@@ -175,13 +176,14 @@ export default function projectStatus(pi: ExtensionAPI) {
   }
 
   async function refresh(ctx: ExtensionContext): Promise<void> {
-    currentProject = pi.getSessionName() ?? undefined;
-    currentTaskState = await getCounts(currentProject);
-    renderStatus(ctx, currentProject, currentTaskState);
+    currentSessionName = pi.getSessionName() ?? undefined;
+    const project = resolveSessionProject(ctx.sessionManager).workstream;
+    currentTaskState = await getCounts(project);
+    renderStatus(ctx, currentSessionName, currentTaskState);
   }
 
   function refreshIdentity(ctx: ExtensionContext): void {
-    renderStatus(ctx, currentProject, currentTaskState);
+    renderStatus(ctx, currentSessionName, currentTaskState);
   }
 
   pi.on("session_start", async (_event, ctx) => refresh(ctx));
