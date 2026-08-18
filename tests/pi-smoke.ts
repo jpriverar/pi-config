@@ -197,24 +197,30 @@ async function boundedExit(
   timeoutMs: number,
   description: string,
 ): Promise<ProcessExit> {
-  return await Promise.race([
-    exited,
-    new Promise<never>((_resolve, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new Error(`${description} did not exit within ${timeoutMs}ms`),
-          ),
-        timeoutMs,
-      ),
-    ),
-  ]);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      exited,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(`${description} did not exit within ${timeoutMs}ms`),
+            ),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 export async function terminateProcessGroup(
   child: ChildProcess,
   exited: Promise<ProcessExit>,
   graceMs = 500,
+  exitTimeoutMs = 2_000,
 ): Promise<void> {
   const pid = child.pid;
   if (pid === undefined) {
@@ -228,8 +234,8 @@ export async function terminateProcessGroup(
   if (!(await waitForProcessGroupExit(pid, graceMs))) {
     signalProcessGroup(child, "SIGKILL");
   }
-  await boundedExit(exited, graceMs, `process ${pid}`);
-  if (!(await waitForProcessGroupExit(pid, graceMs))) {
+  await boundedExit(exited, exitTimeoutMs, `process ${pid}`);
+  if (!(await waitForProcessGroupExit(pid, exitTimeoutMs))) {
     throw new Error(`process group ${pid} survived SIGKILL`);
   }
 }
