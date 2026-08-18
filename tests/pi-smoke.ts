@@ -444,6 +444,7 @@ async function createContractHarness(
     sessionManager: {
       getEntries: () => entries,
       getBranch: () => [],
+      getSessionName: () => pi.getSessionName(),
     },
     ui: {
       theme,
