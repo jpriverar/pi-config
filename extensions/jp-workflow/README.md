@@ -24,8 +24,11 @@ issue exactly once. Unnamed sessions group issues by their first
 `workstream:*` label and put unlabeled issues last under **Inbox • no project**.
 Named sessions match that primary workstream case-insensitively. Additional
 workstream labels retain their source order but do not duplicate an issue into
-other groups. The table switches to stacked rows when the terminal is too
-narrow for useful columns.
+other groups. Wide tables use a global **Project / Status / ID / Task** header
+and show each project once in a leftmost cell spanning its task rows. Project
+names carry the Gold Rush accent while the grid and task IDs stay subdued. The
+table retains project headings and switches to stacked rows when the terminal
+is too narrow for useful columns.
 
 The hidden model context is intentionally smaller than the visible table. Its
 sections count the complete matching set but render at most:
