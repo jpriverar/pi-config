@@ -230,7 +230,13 @@ function projectGroups(state: State): ProjectGroup[] {
   if (state.project) {
     return tasks.length === 0
       ? []
-      : [{ label: "Tasks", tasks: sortTasks(tasks), color: "accent" }];
+      : [
+          {
+            label: state.project.replace(/[-_]+/g, " "),
+            tasks: sortTasks(tasks),
+            color: "accent",
+          },
+        ];
   }
 
   const grouped = new Map<string, StartupTask[]>();
@@ -270,18 +276,19 @@ class StartupWorkTable implements Component {
     const margin = width >= 24 ? " " : "";
     const boxWidth = Math.max(12, width - margin.length * 2);
     const contentWidth = Math.max(1, boxWidth - 4);
-    const border = (text: string) => this.theme.fg("borderAccent", text);
+    const outerBorder = (text: string) => this.theme.fg("border", text);
+    const grid = (text: string) => this.theme.fg("dim", text);
     const fullRow = (content: string) =>
-      `${border("│")} ${truncateToWidth(content, contentWidth, "…", true)} ${border("│")}`;
+      `${outerBorder("│")} ${truncateToWidth(content, contentWidth, "…", true)} ${outerBorder("│")}`;
     const fullDivider = (left = "├", right = "┤") =>
-      border(`${left}${"─".repeat(boxWidth - 2)}${right}`);
+      `${outerBorder(left)}${grid("─".repeat(boxWidth - 2))}${outerBorder(right)}`;
     const titleText = this.state.project
       ? `WORK STATE • ${this.state.project}`
       : "WORK STATE";
     const title = truncateToWidth(titleText, Math.max(1, boxWidth - 6), "…");
     const topFill = Math.max(0, boxWidth - 5 - visibleWidth(title));
     const lines = [
-      `${border("╭─")} ${this.theme.fg("accent", this.theme.bold(title))} ${border(`${"─".repeat(topFill)}╮`)}`,
+      `${outerBorder("╭─")} ${this.theme.fg("accent", this.theme.bold(title))} ${outerBorder(`${"─".repeat(topFill)}╮`)}`,
     ];
     const groups = projectGroups(this.state);
 
@@ -304,24 +311,24 @@ class StartupWorkTable implements Component {
     }
 
     const tasks = groups.flatMap((group) => group.tasks);
+    const projectWidth = Math.min(
+      28,
+      Math.max(
+        visibleWidth("PROJECT"),
+        ...groups.map((group) => visibleWidth(this.projectLabel(group))),
+      ),
+    );
     const statusWidth = visibleWidth("IN PROGRESS");
     const idWidth = Math.min(
       10,
       Math.max(...tasks.map((task) => visibleWidth(task.issue.id))),
     );
-    const taskWidth = boxWidth - statusWidth - idWidth - 10;
+    const taskWidth = boxWidth - projectWidth - statusWidth - idWidth - 13;
     const useColumns = taskWidth >= 24;
+    const columnWidths = [projectWidth, statusWidth, idWidth, taskWidth];
 
     if (useColumns) {
-      this.renderColumns(
-        lines,
-        groups,
-        statusWidth,
-        idWidth,
-        taskWidth,
-        border,
-        fullRow,
-      );
+      this.renderColumns(lines, groups, columnWidths, outerBorder, grid);
     } else {
       this.renderStacked(lines, groups, contentWidth, fullDivider, fullRow);
     }
@@ -329,13 +336,7 @@ class StartupWorkTable implements Component {
     if (this.state.stale.length > 0) {
       if (useColumns) {
         lines.push(
-          this.columnDivider(
-            [statusWidth, idWidth, taskWidth],
-            "├",
-            "┴",
-            "┤",
-            border,
-          ),
+          this.columnDivider(columnWidths, "├", "┴", "┤", outerBorder, grid),
         );
       } else {
         lines.push(fullDivider());
@@ -355,13 +356,7 @@ class StartupWorkTable implements Component {
       lines.push(fullDivider("╰", "╯"));
     } else if (useColumns) {
       lines.push(
-        this.columnDivider(
-          [statusWidth, idWidth, taskWidth],
-          "╰",
-          "┴",
-          "╯",
-          border,
-        ),
+        this.columnDivider(columnWidths, "╰", "┴", "╯", outerBorder, grid),
       );
     } else {
       lines.push(fullDivider("╰", "╯"));
@@ -373,33 +368,30 @@ class StartupWorkTable implements Component {
   private renderColumns(
     lines: string[],
     groups: ProjectGroup[],
-    statusWidth: number,
-    idWidth: number,
-    taskWidth: number,
-    border: (text: string) => string,
-    fullRow: (content: string) => string,
+    widths: number[],
+    outerBorder: (text: string) => string,
+    grid: (text: string) => string,
   ) {
-    const widths = [statusWidth, idWidth, taskWidth];
-    const headers = ["STATUS", "ID", "TASK"];
+    const headers = ["PROJECT", "STATUS", "ID", "TASK"];
+    const taskWidth = widths[3] ?? 0;
+
+    lines.push(
+      this.columnRow(
+        headers.map((header) => this.theme.fg("dim", this.theme.bold(header))),
+        widths,
+        outerBorder,
+        grid,
+      ),
+    );
+    lines.push(this.columnDivider(widths, "├", "┼", "┤", outerBorder, grid));
 
     groups.forEach((group, groupIndex) => {
       if (groupIndex > 0) {
-        lines.push(this.columnDivider(widths, "├", "┴", "┤", border));
-      }
-      lines.push(fullRow(this.groupHeading(group)));
-      lines.push(this.columnDivider(widths, "├", "┬", "┤", border));
-      if (groupIndex === 0) {
         lines.push(
-          this.columnRow(
-            headers.map((header) =>
-              this.theme.fg("dim", this.theme.bold(header)),
-            ),
-            widths,
-            border,
-          ),
+          this.columnDivider(widths, "├", "┼", "┤", outerBorder, grid),
         );
-        lines.push(this.columnDivider(widths, "├", "┼", "┤", border));
       }
+      let projectPending = true;
 
       for (const task of group.tasks) {
         const title = `${task.issue.title}${needsJpTag(task.issue)}`;
@@ -411,14 +403,17 @@ class StartupWorkTable implements Component {
           lines.push(
             this.columnRow(
               [
+                projectPending ? this.styledProject(group, widths[0] ?? 0) : "",
                 lineIndex === 0 ? this.styledStatus(task.status) : "",
-                lineIndex === 0 ? this.theme.fg("accent", task.issue.id) : "",
+                lineIndex === 0 ? this.theme.fg("muted", task.issue.id) : "",
                 titleLine,
               ],
               widths,
-              border,
+              outerBorder,
+              grid,
             ),
           );
+          projectPending = false;
         });
       }
     });
@@ -453,6 +448,22 @@ class StartupWorkTable implements Component {
     });
   }
 
+  private projectLabel(group: ProjectGroup): string {
+    return `${group.label.toUpperCase()} · ${group.tasks.length}`;
+  }
+
+  private styledProject(group: ProjectGroup, width: number): string {
+    const count = `· ${group.tasks.length}`;
+    const nameWidth = Math.max(1, width - visibleWidth(count) - 1);
+    const name = truncateToWidth(
+      group.label.toUpperCase(),
+      nameWidth,
+      "…",
+      true,
+    );
+    return `${this.theme.fg(group.color, this.theme.bold(name))} ${this.theme.fg("dim", count)}`;
+  }
+
   private groupHeading(group: ProjectGroup): string {
     return this.theme.fg(
       group.color,
@@ -481,13 +492,14 @@ class StartupWorkTable implements Component {
   private columnRow(
     cells: string[],
     widths: number[],
-    border: (text: string) => string,
+    outerBorder: (text: string) => string,
+    grid: (text: string) => string,
   ): string {
-    return `${border("│")} ${cells
+    return `${outerBorder("│")} ${cells
       .map((cell, index) =>
         truncateToWidth(cell, widths[index] ?? 0, "…", true),
       )
-      .join(` ${border("│")} `)} ${border("│")}`;
+      .join(` ${grid("│")} `)} ${outerBorder("│")}`;
   }
 
   private columnDivider(
@@ -495,13 +507,12 @@ class StartupWorkTable implements Component {
     left: string,
     joiner: string,
     right: string,
-    border: (text: string) => string,
+    outerBorder: (text: string) => string,
+    grid: (text: string) => string,
   ): string {
-    return border(
-      `${left}${widths
-        .map((width) => "─".repeat(width + 2))
-        .join(joiner)}${right}`,
-    );
+    return `${outerBorder(left)}${grid(
+      widths.map((width) => "─".repeat(width + 2)).join(joiner),
+    )}${outerBorder(right)}`;
   }
 
   private finish(lines: string[], margin: string, boxWidth: number): string[] {

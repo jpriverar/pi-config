@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { visibleWidth } from "@earendil-works/pi-tui";
+
 import type { BeadsIssue } from "../../lib/beads.js";
 import { SESSION_PROJECT_ENTRY_TYPE } from "../../lib/session-project.js";
 import jpWorkflow from "./index.js";
@@ -141,11 +143,14 @@ async function start(harness: ReturnType<typeof createHarness>) {
 function renderCard(
   harness: ReturnType<typeof createHarness>,
   width = 100,
+  renderTheme = theme,
 ): string {
   const renderer = harness.renderers.get("jp-work-startup");
   assert.ok(renderer, "startup renderer was not registered");
   assert.equal(harness.appended.length, 1);
-  return renderer(harness.appended[0], {}, theme).render(width).join("\n");
+  return renderer(harness.appended[0], {}, renderTheme)
+    .render(width)
+    .join("\n");
 }
 
 function issue(
@@ -326,10 +331,209 @@ test("visible startup table contains every active task exactly once and puts inb
   assert.match(output, /WAITING/);
   assert.match(output, /READY/);
   assert.ok(
-    output.indexOf("ALPHA — 2") < output.indexOf("INBOX • NO PROJECT — 1"),
+    output.indexOf("ALPHA · 2") < output.indexOf("INBOX • NO PROJECT · 1"),
   );
   assert.ok(
-    output.indexOf("BETA — 1") < output.indexOf("INBOX • NO PROJECT — 1"),
+    output.indexOf("BETA · 1") < output.indexOf("INBOX • NO PROJECT · 1"),
+  );
+});
+
+test("wide startup table uses one global header and visually spanning project cells", async () => {
+  const harness = createHarness({
+    issues: [
+      issue("jp-doing", "in_progress", ["workstream:alpha"]),
+      issue("jp-ready", "open", ["workstream:alpha"]),
+      issue("jp-beta", "open", ["workstream:beta"]),
+    ],
+    readyIds: ["jp-ready", "jp-beta"],
+  });
+
+  await start(harness);
+  const output = renderCard(harness, 120);
+  const headerIndex = output.indexOf("PROJECT");
+  const alphaIndex = output.indexOf("ALPHA · 2");
+
+  assert.ok(headerIndex >= 0, "global PROJECT header is visible");
+  assert.ok(headerIndex < alphaIndex, "global header precedes project rows");
+  assert.match(output, /PROJECT\s+│ STATUS\s+│ ID\s+│ TASK/);
+  assert.match(output, /│ ALPHA · 2\s+│ IN PROGRESS\s+│ jp-doing\s+│/);
+  assert.match(output, /│\s+│ READY\s+│ jp-ready\s+│/);
+  assert.equal(output.match(/ALPHA · 2/g)?.length, 1);
+  assert.doesNotMatch(output, /ALPHA — 2/);
+});
+
+test("wide project cells remain visually spanning when task titles wrap", async () => {
+  const harness = createHarness({
+    issues: [
+      issue(
+        "jp-wrap",
+        "open",
+        ["workstream:alpha"],
+        "Investigate recommendation endpoint persistence across every canonical distribution and service boundary",
+      ),
+      issue("jp-ready", "open", ["workstream:alpha"]),
+    ],
+  });
+
+  await start(harness);
+  const output = renderCard(harness, 90);
+
+  assert.equal(output.match(/ALPHA · 2/g)?.length, 1);
+  assert.match(output, /recommendation endpoint persistence/);
+  assert.match(
+    output,
+    /│\s+│\s+│\s+│ across every canonical distribution and service/,
+  );
+  assert.match(output, /│\s+│\s+│\s+│ boundary/);
+});
+
+test("narrow startup tables retain stacked project headings", async () => {
+  const harness = createHarness({
+    issues: [issue("jp-ready", "open", ["workstream:alpha"])],
+  });
+
+  await start(harness);
+  const output = renderCard(harness, 50);
+
+  assert.match(output, /ALPHA — 1/);
+  assert.match(output, /READY · jp-ready/);
+  assert.doesNotMatch(output, /PROJECT\s+│ STATUS/);
+});
+
+test("long project names preserve their dimmed task count", async () => {
+  const calls: Array<{ color: string; text: string }> = [];
+  const recordingTheme = {
+    fg(color: string, text: string) {
+      calls.push({ color, text });
+      return text;
+    },
+    bold(text: string) {
+      return text;
+    },
+  };
+  const harness = createHarness({
+    issues: [
+      issue("jp-one", "open", [
+        "workstream:recommendations-endpoint-processor",
+      ]),
+      issue("jp-two", "open", [
+        "workstream:recommendations-endpoint-processor",
+      ]),
+    ],
+  });
+
+  await start(harness);
+  const output = renderCard(harness, 120, recordingTheme).replace(
+    /\u001b\[[0-9;]*m/g,
+    "",
+  );
+
+  assert.match(output, /RECOMMENDATIONS ENDPOIN… · 2/);
+  assert.equal(output.match(/· 2/g)?.length, 1);
+  assert.ok(
+    calls.some(({ color, text }) => color === "dim" && text === "· 2"),
+    "the preserved count retains its subdued style",
+  );
+});
+
+test("wide ANSI tables preserve line widths and four-column stale joins", async () => {
+  const ansiTheme = {
+    fg(_color: string, text: string) {
+      return `\u001b[38;5;250m${text}\u001b[39m`;
+    },
+    bold(text: string) {
+      return `\u001b[1m${text}\u001b[22m`;
+    },
+  };
+  const harness = createHarness({
+    issues: [
+      {
+        ...issue("jp-stale", "open"),
+        updatedAt: "2020-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+
+  await start(harness);
+  const output = renderCard(harness, 120, ansiTheme);
+  const renderedLines = output.split("\n");
+  const tableLines = renderedLines.slice(0, renderedLines.indexOf(""));
+
+  for (const line of tableLines) {
+    assert.equal(visibleWidth(line), 119, line);
+  }
+
+  const plainLines = output.replace(/\u001b\[[0-9;]*m/g, "").split("\n");
+  const staleIndex = plainLines.findIndex((line) =>
+    line.includes("Stale inbox"),
+  );
+  assert.ok(staleIndex > 0, "stale footer is visible");
+  assert.equal(plainLines[staleIndex - 1]?.match(/┴/g)?.length, 3);
+});
+
+test("wide columns begin exactly when 24 task cells remain", async () => {
+  const harness = createHarness({
+    issues: [issue("jp-ready", "open", ["workstream:alpha"])],
+  });
+
+  await start(harness);
+
+  assert.doesNotMatch(renderCard(harness, 66), /PROJECT\s+│ STATUS/);
+  assert.match(renderCard(harness, 67), /PROJECT\s+│ STATUS/);
+});
+
+test("wide scoped startup table names the project column from the active scope", async () => {
+  const harness = createHarness({
+    sessionName: "alpha",
+    issues: [issue("jp-alpha", "open", ["workstream:alpha"])],
+  });
+
+  await start(harness);
+  const output = renderCard(harness, 120);
+
+  assert.match(output, /WORK STATE • alpha/);
+  assert.match(output, /│ ALPHA · 1\s+│ READY\s+│ jp-alpha\s+│/);
+  assert.doesNotMatch(output, /│ TASKS · 1\s+│/);
+});
+
+test("wide startup table reserves gold for projects and mutes its grid and IDs", async () => {
+  const calls: Array<{ color: string; text: string }> = [];
+  const recordingTheme = {
+    fg(color: string, text: string) {
+      calls.push({ color, text });
+      return text;
+    },
+    bold(text: string) {
+      return text;
+    },
+  };
+  const harness = createHarness({
+    issues: [issue("jp-ready", "open", ["workstream:alpha"])],
+  });
+
+  await start(harness);
+  renderCard(harness, 120, recordingTheme);
+
+  assert.ok(
+    calls.some(({ color, text }) => color === "accent" && text === "ALPHA"),
+    "project names retain the Gold Rush accent",
+  );
+  assert.ok(
+    calls.some(({ color, text }) => color === "muted" && text === "jp-ready"),
+    "task IDs use muted silver",
+  );
+  assert.ok(
+    calls.some(({ color, text }) => color === "border" && /[╭╮╰╯]/u.test(text)),
+    "the outer frame uses the subdued border color",
+  );
+  assert.ok(
+    calls.some(({ color, text }) => color === "dim" && /[│─]/u.test(text)),
+    "the internal grid uses dim silver",
+  );
+  assert.equal(
+    calls.some(({ color }) => color === "borderAccent"),
+    false,
+    "the table no longer paints its frame bright yellow",
   );
 });
 
@@ -348,7 +552,7 @@ test("hidden context remains capped while the visible table remains complete", a
 
   assert.match(hidden.message.content, /Ready \(12, showing 5\)/);
   assert.doesNotMatch(hidden.message.content, /jp-11/);
-  assert.match(visible, /CORE — 12/);
+  assert.match(visible, /CORE · 12/);
   assert.match(visible, /jp-11/);
 });
 
@@ -410,8 +614,8 @@ test("multiple workstream labels preserve source order and the first controls sc
     global.context,
   );
 
-  assert.match(renderCard(global), /ZETA — 1/);
-  assert.doesNotMatch(renderCard(global), /ALPHA — 1/);
+  assert.match(renderCard(global), /ZETA · 1/);
+  assert.doesNotMatch(renderCard(global), /ALPHA · 1/);
   assert.match(hidden.message.content, /\[zeta,alpha\]/);
   assert.match(renderCard(scoped), /No tracked work for project 'alpha'/);
 });
@@ -443,7 +647,7 @@ test("renders deduplicated durable entries written before active was stored", ()
   );
   const output = component.render(100).join("\n");
 
-  assert.match(output, /PR REVIEW — 1/);
+  assert.match(output, /PR REVIEW · 1/);
   assert.match(output, /READY/);
   assert.equal(output.match(/jp-legacy/g)?.length, 1);
 });
