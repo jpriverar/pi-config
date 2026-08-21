@@ -53,15 +53,26 @@ export default function projectStatus(pi: ExtensionAPI) {
   let currentSessionName: string | undefined;
   let currentTaskState: TaskState = "unavailable";
   let unsubscribeDiskStatus: (() => void) | undefined;
+  let sessionGeneration = 0;
 
-  async function getCounts(project?: string): Promise<TaskState> {
+  function isCurrentSession(generation: number): boolean {
+    return generation === sessionGeneration;
+  }
+
+  async function getCounts(
+    project: string | undefined,
+    generation: number,
+  ): Promise<TaskState | undefined> {
     const listed = await client.listIssues();
+    if (!isCurrentSession(generation)) return undefined;
     if (!listed.ok) return "unavailable";
 
     const ready = await client.listReadyIssueIds();
+    if (!isCurrentSession(generation)) return undefined;
     if (!ready.ok) return "unavailable";
 
     const closed = await client.listIssues(["closed"]);
+    if (!isCurrentSession(generation)) return undefined;
     if (!closed.ok) return "unavailable";
 
     const active = scopeIssues(
@@ -181,31 +192,47 @@ export default function projectStatus(pi: ExtensionAPI) {
     }));
   }
 
-  async function refresh(ctx: ExtensionContext): Promise<void> {
-    currentSessionName = pi.getSessionName() ?? undefined;
+  async function refresh(
+    ctx: ExtensionContext,
+    generation: number,
+  ): Promise<void> {
+    const sessionName = pi.getSessionName() ?? undefined;
     const project = resolveSessionProject(ctx.sessionManager).workstream;
-    currentTaskState = await getCounts(project);
+    const taskState = await getCounts(project, generation);
+    if (taskState === undefined || !isCurrentSession(generation)) return;
+
+    currentSessionName = sessionName;
+    currentTaskState = taskState;
     renderStatus(ctx, currentSessionName, currentTaskState);
   }
 
-  function refreshIdentity(ctx: ExtensionContext): void {
+  function refreshIdentity(ctx: ExtensionContext, generation: number): void {
+    if (!isCurrentSession(generation)) return;
     renderStatus(ctx, currentSessionName, currentTaskState);
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    const generation = ++sessionGeneration;
     unsubscribeDiskStatus?.();
     const channel = getDiskStatusChannel();
-    const listener = () => refreshIdentity(ctx);
+    const listener = () => refreshIdentity(ctx, generation);
     channel.listeners.add(listener);
     unsubscribeDiskStatus = () => channel.listeners.delete(listener);
-    await refresh(ctx);
+    await refresh(ctx, generation);
   });
   pi.on("session_shutdown", async () => {
+    sessionGeneration += 1;
     unsubscribeDiskStatus?.();
     unsubscribeDiskStatus = undefined;
   });
-  pi.on("session_info_changed", async (_event, ctx) => refresh(ctx));
-  pi.on("model_select", async (_event, ctx) => refreshIdentity(ctx));
-  pi.on("thinking_level_select", async (_event, ctx) => refreshIdentity(ctx));
-  pi.on("turn_end", async (_event, ctx) => refresh(ctx));
+  pi.on("session_info_changed", async (_event, ctx) =>
+    refresh(ctx, sessionGeneration),
+  );
+  pi.on("model_select", async (_event, ctx) =>
+    refreshIdentity(ctx, sessionGeneration),
+  );
+  pi.on("thinking_level_select", async (_event, ctx) =>
+    refreshIdentity(ctx, sessionGeneration),
+  );
+  pi.on("turn_end", async (_event, ctx) => refresh(ctx, sessionGeneration));
 }

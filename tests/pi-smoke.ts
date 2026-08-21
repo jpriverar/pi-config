@@ -20,7 +20,13 @@ import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
+
+import {
+  generateSessionProjectName,
+  SESSION_PROJECT_ENTRY_TYPE,
+} from "../lib/session-project.js";
 
 const execFileAsync = promisify(execFile);
 const scriptRepository = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -160,7 +166,45 @@ if (command === "list") {
   return { bin, logPath, statePath, store };
 }
 
+function createPersistedSession(cwd: string, agentDirectory: string): string {
+  const session = SessionManager.create(
+    cwd,
+    join(agentDirectory, "seed-sessions"),
+  );
+  session.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "Seeded smoke session" }],
+    api: "openai-responses",
+    provider: "smoke",
+    model: "offline",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  });
+  const sessionFile = session.getSessionFile();
+  assert.ok(sessionFile, "seed session should persist to disk");
+  return sessionFile;
+}
+
 type RpcRow = Record<string, any>;
+type UiRequestRow = RpcRow & {
+  type: "extension_ui_request";
+  id: string;
+  method: string;
+};
 
 type ProcessExit = {
   code: number | null;
@@ -241,16 +285,51 @@ export async function terminateProcessGroup(
   }
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+}
+
+function isProjectEntryForWorkstream(
+  entry: RpcRow | undefined,
+  workstream: string,
+): boolean {
+  return (
+    entry?.type === "custom" &&
+    entry.customType === SESSION_PROJECT_ENTRY_TYPE &&
+    entry.data?.version === 1 &&
+    entry.data?.workstream === workstream
+  );
+}
+
+async function waitFor<T>(
+  load: () => Promise<T>,
+  ready: (value: T) => boolean,
+  description: string,
+  timeoutMs = 15_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await load();
+    if (ready(value)) return value;
+    await delay(25);
+  }
+  throw new Error(`timed out waiting for ${description}`);
+}
+
 async function runRpc(
   packagePath: string,
   cwd: string,
   agentDirectory: string,
   fakeBd: ReturnType<typeof createFakeBd>,
-) {
+  sessionPath?: string,
+): Promise<RpcRow> {
   const pi = join(scriptRepository, "node_modules", ".bin", "pi");
+  const sessionArguments = sessionPath
+    ? ["--session", sessionPath]
+    : ["--no-session"];
   const child = spawn(
     pi,
-    ["-e", packagePath, "--mode", "rpc", "--no-session", "--offline"],
+    ["-e", packagePath, "--mode", "rpc", "--offline", ...sessionArguments],
     {
       cwd,
       env: {
@@ -276,17 +355,49 @@ async function runRpc(
     string,
     { resolve: (row: RpcRow) => void; reject: (error: Error) => void }
   >();
+  const uiRequests: UiRequestRow[] = [];
+  const uiWaiters: Array<{
+    description: string;
+    predicate: (row: UiRequestRow) => boolean;
+    resolve: (row: UiRequestRow) => void;
+    reject: (error: Error) => void;
+    timer: NodeJS.Timeout;
+  }> = [];
+  const failPending = (error: Error) => {
+    for (const waiter of pending.values()) waiter.reject(error);
+    pending.clear();
+    for (const waiter of uiWaiters.splice(0)) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+  };
+  const releaseUiWaiter = (row: UiRequestRow) => {
+    const index = uiWaiters.findIndex((waiter) => waiter.predicate(row));
+    if (index === -1) {
+      uiRequests.push(row);
+      return;
+    }
+    const [waiter] = uiWaiters.splice(index, 1);
+    clearTimeout(waiter.timer);
+    waiter.resolve(row);
+  };
   createInterface({ input: child.stdout }).on("line", (line) => {
     let row: RpcRow;
     try {
       row = JSON.parse(line);
     } catch {
-      for (const waiter of pending.values()) {
-        waiter.reject(new Error(`Pi emitted non-JSON RPC output: ${line}`));
-      }
+      failPending(new Error(`Pi emitted non-JSON RPC output: ${line}`));
       return;
     }
     rows.push(row);
+    if (
+      row.type === "extension_ui_request" &&
+      typeof row.id === "string" &&
+      typeof row.method === "string"
+    ) {
+      releaseUiWaiter(row as UiRequestRow);
+      return;
+    }
     if (row.type === "response" && row.id && pending.has(row.id)) {
       pending.get(row.id)?.resolve(row);
       pending.delete(row.id);
@@ -316,23 +427,135 @@ async function runRpc(
       });
     });
   };
+  const waitForUiRequest = (
+    description: string,
+    predicate: (row: UiRequestRow) => boolean,
+  ) => {
+    const bufferedIndex = uiRequests.findIndex(predicate);
+    if (bufferedIndex !== -1) {
+      return Promise.resolve(uiRequests.splice(bufferedIndex, 1)[0]);
+    }
+    return new Promise<UiRequestRow>((resolveUi, rejectUi) => {
+      const timer = setTimeout(() => {
+        const index = uiWaiters.findIndex((waiter) => waiter.timer === timer);
+        if (index !== -1) uiWaiters.splice(index, 1);
+        rejectUi(
+          new Error(`timed out waiting for ${description}; stderr: ${stderr}`),
+        );
+      }, 15_000);
+      uiWaiters.push({
+        description,
+        predicate,
+        resolve: resolveUi,
+        reject: rejectUi,
+        timer,
+      });
+    });
+  };
+  const respondToUiRequest = (
+    id: string,
+    response: Record<string, unknown>,
+  ) => {
+    child.stdin.write(
+      `${JSON.stringify({ type: "extension_ui_response", id, ...response })}\n`,
+    );
+  };
 
   try {
     const state = await request({ type: "get_state" });
     const commands = await request({ type: "get_commands" });
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-    const entries = await request({ type: "get_entries" });
-    const invoked: RpcRow[] = [];
-    for (const command of [
-      "tasks",
-      "plan-view",
-      "spec-view",
-      "plan-clear",
-      "prompt",
-    ]) {
-      invoked.push(await request({ type: "prompt", message: `/${command}` }));
+    if (!sessionPath) {
+      await delay(100);
+      const entries = await request({ type: "get_entries" });
+      const invoked: RpcRow[] = [];
+      for (const command of [
+        "tasks",
+        "plan-view",
+        "spec-view",
+        "plan-clear",
+        "prompt",
+      ]) {
+        invoked.push(await request({ type: "prompt", message: `/${command}` }));
+      }
+      return { commands, entries, invoked, rows, state, stderr };
     }
-    return { commands, entries, invoked, rows, state, stderr };
+
+    const projectPrompt = request({ type: "prompt", message: "/project" });
+    const projectSelection = await waitForUiRequest(
+      "/project selection",
+      (row) => row.method === "select" && row.title === "Switch project",
+    );
+    const selectedProject = projectSelection.options?.find(
+      (option: unknown) =>
+        typeof option === "string" && option.startsWith("public —"),
+    );
+    assert.equal(
+      typeof selectedProject,
+      "string",
+      "project selector should offer the fake public workstream",
+    );
+    respondToUiRequest(projectSelection.id, { value: selectedProject });
+    const project = await projectPrompt;
+    const scoped = await waitFor(
+      async () => {
+        const nextState = await request({ type: "get_state" });
+        const nextEntries = await request({ type: "get_entries" });
+        return { entries: nextEntries, state: nextState };
+      },
+      ({ entries: nextEntries, state: nextState }) => {
+        const expectedName = generateSessionProjectName(
+          { getSessionId: () => nextState.data.sessionId },
+          "public",
+        );
+        return (
+          nextState.data.sessionName === expectedName &&
+          nextEntries.data.entries.some((entry: RpcRow) =>
+            isProjectEntryForWorkstream(entry, "public"),
+          )
+        );
+      },
+      "persisted /project session state",
+    );
+
+    const clone = await request({ type: "clone" });
+    assert.equal(clone.success, true, clone.error);
+    const forked = await waitFor(
+      async () => {
+        const nextState = await request({ type: "get_state" });
+        const nextEntries = await request({ type: "get_entries" });
+        return { entries: nextEntries, state: nextState };
+      },
+      ({ entries: nextEntries, state: nextState }) => {
+        const expectedName = generateSessionProjectName(
+          { getSessionId: () => nextState.data.sessionId },
+          "public",
+        );
+        return (
+          nextState.data.sessionId !== scoped.state.data.sessionId &&
+          nextState.data.sessionFile !== scoped.state.data.sessionFile &&
+          nextState.data.sessionName === expectedName &&
+          nextEntries.data.entries.some((entry: RpcRow) =>
+            isProjectEntryForWorkstream(entry, "public"),
+          )
+        );
+      },
+      "cloned project session state",
+    );
+
+    return {
+      clone,
+      commands,
+      forkedEntries: forked.entries,
+      forkedState: forked.state,
+      project,
+      projectSelection,
+      rows,
+      scopedEntries: scoped.entries,
+      scopedState: scoped.state,
+      selectedProject,
+      state,
+      stderr,
+    };
   } finally {
     child.stdin.end();
     try {
@@ -697,23 +920,58 @@ async function main() {
     mkdirSync(agentDirectory, { recursive: true });
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
     const fakeBd = createFakeBd(root);
+    const persistedSession = createPersistedSession(workspace, agentDirectory);
 
     const rpc = await runRpc(packagePath, workspace, agentDirectory, fakeBd);
+    const projectRpc = await runRpc(
+      packagePath,
+      workspace,
+      agentDirectory,
+      fakeBd,
+      persistedSession,
+    );
     for (const response of [
       rpc.state,
       rpc.commands,
       rpc.entries,
       ...rpc.invoked,
+      projectRpc.project,
+      projectRpc.clone,
+      projectRpc.scopedState,
+      projectRpc.scopedEntries,
+      projectRpc.forkedState,
+      projectRpc.forkedEntries,
     ]) {
       assert.equal(response.type, "response");
       assert.equal(response.success, true, response.error);
     }
-    assert.ok(!rpc.rows.some((row) => row.type === "extension_error"));
+    assert.equal(rpc.state.data.sessionFile, undefined);
+    assert.ok(
+      projectRpc.state.data.sessionFile,
+      "project smoke should use a persisted session",
+    );
+    assert.ok(!rpc.rows.some((row: RpcRow) => row.type === "extension_error"));
+    assert.ok(
+      !projectRpc.rows.some((row: RpcRow) => row.type === "extension_error"),
+    );
+    for (const [label, result] of [
+      ["package", rpc],
+      ["project", projectRpc],
+    ] as const) {
+      assert.ok(
+        !result.rows.some(
+          (row: RpcRow) =>
+            row.type === "agent_start" || row.type === "turn_start",
+        ),
+        `${label} smoke should not start a provider-backed agent turn`,
+      );
+    }
     const registered = rpc.commands.data.commands;
     const commandNames = registered.map((command: any) => command.name);
     assert.equal(new Set(commandNames).size, commandNames.length);
     for (const command of [
       "tasks",
+      "project",
       "plan-view",
       "spec-view",
       "plan-clear",
@@ -746,6 +1004,48 @@ async function main() {
         `skill was not loaded: ${skill}`,
       );
     }
+    assert.equal(projectRpc.projectSelection.method, "select");
+    assert.equal(projectRpc.projectSelection.title, "Switch project");
+    assert.equal(projectRpc.projectSelection.options[0], "Global / no project");
+    assert.match(
+      projectRpc.selectedProject,
+      /^public — .*Ready: 1.*Waiting: 1/,
+    );
+    assert.equal(
+      projectRpc.scopedState.data.sessionName,
+      generateSessionProjectName(
+        { getSessionId: () => projectRpc.scopedState.data.sessionId },
+        "public",
+      ),
+    );
+    assert.ok(
+      projectRpc.scopedEntries.data.entries.some((entry: RpcRow) =>
+        isProjectEntryForWorkstream(entry, "public"),
+      ),
+      "project selection should persist a versioned scope entry",
+    );
+    assert.notEqual(
+      projectRpc.forkedState.data.sessionId,
+      projectRpc.scopedState.data.sessionId,
+    );
+    assert.notEqual(
+      projectRpc.forkedState.data.sessionFile,
+      projectRpc.scopedState.data.sessionFile,
+    );
+    assert.equal(
+      projectRpc.forkedState.data.sessionName,
+      generateSessionProjectName(
+        { getSessionId: () => projectRpc.forkedState.data.sessionId },
+        "public",
+      ),
+    );
+    assert.ok(
+      projectRpc.forkedEntries.data.entries.some((entry: RpcRow) =>
+        isProjectEntryForWorkstream(entry, "public"),
+      ),
+      "forked session should keep the persisted scope entry",
+    );
+
     const startup = rpc.entries.data.entries.find(
       (entry: any) => entry.customType === "jp-work-startup",
     );

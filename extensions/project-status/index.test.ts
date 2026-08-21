@@ -47,10 +47,13 @@ function createHarness(
     unavailable?: Query;
     sessionName?: string;
     entries?: readonly Entry[];
+    beforeExec?: (callNumber: number) => Promise<void>;
   } = {},
 ) {
   const handlers = new Map<string, Handler>();
   const calls: string[][] = [];
+  const staleAccesses: string[] = [];
+  let stale = false;
   let thinkingLevel = "high";
   let sessionName =
     options.sessionName === undefined ? "pi-setup" : options.sessionName;
@@ -63,7 +66,9 @@ function createHarness(
       handlers.set(event, handler);
     },
     async exec(_command: string, args: string[]) {
+      if (stale) staleAccesses.push("pi.exec");
       calls.push(args);
+      await options.beforeExec?.(calls.length);
       const query: Query =
         args[0] === "ready"
           ? "ready"
@@ -93,6 +98,16 @@ function createHarness(
     },
   };
 
+  const ui = {
+    theme: {
+      fg(_color: string, text: string) {
+        return text;
+      },
+    },
+    setWidget(_key: string, factory: any) {
+      widgetFactory = factory;
+    },
+  };
   const context = {
     sessionManager: {
       getEntries: () => options.entries ?? [],
@@ -110,15 +125,9 @@ function createHarness(
         percent: 32,
       };
     },
-    ui: {
-      theme: {
-        fg(_color: string, text: string) {
-          return text;
-        },
-      },
-      setWidget(_key: string, factory: any) {
-        widgetFactory = factory;
-      },
+    get ui() {
+      if (stale) staleAccesses.push("ctx.ui");
+      return ui;
     },
   };
 
@@ -127,8 +136,12 @@ function createHarness(
     calls,
     context,
     handlers,
+    markStale() {
+      stale = true;
+    },
     render: (width = 120) =>
       widgetFactory ? widgetFactory({}, {}).render(width)[0] : "",
+    staleAccesses,
     setModel(name: string) {
       context.model.name = name;
     },
@@ -225,6 +238,39 @@ test("session name changes visible identity without changing explicit scope", as
   assert.match(harness.render(), /investigate-crash/);
   assert.match(harness.render(), /1 in-progress/);
   assert.doesNotMatch(harness.render(), /pi-setup-580c8e67|blocked/);
+});
+
+test("abandons an in-flight session-info refresh when the session shuts down", async () => {
+  let releaseExec!: () => void;
+  let markExecStarted!: () => void;
+  const execStarted = new Promise<void>((resolve) => {
+    markExecStarted = resolve;
+  });
+  const execReleased = new Promise<void>((resolve) => {
+    releaseExec = resolve;
+  });
+  const harness = createHarness({
+    beforeExec: async (callNumber) => {
+      if (callNumber !== 4) return;
+      markExecStarted();
+      await execReleased;
+    },
+  });
+
+  await start(harness);
+  harness.setSessionName("replacement");
+  const refresh = Promise.resolve(
+    harness.handlers.get("session_info_changed")?.({}, harness.context),
+  );
+  await execStarted;
+  await harness.handlers.get("session_shutdown")?.({}, harness.context);
+  harness.markStale();
+  releaseExec();
+
+  await assert.doesNotReject(refresh);
+  assert.deepEqual(harness.staleAccesses, []);
+  assert.match(harness.render(), /pi-setup/);
+  assert.doesNotMatch(harness.render(), /replacement/);
 });
 
 test("explicit global scope counts all work while displaying the name", async () => {
