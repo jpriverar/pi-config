@@ -294,6 +294,18 @@ function projectEntry(workstream: unknown): Entry {
   };
 }
 
+function registryResult(value: string): BeadsExecResult {
+  return {
+    code: 0,
+    stdout: JSON.stringify({
+      key: "custom.pi-project-renames",
+      schema_version: 1,
+      value,
+    }),
+    stderr: "",
+  };
+}
+
 test("registers task and project commands with only the task shortcut", () => {
   const harness = createHarness();
   assert.ok(harness.commands.has("tasks"));
@@ -593,6 +605,85 @@ test("project rename updates matching workstreams across statuses, verifies the 
     {
       message: "Renamed project Alpha → Renamed across 3 tasks",
       type: "info",
+    },
+  ]);
+});
+
+test("project rename records against the latest registry snapshot", async () => {
+  const harness = createHarness({
+    issues: [issue("one", "open", ["workstream:Alpha"])],
+    registryGetResults: [
+      registryResult(""),
+      registryResult('{"version":1,"aliases":{"gamma":"Delta"}}'),
+    ],
+    select: selectProject("Alpha"),
+    input: () => "Renamed",
+    confirm: () => true,
+  });
+
+  await renameProject(harness);
+
+  const setCall = harness.calls.find(
+    (args) => args[0] === "config" && args[1] === "set",
+  );
+  assert.ok(setCall);
+  assert.equal(
+    setCall[3],
+    '{"version":1,"aliases":{"gamma":"Delta","alpha":"Renamed"}}',
+  );
+});
+
+test("project rename partially succeeds when the latest registry read fails", async () => {
+  const harness = createHarness({
+    entries: [projectEntry("Alpha")],
+    issues: [issue("one", "open", ["workstream:Alpha"])],
+    registryGetResults: [
+      registryResult(""),
+      { code: 1, stdout: "private", stderr: "private" },
+    ],
+    select: selectProject("Alpha"),
+    input: () => "Renamed",
+    confirm: () => true,
+  });
+
+  await renameProject(harness);
+
+  assert.equal(
+    harness.calls.some((args) => args[0] === "config" && args[1] === "set"),
+    false,
+  );
+  assert.deepEqual(harness.appendedEntries, [projectEntry("Renamed")]);
+  assert.deepEqual(harness.notifications, [
+    {
+      message:
+        "Renamed project Alpha → Renamed, but other sessions cannot migrate automatically",
+      type: "warning",
+    },
+  ]);
+});
+
+test("project rename partially succeeds when final registry read-back fails", async () => {
+  const harness = createHarness({
+    entries: [projectEntry("Alpha")],
+    issues: [issue("one", "open", ["workstream:Alpha"])],
+    registryGetResults: [
+      registryResult(""),
+      registryResult(""),
+      { code: 0, stdout: "not-json", stderr: "private" },
+    ],
+    select: selectProject("Alpha"),
+    input: () => "Renamed",
+    confirm: () => true,
+  });
+
+  await renameProject(harness);
+
+  assert.deepEqual(harness.appendedEntries, [projectEntry("Renamed")]);
+  assert.deepEqual(harness.notifications, [
+    {
+      message:
+        "Renamed project Alpha → Renamed, but other sessions cannot migrate automatically",
+      type: "warning",
     },
   ]);
 });
@@ -935,6 +1026,24 @@ for (const [label, workstream] of [
     assert.deepEqual(harness.notifications, []);
   });
 }
+
+test("session start warns and preserves scope when the registry command fails", async () => {
+  const harness = createHarness({
+    entries: [projectEntry("alpha")],
+    registryGetResults: [{ code: 1, stdout: "private", stderr: "private" }],
+  });
+
+  await startSession(harness, "startup");
+
+  assert.deepEqual(harness.appendedEntries, []);
+  assert.deepEqual(harness.renamedSessions, []);
+  assert.deepEqual(harness.notifications, [
+    {
+      message: "Project scope could not be migrated automatically",
+      type: "warning",
+    },
+  ]);
+});
 
 for (const [label, registryValue] of [
   ["malformed", "{"],
