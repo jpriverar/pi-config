@@ -6,7 +6,7 @@ import tasksOverlay from "./index.js";
 
 process.env.BEADS_DIR = "/tmp/personal/.beads";
 
-type Query = "active" | "ready";
+type Query = "active" | "ready" | "all" | "update";
 
 type Handler = (event: any, context: any) => Promise<void> | void;
 type RegisteredAction = {
@@ -43,7 +43,12 @@ function createHarness(
     sessionId?: string;
     entries?: readonly Entry[];
     unavailable?: Query;
+    updateMutates?: boolean;
+    updateExitCode?: number;
+    afterUpdate?: (issue: BeadsIssue) => void;
     select?: (items: string[]) => string | undefined;
+    input?: (title: string, placeholder?: string) => string | undefined;
+    confirm?: (title: string, message: string) => boolean;
   } = {},
 ) {
   const commands = new Map<string, RegisteredAction>();
@@ -55,18 +60,75 @@ function createHarness(
   const appendedEntries: Entry[] = [];
   const entries = [...(options.entries ?? [])];
   const selections: Array<{ title: string; items: string[] }> = [];
+  const inputs: Array<{ title: string; placeholder?: string }> = [];
+  const confirmations: Array<{ title: string; message: string }> = [];
   let rendered = "";
   let sessionName =
     options.sessionName === null
       ? undefined
       : (options.sessionName ?? "pi-setup");
-  const issues = options.issues ?? [];
+  const issues = (options.issues ?? []).map((item) => ({
+    ...item,
+    labels: [...item.labels],
+  }));
   const readyIds = new Set(options.readyIds ?? []);
 
   const pi = {
     async exec(_command: string, args: string[]) {
       calls.push(args);
-      const query: Query = args[0] === "ready" ? "ready" : "active";
+      if (args[0] === "update") {
+        if (options.updateMutates !== false) {
+          const ids: string[] = [];
+          let index = 1;
+          while (index < args.length && !args[index].startsWith("--")) {
+            ids.push(args[index]);
+            index += 1;
+          }
+
+          const removeLabels: string[] = [];
+          const addLabels: string[] = [];
+          while (index < args.length) {
+            const flag = args[index];
+            const value = args[index + 1];
+            if (flag === "--remove-label" && value !== undefined) {
+              removeLabels.push(value);
+              index += 2;
+              continue;
+            }
+            if (flag === "--add-label" && value !== undefined) {
+              addLabels.push(value);
+              index += 2;
+              continue;
+            }
+            index += flag === "--db" ? 2 : 1;
+          }
+
+          for (const task of issues) {
+            if (!ids.includes(task.id)) continue;
+            task.labels = task.labels.filter(
+              (label) => !removeLabels.includes(label),
+            );
+            for (const label of addLabels) {
+              if (!task.labels.includes(label)) task.labels.push(label);
+            }
+            options.afterUpdate?.(task);
+          }
+        }
+        const code =
+          options.unavailable === "update" ? 1 : (options.updateExitCode ?? 0);
+        return {
+          code,
+          stdout: "",
+          stderr: code === 0 ? "" : "private failure",
+        };
+      }
+
+      const query: Query =
+        args[0] === "ready"
+          ? "ready"
+          : args.includes("open,in_progress,blocked,deferred,closed")
+            ? "all"
+            : "active";
       if (options.unavailable === query) {
         return { code: 1, stdout: "", stderr: "private failure" };
       }
@@ -134,6 +196,14 @@ function createHarness(
         selections.push({ title, items });
         return options.select?.(items);
       },
+      async input(title: string, placeholder?: string) {
+        inputs.push({ title, placeholder });
+        return options.input?.(title, placeholder);
+      },
+      async confirm(title: string, message: string) {
+        confirmations.push({ title, message });
+        return options.confirm?.(title, message) ?? false;
+      },
     },
   };
 
@@ -148,6 +218,9 @@ function createHarness(
     renamedSessions,
     render: () => rendered,
     selections,
+    inputs,
+    confirmations,
+    issues,
     shortcuts,
   };
 }
@@ -162,6 +235,12 @@ async function switchProject(harness: ReturnType<typeof createHarness>) {
   const command = harness.commands.get("project");
   assert.ok(command);
   await command.handler("", harness.context);
+}
+
+async function renameProject(harness: ReturnType<typeof createHarness>) {
+  const command = harness.commands.get("project");
+  assert.ok(command);
+  await command.handler("rename", harness.context);
 }
 
 async function startSession(
@@ -355,6 +434,276 @@ test("selecting a legacy exact-name project upgrades its scope", async () => {
   assert.deepEqual(harness.appendedEntries, [projectEntry("Alpha")]);
   assert.deepEqual(harness.renamedSessions, ["Alpha-580c8e67"]);
 });
+
+test("project rename updates matching workstreams across statuses, verifies the result, and refreshes the current session", async () => {
+  const harness = createHarness({
+    entries: [projectEntry("ALPHA")],
+    issues: [
+      issue("open", "open", ["needs:jp", "workstream:Alpha", "topic:x"]),
+      issue("deferred", "deferred", [
+        "topic:y",
+        "workstream:beta",
+        "workstream:ALPHA",
+      ]),
+      issue("closed", "closed", [
+        "workstream:alpha",
+        "workstream:ALPHA",
+        "topic:z",
+      ]),
+      issue("unrelated", "blocked", ["workstream:beta"]),
+    ],
+    select: selectProject("Alpha"),
+    input: () => "Renamed",
+    confirm: () => true,
+  });
+
+  await renameProject(harness);
+
+  assert.equal(harness.selections[0].title, "Rename project");
+  assert.equal(harness.inputs[0].title, "New project name");
+  assert.match(harness.confirmations[0].message, /Alpha → Renamed/);
+  assert.match(harness.confirmations[0].message, /3 tasks/);
+  assert.deepEqual(
+    harness.calls.map((args) => (args[0] === "list" ? args[2] : args[0])),
+    [
+      "open,in_progress,blocked,deferred,closed",
+      "update",
+      "open,in_progress,blocked,deferred,closed",
+    ],
+  );
+  assert.deepEqual(harness.calls[1], [
+    "update",
+    "open",
+    "deferred",
+    "closed",
+    "--remove-label",
+    "workstream:Alpha",
+    "--remove-label",
+    "workstream:ALPHA",
+    "--remove-label",
+    "workstream:alpha",
+    "--add-label",
+    "workstream:Renamed",
+    "--db",
+    "/tmp/personal/.beads",
+  ]);
+  assert.deepEqual(
+    harness.issues.map((task) => ({ id: task.id, labels: task.labels })),
+    [
+      { id: "open", labels: ["needs:jp", "topic:x", "workstream:Renamed"] },
+      {
+        id: "deferred",
+        labels: ["topic:y", "workstream:beta", "workstream:Renamed"],
+      },
+      { id: "closed", labels: ["topic:z", "workstream:Renamed"] },
+      { id: "unrelated", labels: ["workstream:beta"] },
+    ],
+  );
+  assert.deepEqual(harness.appendedEntries, [projectEntry("Renamed")]);
+  assert.deepEqual(harness.renamedSessions, ["Renamed-580c8e67"]);
+  assert.deepEqual(harness.notifications, [
+    {
+      message: "Renamed project Alpha → Renamed across 3 tasks",
+      type: "info",
+    },
+  ]);
+});
+
+test("project rename rejects case-insensitive collisions with another workstream", async () => {
+  const harness = createHarness({
+    issues: [
+      issue("alpha", "open", ["workstream:Alpha"]),
+      issue("beta", "closed", ["workstream:Beta"]),
+    ],
+    select: selectProject("Alpha"),
+    input: () => "beta",
+  });
+
+  await renameProject(harness);
+
+  assert.deepEqual(harness.calls, [
+    [
+      "list",
+      "-s",
+      "open,in_progress,blocked,deferred,closed",
+      "-n",
+      "0",
+      "--json",
+      "--db",
+      "/tmp/personal/.beads",
+    ],
+  ]);
+  assert.deepEqual(harness.confirmations, []);
+  assert.deepEqual(harness.appendedEntries, []);
+  assert.deepEqual(harness.renamedSessions, []);
+  assert.deepEqual(harness.notifications, [
+    { message: "Project beta already exists", type: "warning" },
+  ]);
+});
+
+test("project rename permits case-only canonicalization", async () => {
+  const harness = createHarness({
+    entries: [projectEntry("alpha")],
+    issues: [
+      issue("open", "open", ["workstream:alpha"]),
+      issue("closed", "closed", ["workstream:ALPHA"]),
+    ],
+    select: selectProject("alpha"),
+    input: () => "ALPHA",
+    confirm: () => true,
+  });
+
+  await renameProject(harness);
+
+  assert.deepEqual(harness.calls[1], [
+    "update",
+    "open",
+    "closed",
+    "--remove-label",
+    "workstream:alpha",
+    "--remove-label",
+    "workstream:ALPHA",
+    "--add-label",
+    "workstream:ALPHA",
+    "--db",
+    "/tmp/personal/.beads",
+  ]);
+  assert.deepEqual(harness.appendedEntries, [projectEntry("ALPHA")]);
+  assert.deepEqual(harness.renamedSessions, ["ALPHA-580c8e67"]);
+});
+
+test("project rename succeeds when verification matches after a non-zero update exit", async () => {
+  const harness = createHarness({
+    entries: [projectEntry("Alpha")],
+    issues: [
+      issue("open", "open", ["needs:jp", "workstream:Alpha", "topic:x"]),
+      issue("closed", "closed", [
+        "workstream:ALPHA",
+        "workstream:beta",
+        "topic:y",
+      ]),
+    ],
+    updateExitCode: 1,
+    select: selectProject("Alpha"),
+    input: () => "Renamed",
+    confirm: () => true,
+  });
+
+  await renameProject(harness);
+
+  assert.equal(harness.calls.length, 3);
+  assert.deepEqual(harness.appendedEntries, [projectEntry("Renamed")]);
+  assert.deepEqual(harness.renamedSessions, ["Renamed-580c8e67"]);
+  assert.deepEqual(harness.notifications, [
+    {
+      message: "Renamed project Alpha → Renamed across 2 tasks",
+      type: "info",
+    },
+  ]);
+});
+
+test("project rename reports a verification failure when re-listing still shows the old workstream", async () => {
+  const harness = createHarness({
+    entries: [projectEntry("Alpha")],
+    issues: [issue("one", "open", ["workstream:Alpha"])],
+    updateMutates: false,
+    select: selectProject("Alpha"),
+    input: () => "Renamed",
+    confirm: () => true,
+  });
+
+  await renameProject(harness);
+
+  assert.equal(harness.calls.length, 3);
+  assert.deepEqual(harness.appendedEntries, []);
+  assert.deepEqual(harness.renamedSessions, []);
+  assert.deepEqual(harness.notifications, [
+    {
+      message: "Project rename could not be verified for Renamed",
+      type: "warning",
+    },
+  ]);
+});
+
+test("project rename reports a verification failure when update drops an unrelated label", async () => {
+  const harness = createHarness({
+    entries: [projectEntry("Alpha")],
+    issues: [
+      issue("one", "open", [
+        "needs:jp",
+        "topic:x",
+        "workstream:beta",
+        "workstream:Alpha",
+      ]),
+    ],
+    afterUpdate(task) {
+      task.labels = task.labels.filter((label) => label !== "workstream:beta");
+    },
+    select: selectProject("Alpha"),
+    input: () => "Renamed",
+    confirm: () => true,
+  });
+
+  await renameProject(harness);
+
+  assert.equal(harness.calls.length, 3);
+  assert.deepEqual(harness.appendedEntries, []);
+  assert.deepEqual(harness.renamedSessions, []);
+  assert.deepEqual(harness.notifications, [
+    {
+      message: "Project rename could not be verified for Renamed",
+      type: "warning",
+    },
+  ]);
+});
+
+for (const [name, message] of [
+  ["Alpha,Beta", "Project name must not contain commas"],
+  [
+    "Alpha\tBeta",
+    "Project name contains unsupported whitespace or control characters",
+  ],
+  [
+    "Alpha ",
+    "Project name contains unsupported whitespace or control characters",
+  ],
+  [
+    "Alpha\t",
+    "Project name contains unsupported whitespace or control characters",
+  ],
+  [
+    `${"x".repeat(117)} `,
+    "Project name contains unsupported whitespace or control characters",
+  ],
+  ["x".repeat(118), "Project name must be 117 characters or fewer"],
+] as const) {
+  test(`project rename rejects invalid name ${JSON.stringify(name)} before update`, async () => {
+    const harness = createHarness({
+      issues: [issue("one", "open", ["workstream:Alpha"])],
+      select: selectProject("Alpha"),
+      input: () => name,
+    });
+
+    await renameProject(harness);
+
+    assert.deepEqual(harness.calls, [
+      [
+        "list",
+        "-s",
+        "open,in_progress,blocked,deferred,closed",
+        "-n",
+        "0",
+        "--json",
+        "--db",
+        "/tmp/personal/.beads",
+      ],
+    ]);
+    assert.deepEqual(harness.confirmations, []);
+    assert.deepEqual(harness.appendedEntries, []);
+    assert.deepEqual(harness.renamedSessions, []);
+    assert.deepEqual(harness.notifications, [{ message, type: "warning" }]);
+  });
+}
 
 for (const unavailable of ["active", "ready"] as const) {
   test(`${unavailable} query failure warns and does not rename the project`, async () => {

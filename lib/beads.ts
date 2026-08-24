@@ -63,6 +63,14 @@ export interface BeadsClient {
   ): Promise<BeadsResult<BeadsIssue[]>>;
 
   listReadyIssueIds(): Promise<BeadsResult<ReadonlySet<string>>>;
+
+  updateIssueLabels(
+    issueIds: readonly string[],
+    options: {
+      removeLabels?: readonly string[];
+      addLabels?: readonly string[];
+    },
+  ): Promise<BeadsResult<void>>;
 }
 
 const issueStatuses: ReadonlySet<string> = new Set([
@@ -88,6 +96,10 @@ function normalizeMetadata(value: string, limit: number): string {
     .replace(/\s+/g, " ")
     .trim();
   return [...normalized].slice(0, limit).join("");
+}
+
+export function normalizeBeadsLabel(value: string): string {
+  return normalizeMetadata(value, LABEL_LIMIT);
 }
 
 function normalizeId(value: string): string {
@@ -130,7 +142,7 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
     title: normalizeMetadata(record.title, TITLE_LIMIT) || "(untitled task)",
     status: record.status as IssueStatus,
     labels: ((record.labels as string[] | undefined) ?? [])
-      .map((label) => normalizeMetadata(label, LABEL_LIMIT))
+      .map((label) => normalizeBeadsLabel(label))
       .filter((label) => label.length > 0),
   };
   if (record.updated_at !== undefined) {
@@ -162,11 +174,10 @@ export function createBeadsClient(
 ): BeadsClient {
   const store = resolveBeadsDir(options.env, options.home);
 
-  async function runBd<T>(
+  async function execBd(
     operation: string,
     args: readonly string[],
-    decode: (value: unknown) => T,
-  ): Promise<BeadsResult<T>> {
+  ): Promise<BeadsResult<BeadsExecResult>> {
     let result: BeadsExecResult;
     try {
       result = await exec("bd", [...args, "--db", store]);
@@ -197,9 +208,20 @@ export function createBeadsClient(
       };
     }
 
+    return { ok: true, value: result };
+  }
+
+  async function runBd<T>(
+    operation: string,
+    args: readonly string[],
+    decode: (value: unknown) => T,
+  ): Promise<BeadsResult<T>> {
+    const executed = await execBd(operation, args);
+    if (!executed.ok) return executed;
+
     let value: unknown;
     try {
-      value = JSON.parse(result.stdout);
+      value = JSON.parse(executed.value.stdout);
     } catch {
       return {
         ok: false,
@@ -231,6 +253,30 @@ export function createBeadsClient(
         const issues = decodeIssues(value);
         return new Set(issues.map((issue) => issue.id));
       });
+    },
+    async updateIssueLabels(issueIds, options) {
+      if (issueIds.length === 0) {
+        return {
+          ok: false,
+          error: {
+            operation: "update issues",
+            store,
+            message: "issue ids are required",
+          },
+        };
+      }
+
+      const args = ["update", ...issueIds];
+      for (const label of options.removeLabels ?? []) {
+        args.push("--remove-label", label);
+      }
+      for (const label of options.addLabels ?? []) {
+        args.push("--add-label", label);
+      }
+
+      const executed = await execBd("update issues", args);
+      if (!executed.ok) return executed;
+      return { ok: true, value: undefined };
     },
   };
 }

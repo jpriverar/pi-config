@@ -206,6 +206,54 @@ test("accepts an empty ready result", async () => {
   }
 });
 
+test("updates multiple issue labels in one bd command", async () => {
+  const fake = fakeExec({ code: 0, stdout: "", stderr: "" });
+  const result = await createBeadsClient(fake.exec, {
+    env: { BEADS_DIR: store },
+  }).updateIssueLabels(["jp-2", "jp-1"], {
+    removeLabels: ["workstream:Alpha", "workstream:ALPHA"],
+    addLabels: ["workstream:Renamed"],
+  });
+
+  assert.deepEqual(fake.calls, [
+    {
+      command: "bd",
+      args: [
+        "update",
+        "jp-2",
+        "jp-1",
+        "--remove-label",
+        "workstream:Alpha",
+        "--remove-label",
+        "workstream:ALPHA",
+        "--add-label",
+        "workstream:Renamed",
+        "--db",
+        store,
+      ],
+    },
+  ]);
+  assert.deepEqual(result, { ok: true, value: undefined });
+});
+
+test("rejects an empty issue id list without invoking bd update", async () => {
+  const fake = fakeExec();
+  const result = await createBeadsClient(fake.exec, {
+    env: { BEADS_DIR: store },
+  }).updateIssueLabels([], {
+    removeLabels: ["workstream:Alpha"],
+    addLabels: ["workstream:Renamed"],
+  });
+
+  assert.deepEqual(fake.calls, []);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.error.operation, "update issues");
+    assert.equal(result.error.store, store);
+    assert.equal(result.error.message, "issue ids are required");
+  }
+});
+
 test("rejects malformed ready records", async () => {
   const fake = fakeExec(success([{ id: "jp-1" }]));
   const result = await createBeadsClient(fake.exec, {
