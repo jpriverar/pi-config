@@ -18,6 +18,7 @@ import {
   type ClassifiedIssue,
   type Readiness,
 } from "../../lib/beads.js";
+import { validateProjectName } from "../../lib/project-renames.js";
 import {
   generateSessionProjectName,
   persistSessionProject,
@@ -39,7 +40,6 @@ const ALL_ISSUE_STATUSES = [
   "closed",
 ] as const;
 const WORKSTREAM_LABEL_PREFIX = "workstream:";
-const MAX_WORKSTREAM_NAME_LENGTH = 128 - WORKSTREAM_LABEL_PREFIX.length;
 
 function primaryWorkstream(issue: ClassifiedIssue): string | undefined {
   return issue.workstreams[0];
@@ -63,44 +63,6 @@ function sameLabelSet(left: ReadonlySet<string>, right: ReadonlySet<string>) {
   return (
     left.size === right.size && [...left].every((label) => right.has(label))
   );
-}
-
-function validateProjectName(
-  input: string,
-): { ok: true; value: string } | { ok: false; message: string } {
-  const next = input.trim();
-  if (!next) {
-    return { ok: false, message: "Project name cannot be empty" };
-  }
-  if (input !== next) {
-    return {
-      ok: false,
-      message:
-        "Project name contains unsupported whitespace or control characters",
-    };
-  }
-  if (next.includes(",")) {
-    return { ok: false, message: "Project name must not contain commas" };
-  }
-  if ([...next].length > MAX_WORKSTREAM_NAME_LENGTH) {
-    return {
-      ok: false,
-      message: `Project name must be ${MAX_WORKSTREAM_NAME_LENGTH} characters or fewer`,
-    };
-  }
-
-  const expectedLabel = `${WORKSTREAM_LABEL_PREFIX}${next}`;
-  if (
-    normalizeBeadsLabel(`${WORKSTREAM_LABEL_PREFIX}${input}`) !== expectedLabel
-  ) {
-    return {
-      ok: false,
-      message:
-        "Project name contains unsupported whitespace or control characters",
-    };
-  }
-
-  return { ok: true, value: next };
 }
 
 export default function tasksOverlay(pi: ExtensionAPI) {
