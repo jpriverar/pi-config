@@ -1,6 +1,13 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import {
+  decodeProjectRenameRegistry,
+  encodeProjectRenameRegistry,
+  PROJECT_RENAMES_CONFIG_KEY,
+  type ProjectRenameRegistry,
+} from "./project-renames.js";
+
 export type IssueStatus =
   | "open"
   | "in_progress"
@@ -63,6 +70,12 @@ export interface BeadsClient {
   ): Promise<BeadsResult<BeadsIssue[]>>;
 
   listReadyIssueIds(): Promise<BeadsResult<ReadonlySet<string>>>;
+
+  getProjectRenameRegistry(): Promise<BeadsResult<ProjectRenameRegistry>>;
+
+  setProjectRenameRegistry(
+    registry: ProjectRenameRegistry,
+  ): Promise<BeadsResult<void>>;
 
   updateIssueLabels(
     issueIds: readonly string[],
@@ -253,6 +266,36 @@ export function createBeadsClient(
         const issues = decodeIssues(value);
         return new Set(issues.map((issue) => issue.id));
       });
+    },
+    getProjectRenameRegistry() {
+      return runBd(
+        "get project rename registry",
+        ["config", "get", PROJECT_RENAMES_CONFIG_KEY, "--json"],
+        (value) => {
+          if (
+            typeof value !== "object" ||
+            value === null ||
+            Array.isArray(value) ||
+            typeof (value as Record<string, unknown>).value !== "string"
+          ) {
+            throw new Error("invalid project rename registry envelope");
+          }
+          return decodeProjectRenameRegistry(
+            (value as Record<string, unknown>).value,
+          );
+        },
+      );
+    },
+    async setProjectRenameRegistry(registry) {
+      const executed = await execBd("set project rename registry", [
+        "config",
+        "set",
+        PROJECT_RENAMES_CONFIG_KEY,
+        encodeProjectRenameRegistry(registry),
+        "--json",
+      ]);
+      if (!executed.ok) return executed;
+      return { ok: true, value: undefined };
     },
     async updateIssueLabels(issueIds, options) {
       if (issueIds.length === 0) {

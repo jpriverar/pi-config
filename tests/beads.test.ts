@@ -390,6 +390,159 @@ test("does not expose arbitrary executor or decoder errors", async (t) => {
   });
 });
 
+test("gets the project rename registry from Beads config", async () => {
+  const fake = fakeExec(
+    success({
+      key: "custom.pi-project-renames",
+      schema_version: 1,
+      value: "",
+    }),
+    success({
+      key: "custom.pi-project-renames",
+      schema_version: 1,
+      value: '{"version":1,"aliases":{"alpha":"Beta"}}',
+    }),
+  );
+  const client = createBeadsClient(fake.exec, { env: { BEADS_DIR: store } });
+
+  assert.deepEqual(await client.getProjectRenameRegistry(), {
+    ok: true,
+    value: { version: 1, aliases: {} },
+  });
+  assert.deepEqual(await client.getProjectRenameRegistry(), {
+    ok: true,
+    value: { version: 1, aliases: { alpha: "Beta" } },
+  });
+  assert.deepEqual(fake.calls, [
+    {
+      command: "bd",
+      args: [
+        "config",
+        "get",
+        "custom.pi-project-renames",
+        "--json",
+        "--db",
+        store,
+      ],
+    },
+    {
+      command: "bd",
+      args: [
+        "config",
+        "get",
+        "custom.pi-project-renames",
+        "--json",
+        "--db",
+        store,
+      ],
+    },
+  ]);
+});
+
+test("sets the project rename registry through Beads config", async () => {
+  const fake = fakeExec({
+    code: 0,
+    stdout: "non-JSON output is ignored",
+    stderr: "",
+  });
+  const result = await createBeadsClient(fake.exec, {
+    env: { BEADS_DIR: store },
+  }).setProjectRenameRegistry({
+    version: 1,
+    aliases: { alpha: "Beta" },
+  });
+
+  assert.deepEqual(result, { ok: true, value: undefined });
+  assert.deepEqual(fake.calls, [
+    {
+      command: "bd",
+      args: [
+        "config",
+        "set",
+        "custom.pi-project-renames",
+        '{"version":1,"aliases":{"alpha":"Beta"}}',
+        "--json",
+        "--db",
+        store,
+      ],
+    },
+  ]);
+});
+
+test("rejects invalid project rename registry responses", async (t) => {
+  const cases: Array<{ name: string; response: BeadsExecResult }> = [
+    { name: "non-object envelope", response: success([]) },
+    { name: "non-string value", response: success({ value: 1 }) },
+    {
+      name: "malformed registry",
+      response: success({ value: '{"version":2,"aliases":{}}' }),
+    },
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const fake = fakeExec(testCase.response);
+      const result = await createBeadsClient(fake.exec, {
+        env: { BEADS_DIR: store },
+      }).getProjectRenameRegistry();
+
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        assert.equal(result.error.operation, "get project rename registry");
+        assert.equal(result.error.store, store);
+        assert.equal(result.error.message, "bd returned an invalid response");
+      }
+    });
+  }
+});
+
+test("curates project rename registry command failures", async (t) => {
+  const sentinel = "SECRET TASK: investigate customer incident";
+
+  await t.test("missing CLI", async () => {
+    const exec: BeadsExec = async () => {
+      throw Object.assign(new Error(sentinel), { code: "ENOENT" });
+    };
+    const result = await createBeadsClient(exec, {
+      env: { BEADS_DIR: store },
+    }).getProjectRenameRegistry();
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.error.operation, "get project rename registry");
+      assert.equal(result.error.message, "bd CLI is unavailable");
+      assert.doesNotMatch(result.error.message, /SECRET TASK/);
+    }
+  });
+
+  for (const operation of ["get", "set"] as const) {
+    await t.test(`${operation} non-zero exit`, async () => {
+      const fake = fakeExec({ code: 2, stdout: sentinel, stderr: sentinel });
+      const client = createBeadsClient(fake.exec, {
+        env: { BEADS_DIR: store },
+      });
+      const result =
+        operation === "get"
+          ? await client.getProjectRenameRegistry()
+          : await client.setProjectRenameRegistry({
+              version: 1,
+              aliases: { alpha: "Beta" },
+            });
+
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        assert.equal(
+          result.error.operation,
+          `${operation} project rename registry`,
+        );
+        assert.equal(result.error.store, store);
+        assert.equal(result.error.message, "bd exited with code 2");
+        assert.doesNotMatch(result.error.message, /SECRET TASK/);
+      }
+    });
+  }
+});
+
 test("classifies readiness and derives labels once in source order", () => {
   const issues: BeadsIssue[] = [
     {
