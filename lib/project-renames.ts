@@ -10,12 +10,40 @@ export interface ProjectRenameRegistry {
   aliases: Record<string, string>;
 }
 
+function copyAliases(
+  aliases: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const copy: Record<string, string> = {};
+  for (const [key, target] of Object.entries(aliases)) {
+    Object.defineProperty(copy, key, {
+      configurable: true,
+      enumerable: true,
+      value: target,
+      writable: true,
+    });
+  }
+  return copy;
+}
+
+function setAlias(
+  aliases: Record<string, string>,
+  key: string,
+  target: string,
+): void {
+  Object.defineProperty(aliases, key, {
+    configurable: true,
+    enumerable: true,
+    value: target,
+    writable: true,
+  });
+}
+
 function freezeRegistry(
   registry: ProjectRenameRegistry,
 ): ProjectRenameRegistry {
   return Object.freeze({
     version: 1,
-    aliases: Object.freeze({ ...registry.aliases }),
+    aliases: Object.freeze(copyAliases(registry.aliases)),
   });
 }
 
@@ -54,7 +82,7 @@ function decodeParsedRegistry(value: unknown): ProjectRenameRegistry {
       );
     }
 
-    aliases[validatedKey.value] = validatedTarget.value;
+    setAlias(aliases, validatedKey.value, validatedTarget.value);
   }
 
   return freezeRegistry({ version: 1, aliases });
@@ -97,10 +125,10 @@ export function resolveProjectRename(
   let resolved: string | undefined;
 
   while (true) {
-    const next = registry.aliases[currentKey];
-    if (next === undefined) {
+    if (!Object.prototype.hasOwnProperty.call(registry.aliases, currentKey)) {
       return resolved;
     }
+    const next = registry.aliases[currentKey];
 
     const nextKey = next.toLowerCase();
     if (nextKey === currentKey) {
@@ -131,13 +159,13 @@ export function recordProjectRename(
     throw new Error(validatedTo.message);
   }
 
-  const aliases = { ...registry.aliases };
+  const aliases = copyAliases(registry.aliases);
   delete aliases[validatedTo.value.toLowerCase()];
 
   const canonicalTarget =
     resolveProjectRename({ version: 1, aliases }, validatedTo.value) ??
     validatedTo.value;
-  aliases[validatedFrom.value.toLowerCase()] = canonicalTarget;
+  setAlias(aliases, validatedFrom.value.toLowerCase(), canonicalTarget);
 
   return freezeRegistry({ version: 1, aliases });
 }

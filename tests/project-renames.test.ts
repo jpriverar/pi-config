@@ -29,6 +29,10 @@ test("empty registries are independent immutable values", () => {
   assert.deepEqual(second, { version: 1, aliases: {} });
   assert.notEqual(first, second);
   assert.notEqual(first.aliases, second.aliases);
+  assert.equal(Object.isFrozen(first), true);
+  assert.equal(Object.isFrozen(first.aliases), true);
+  assert.equal(Object.isFrozen(second), true);
+  assert.equal(Object.isFrozen(second.aliases), true);
 });
 
 test("rename chains resolve to the latest canonical target", () => {
@@ -45,6 +49,31 @@ test("case-only aliases resolve once without becoming cycles", () => {
     resolveProjectRename({ version: 1, aliases: { alpha: "ALPHA" } }, "alpha"),
     "ALPHA",
   );
+});
+
+test("prototype property names are treated as ordinary project names", () => {
+  const empty = emptyProjectRenameRegistry();
+
+  assert.equal(resolveProjectRename(empty, "constructor"), undefined);
+  assert.equal(resolveProjectRename(empty, "__proto__"), undefined);
+
+  const decoded = decodeProjectRenameRegistry(
+    '{"version":1,"aliases":{"__proto__":"Constructor","constructor":"Target"}}',
+  );
+  assert.equal(Object.hasOwn(decoded.aliases, "__proto__"), true);
+  assert.equal(Object.hasOwn(decoded.aliases, "constructor"), true);
+  assert.equal(resolveProjectRename(decoded, "__PROTO__"), "Target");
+  assert.deepEqual(
+    decodeProjectRenameRegistry(encodeProjectRenameRegistry(decoded)),
+    decoded,
+  );
+
+  const recordedKey = recordProjectRename(empty, "__proto__", "Alpha");
+  assert.equal(Object.hasOwn(recordedKey.aliases, "__proto__"), true);
+  assert.equal(resolveProjectRename(recordedKey, "__proto__"), "Alpha");
+
+  const recordedTarget = recordProjectRename(empty, "Beta", "__proto__");
+  assert.equal(resolveProjectRename(recordedTarget, "beta"), "__proto__");
 });
 
 test("cycles fail closed", () => {
@@ -75,6 +104,8 @@ test("recordProjectRename removes the reused target alias and does not mutate th
   });
   assert.notEqual(after, before);
   assert.notEqual(after.aliases, before.aliases);
+  assert.equal(Object.isFrozen(after), true);
+  assert.equal(Object.isFrozen(after.aliases), true);
 });
 
 test("reusing a historical target removes the cycle-forming alias", () => {
@@ -92,10 +123,13 @@ test("encode and decode round-trip versioned registries", () => {
     aliases: { alpha: "Beta", beta: "Gamma" },
   };
 
-  assert.deepEqual(
-    decodeProjectRenameRegistry(encodeProjectRenameRegistry(registry)),
-    registry,
+  const decoded = decodeProjectRenameRegistry(
+    encodeProjectRenameRegistry(registry),
   );
+
+  assert.deepEqual(decoded, registry);
+  assert.equal(Object.isFrozen(decoded), true);
+  assert.equal(Object.isFrozen(decoded.aliases), true);
 });
 
 test("decode rejects malformed values", () => {
