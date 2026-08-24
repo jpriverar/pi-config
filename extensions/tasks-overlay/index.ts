@@ -18,7 +18,11 @@ import {
   type ClassifiedIssue,
   type Readiness,
 } from "../../lib/beads.js";
-import { validateProjectName } from "../../lib/project-renames.js";
+import {
+  recordProjectRename,
+  resolveProjectRename,
+  validateProjectName,
+} from "../../lib/project-renames.js";
 import {
   generateSessionProjectName,
   persistSessionProject,
@@ -301,6 +305,15 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       return;
     }
 
+    const preflightRegistry = await client.getProjectRenameRegistry();
+    if (!preflightRegistry.ok) {
+      ctx.ui.notify(
+        "Project rename unavailable because session migrations cannot be prepared",
+        "warning",
+      );
+      return;
+    }
+
     const confirmed = await ctx.ui.confirm(
       "Rename project",
       `${selected.project.name} → ${next} across ${selected.project.issueIds.length} tasks`,
@@ -366,9 +379,35 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       pi.setSessionName(generateSessionProjectName(ctx.sessionManager, next));
     }
 
+    const latestRegistry = await client.getProjectRenameRegistry();
+    if (latestRegistry.ok) {
+      const recorded = recordProjectRename(
+        latestRegistry.value,
+        selected.project.name,
+        next,
+      );
+      const saved = await client.setProjectRenameRegistry(recorded);
+      if (saved.ok) {
+        const verifiedRegistry = await client.getProjectRenameRegistry();
+        if (
+          verifiedRegistry.ok &&
+          resolveProjectRename(
+            verifiedRegistry.value,
+            selected.project.name,
+          ) === next
+        ) {
+          ctx.ui.notify(
+            `Renamed project ${selected.project.name} → ${next} across ${selected.project.issueIds.length} tasks`,
+            "info",
+          );
+          return;
+        }
+      }
+    }
+
     ctx.ui.notify(
-      `Renamed project ${selected.project.name} → ${next} across ${selected.project.issueIds.length} tasks`,
-      "info",
+      `Renamed project ${selected.project.name} → ${next}, but other sessions cannot migrate automatically`,
+      "warning",
     );
   }
 
@@ -461,12 +500,43 @@ export default function tasksOverlay(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (event, ctx) => {
-    if (event.reason !== "fork") return;
+    if (event.reason === "new") return;
 
     const project = resolveSessionProject(ctx.sessionManager);
-    if (project.source !== "explicit" || project.workstream === undefined)
-      return;
+    if (project.workstream === undefined) return;
 
+    const registry = await client.getProjectRenameRegistry();
+    if (!registry.ok) {
+      ctx.ui.notify(
+        "Project scope could not be migrated automatically",
+        "warning",
+      );
+      return;
+    }
+
+    const projectKey = project.workstream.toLowerCase();
+    const hasAlias = Object.prototype.hasOwnProperty.call(
+      registry.value.aliases,
+      projectKey,
+    );
+    const canonical = resolveProjectRename(registry.value, project.workstream);
+    if (hasAlias && canonical === undefined) {
+      ctx.ui.notify(
+        "Project scope could not be migrated automatically",
+        "warning",
+      );
+      return;
+    }
+
+    if (canonical !== undefined && canonical !== project.workstream) {
+      persistSessionProject(projectWriter, canonical);
+      pi.setSessionName(
+        generateSessionProjectName(ctx.sessionManager, canonical),
+      );
+      return;
+    }
+
+    if (event.reason !== "fork" || project.source !== "explicit") return;
     pi.setSessionName(
       generateSessionProjectName(ctx.sessionManager, project.workstream),
     );

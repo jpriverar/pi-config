@@ -81,6 +81,7 @@ function createFakeBd(root: string) {
       {
         next: 3,
         ready: ["jp-ready"],
+        projectRenames: '{"version":1,"aliases":{}}',
         issues: [
           {
             id: "jp-ready",
@@ -124,6 +125,25 @@ if (command === "list") {
   output(state.issues.filter((issue) => statuses.length === 0 || statuses.includes(issue.status)));
 } else if (command === "ready") {
   output(state.issues.filter((issue) => state.ready.includes(issue.id) && issue.status === "open"));
+} else if (command === "config") {
+  if (clean[1] === "get" && clean[2] === "custom.pi-project-renames") {
+    output({
+      key: "custom.pi-project-renames",
+      schema_version: 1,
+      value: state.projectRenames,
+    });
+  } else if (clean[1] === "set" && clean[2] === "custom.pi-project-renames") {
+    state.projectRenames = clean[3];
+    save();
+    output({
+      key: "custom.pi-project-renames",
+      schema_version: 1,
+      value: state.projectRenames,
+    });
+  } else {
+    process.stderr.write("unsupported fake bd config command");
+    process.exit(2);
+  }
 } else if (command === "create") {
   if (clean[1] === "MALFORMED") process.stdout.write("not-json");
   else {
