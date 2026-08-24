@@ -287,11 +287,25 @@ export function createBeadsClient(
       );
     },
     async setProjectRenameRegistry(registry) {
+      let encoded: string;
+      try {
+        encoded = encodeProjectRenameRegistry(registry);
+      } catch {
+        return {
+          ok: false,
+          error: {
+            operation: "set project rename registry",
+            store,
+            message: "project rename registry is invalid",
+          },
+        };
+      }
+
       const executed = await execBd("set project rename registry", [
         "config",
         "set",
         PROJECT_RENAMES_CONFIG_KEY,
-        encodeProjectRenameRegistry(registry),
+        encoded,
         "--json",
       ]);
       if (!executed.ok) return executed;

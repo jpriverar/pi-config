@@ -469,6 +469,26 @@ test("sets the project rename registry through Beads config", async () => {
   ]);
 });
 
+test("curates invalid project rename registries before invoking bd", async () => {
+  const sentinel = "SECRET TASK, investigate customer incident";
+  const fake = fakeExec();
+  const result = await createBeadsClient(fake.exec, {
+    env: { BEADS_DIR: store },
+  }).setProjectRenameRegistry({
+    version: 1,
+    aliases: { alpha: sentinel },
+  });
+
+  assert.deepEqual(fake.calls, []);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.error.operation, "set project rename registry");
+    assert.equal(result.error.store, store);
+    assert.equal(result.error.message, "project rename registry is invalid");
+    assert.doesNotMatch(result.error.message, /SECRET TASK/);
+  }
+});
+
 test("rejects invalid project rename registry responses", async (t) => {
   const cases: Array<{ name: string; response: BeadsExecResult }> = [
     { name: "non-object envelope", response: success([]) },
