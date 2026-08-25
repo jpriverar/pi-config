@@ -674,7 +674,7 @@ export default function jpWorkflow(pi: ExtensionAPI) {
           ],
           {
             description:
-              "New status. 'in_progress' uses --claim (atomic assignee+status), not a bare -s.",
+              "New status. Starting open work uses --claim; resuming blocked or deferred work preserves its assignment.",
           },
         ),
       ),
@@ -707,8 +707,17 @@ export default function jpWorkflow(pi: ExtensionAPI) {
         );
       }
       const args = ["update", id];
-      if (status === "in_progress") args.push("--claim");
-      else if (status !== undefined) args.push("-s", status);
+      if (status === "in_progress") {
+        const resumable = await client.listIssues(["blocked", "deferred"]);
+        if (!resumable.ok) {
+          throw new Error(formatBeadsError(resumable.error));
+        }
+        if (resumable.value.some((issue) => issue.id === id)) {
+          args.push("-s", "in_progress");
+        } else {
+          args.push("--claim");
+        }
+      } else if (status !== undefined) args.push("-s", status);
       for (const label of add_labels ?? []) args.push("--add-label", label);
       for (const label of remove_labels ?? []) {
         args.push("--remove-label", label);

@@ -695,6 +695,7 @@ test("empty and unavailable Beads produce stable states without throwing", async
 test("mutation tools preserve schemas, arguments, and decoded JSON output", async () => {
   const responses = [
     { id: "jp-new", title: "New task", status: "open" },
+    [],
     [{ id: "jp-new", title: "New task", status: "in_progress" }],
     [{ id: "jp-new", title: "New task", status: "closed" }],
   ];
@@ -751,6 +752,19 @@ test("mutation tools preserve schemas, arguments, and decoded JSON output", asyn
     },
     {
       command: "bd",
+      args: [
+        "list",
+        "-s",
+        "blocked,deferred",
+        "-n",
+        "0",
+        "--json",
+        "--db",
+        store,
+      ],
+    },
+    {
+      command: "bd",
       args: ["update", "jp-new", "--claim", "--json", "--db", store],
     },
     {
@@ -768,8 +782,41 @@ test("mutation tools preserve schemas, arguments, and decoded JSON output", asyn
     },
   ]);
   assert.deepEqual(JSON.parse(filed.content[0].text), responses[0]);
-  assert.deepEqual(JSON.parse(updated.content[0].text), responses[1]);
-  assert.deepEqual(JSON.parse(closed.content[0].text), responses[2]);
+  assert.deepEqual(JSON.parse(updated.content[0].text), responses[2]);
+  assert.deepEqual(JSON.parse(closed.content[0].text), responses[3]);
+});
+
+test("update_issue resumes blocked and deferred issues without claiming them", async (t) => {
+  for (const status of ["blocked", "deferred"] as const) {
+    await t.test(status, async () => {
+      const id = `jp-${status}`;
+      const harness = createHarness({ issues: [issue(id, status)] });
+      const update = harness.tools.get("update_issue");
+      assert.ok(update);
+
+      await update.execute("call", { id, status: "in_progress" });
+
+      assert.deepEqual(harness.calls, [
+        {
+          command: "bd",
+          args: [
+            "list",
+            "-s",
+            "blocked,deferred",
+            "-n",
+            "0",
+            "--json",
+            "--db",
+            store,
+          ],
+        },
+        {
+          command: "bd",
+          args: ["update", id, "-s", "in_progress", "--json", "--db", store],
+        },
+      ]);
+    });
+  }
 });
 
 test("update_issue rejects an empty mutation without invoking Beads", async () => {
