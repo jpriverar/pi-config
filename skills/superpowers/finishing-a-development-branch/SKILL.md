@@ -35,13 +35,18 @@ GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
 WORKTREE_PATH=$(git rev-parse --show-toplevel)
 ```
 
+An active pool claim exists here only when this parent/session's ledger contains the exact current path and claim ID established by acquisition or prior ledger retention. Do not infer ownership from the linked path, directory name, branch, or an active claim listing. Without that exact ledger identity, treat a linked workspace as externally managed. A child never manages or finishes a pool claim.
+
 This determines which menu to show and how cleanup works:
 
 | State | Menu | Cleanup |
 |-------|------|---------|
+| Active pool claim, named branch | Standard 3 options | Release only as the selected option specifies |
 | `GIT_DIR == GIT_COMMON` (normal repo) | Standard 3 options | No worktree to clean up |
 | `GIT_DIR != GIT_COMMON`, named branch | Standard 3 options | Provenance-based (see Step 6) |
 | `GIT_DIR != GIT_COMMON`, detached HEAD | Reduced 2 options (no merge) | Externally managed — leave in place |
+
+**Stable-slot invariant:** Never remove a stable pool slot. Pool cleanup means `worktree_pool release`, which leaves the slot provisioned; it never means a direct worktree lifecycle command.
 
 ## Step 3: Determine Base Branch
 
@@ -103,8 +108,10 @@ If tests fail on the merged result: stop, leave the worktree and branch in
 place, and investigate — nothing has been pushed, so the merge is local
 and recoverable.
 
-Once the merged result is green: clean up the worktree (Step 6), then
-delete the branch:
+Once the merged result is green:
+
+- **Active pool claim:** confirm the slot is clean, then use `worktree_pool release`. The local merge releases the clean claim but never removes the stable pool slot. Do not separately delete the slot's stable branch.
+- **No active pool claim:** clean up the worktree (Step 6), then delete the feature branch:
 
 ```bash
 git branch -d <feature-branch>
@@ -123,16 +130,19 @@ tooling — its CLI if one is available, or the creation URL most forges
 print when you push — following the repo's PR template and conventions if
 present, and report the URL to your human partner.
 
-Keep the worktree — your human partner iterates on PR feedback there.
+- **Active pool claim:** after push and create PR succeeds, confirm the slot is clean and use `worktree_pool release`. PR creation releases the clean claim while leaving the stable slot provisioned.
+- **No active pool claim:** keep the worktree so PR feedback can be handled there.
 
 ### Option 3: Keep As-Is
 
-Report: "Keeping branch <name>. Worktree preserved at <path>."
+With an active pool claim, keep-as-is means retain the claim; do not release it. Report: "Keeping branch <name>. Pool claim retained at <path>."
+
+Without an active pool claim, report: "Keeping branch <name>. Worktree preserved at <path>."
 
 ### If your human partner asks to discard the work
 
 This path exists only as a response to an explicit request to throw the
-work away. Confirm first:
+work away. Confirm first. For a non-pool workspace, use the existing confirmation:
 
 ```
 This will permanently delete:
@@ -143,71 +153,55 @@ This will permanently delete:
 Type 'discard' to confirm.
 ```
 
-Wait for that exact confirmation. When it arrives:
+For an active pool claim, keep the same confirmation requirements without claiming the stable slot will be deleted:
+
+```
+This will permanently delete:
+- Claimed branch work for <name>
+- All commits: <commit-list>
+
+The stable pool slot at <path> will remain provisioned.
+Type 'discard' to confirm.
+```
+
+Wait for that exact confirmation. For an active pool claim, confirm the claimed workspace is clean before release; if it is dirty, stop and show the files at risk.
+
+Then delete only the confirmed feature branch, in this order:
+
+1. **Active pool claim:** use `worktree_pool release` with the recorded claim ID. Release detaches the stable slot while preserving the feature branch. Never remove the stable slot.
+2. Move to a non-slot checkout, verify it is not the released slot's path, and delete only the feature branch named by the exact confirmation:
 
 ```bash
 MAIN_ROOT=$(git -C "$(git rev-parse --git-common-dir)/.." rev-parse --show-toplevel)
-cd "$MAIN_ROOT"
-```
-
-Then clean up the worktree (Step 6) and force-delete the branch:
-
-```bash
+cd "$MAIN_ROOT" # must be a non-slot checkout
+[ "$PWD" != "$WORKTREE_PATH" ]
 git branch -D <feature-branch>
 ```
 
-## Step 6: Cleanup Workspace
+For a non-pool workspace, use the selected workflow's managed cleanup (Step 6), move to a checkout outside that workspace, and run the same branch deletion only for the confirmed feature branch.
 
-**Runs for Option 1 and confirmed discards.** Options 2 and 3 always
-preserve the worktree. Both callers have already changed directory to the
-main repo root — worktree removal must run from outside the worktree —
-and use the `GIT_DIR`/`GIT_COMMON`/`WORKTREE_PATH` values captured in
-Step 2, from before that directory change.
+An explicit discard keeps all existing confirmation requirements and leaves the stable slot provisioned; it never authorizes deleting the stable slot, its stable branch, or any other branch work.
 
-**If `GIT_DIR == GIT_COMMON`:** Normal repo, no worktree to clean up. Done.
+## Step 6: Cleanup Non-Pool Workspace
 
-**If `WORKTREE_PATH` is under `.worktrees/` or `worktrees/`:** Superpowers
-created this worktree — we own cleanup:
+This step never runs for an active pool claim. Never remove a stable pool slot; only the structured release operation may reset it.
 
-```bash
-git worktree remove "$WORKTREE_PATH"
-git worktree prune  # Self-healing: clean up any stale registrations
-```
+For a non-pool workspace, use the cleanup mechanism owned by the workflow selected in superpowers:using-git-worktrees:
 
-**If removal is refused** (`contains modified or untracked files`): the
-worktree holds files that exist nowhere else — uncommitted plans, notes,
-or scratch work. Never `--force` on your own initiative. Show your human
-partner what is at stake and ask:
+- Normal checkout or user-provided workspace: leave it in place.
+- Platform-native worktree: use the platform's workspace-exit or cleanup mechanism.
+- Native subagent with `worktree: true`: return from the child and let the subagent platform perform its managed cleanup.
 
-```bash
-git -C "$WORKTREE_PATH" status --porcelain -uall
-```
-
-```
-Worktree removal refused — these files were never committed:
-
-<file list>
-
-1. Commit them to <branch> before cleanup
-2. Move them into <main repo root>
-3. Delete them (unrecoverable)
-
-Which?
-```
-
-Carry out the choice, then remove the worktree.
-
-**Otherwise:** The host environment owns this workspace — leave it in
-place. If your platform provides a workspace-exit tool, use it.
+Do not substitute direct worktree lifecycle commands when no pool claim is available. If cleanup is unavailable or refused because files are uncommitted, preserve the workspace and show the user the files at risk before asking how to proceed.
 
 ## Quick Reference
 
-| Option | Merge | Push | Keep Worktree | Cleanup Branch |
-|--------|-------|------|---------------|----------------|
-| 1. Merge locally | yes | - | - | yes |
-| 2. Create PR | - | yes | yes | - |
-| 3. Keep as-is | - | - | yes | - |
-| Discard (explicit request only) | - | - | - | yes (force) |
+| Option | Pool claim | Non-pool workspace |
+|--------|------------|--------------------|
+| 1. Merge locally | Release clean claim | Use selected workflow's managed cleanup, then delete feature branch |
+| 2. Create PR | Release clean claim | Preserve for feedback |
+| 3. Keep as-is | Retain claim | Preserve |
+| Explicit discard | Release after exact confirmation; stable slot remains | Managed cleanup and force-delete authorized feature branch |
 
 ## Common Rationalizations
 
@@ -218,8 +212,8 @@ place. If your platform provides a workspace-exit tool, use it.
 | "They seem done with this feature — I'll offer to discard it" | The menu is complete as written. Discard happens only when your human partner asks for it in so many words. |
 | "'Yeah, get rid of it' counts as confirmation" | Only the typed word `discard` authorizes deletion. |
 | "The PR is up, so the worktree is clutter now" | PR feedback gets fixed in that worktree. It stays until the work lands. |
-| "This other worktree looks stale — I'll clean it too" | Clean up only worktrees under `.worktrees/` or `worktrees/`. Everything else belongs to the host. |
-| "Removal refused — `--force` is just finishing the cleanup" | The refusal means files exist only in that worktree. `--force` destroys them permanently. Show your human partner and ask. |
+| "This other worktree looks stale — I'll clean it too" | Cleanup belongs to the selected workflow. Never clean up unrelated workspaces. |
+| "Managed cleanup is unavailable, so I'll run Git lifecycle commands" | Preserve the workspace and report the limitation. An unavailable mechanism does not transfer ownership. |
 | "The merged-result failure is probably flaky" | A failing merged result stops everything. Branch and worktree stay put while you investigate. |
 | "The base branch is obviously main" | Confirm the fork point or ask. Merging into the wrong base is expensive to undo. |
 | "The push was rejected — force-push will fix it" | A rejected push means the remote moved. Investigate; force-push only on your human partner's explicit request. |

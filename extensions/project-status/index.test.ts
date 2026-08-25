@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import test, { afterEach } from "node:test";
+import { access } from "node:fs/promises";
+import test from "node:test";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
@@ -7,14 +8,6 @@ import type { BeadsIssue } from "../../lib/beads.js";
 import projectStatus from "./index.js";
 
 process.env.BEADS_DIR = "/tmp/personal/.beads";
-
-const DISK_STATUS_CHANNEL_KEY = Symbol.for("jpriverar.pi.disk-guardian-status");
-
-afterEach(() => {
-  const scope = globalThis as Record<symbol, { listeners?: Set<() => void> }>;
-  scope[DISK_STATUS_CHANNEL_KEY]?.listeners?.clear();
-  delete scope[DISK_STATUS_CHANNEL_KEY];
-});
 
 type Handler = (event?: unknown, context?: any) => Promise<unknown> | unknown;
 type Query = "active" | "ready" | "closed";
@@ -313,7 +306,14 @@ test("legacy exact-name sessions still drive identity and scope", async () => {
   assert.doesNotMatch(harness.render(), /blocked|ready|waiting/);
 });
 
-test("preserves model, thinking, context, and session-name refresh behavior", async () => {
+test("renders model, thinking, and context without a disk channel", async () => {
+  await assert.rejects(
+    access(new URL("./disk-status-channel.ts", import.meta.url)),
+    {
+      code: "ENOENT",
+    },
+  );
+
   const harness = createHarness();
   await start(harness);
   assert.match(harness.render(), /Opus 4.6 • high • 32%/);
@@ -331,65 +331,6 @@ test("preserves model, thinking, context, and session-name refresh behavior", as
   await harness.handlers.get("session_info_changed")?.({}, harness.context);
   assert.match(harness.render(), /pr-review/);
   assert.doesNotMatch(harness.render(), /pi-setup/);
-});
-
-test("renders the guardian disk snapshot immediately after context usage", async () => {
-  const key = Symbol.for("jpriverar.pi.disk-guardian-status");
-  (globalThis as Record<symbol, unknown>)[key] = {
-    snapshot: { text: "disk 40G", color: "error" },
-    listeners: new Set<() => void>(),
-  };
-
-  try {
-    const harness = createHarness();
-    await start(harness);
-
-    assert.match(harness.render(), /Opus 4\.6 • high • 32% • disk 40G/);
-  } finally {
-    delete (globalThis as Record<symbol, unknown>)[key];
-  }
-});
-
-test("refreshes the status line when the guardian publishes a new sample", async () => {
-  const key = Symbol.for("jpriverar.pi.disk-guardian-status");
-  const channel = {
-    snapshot: undefined as
-      | { text: string; color: "dim" | "warning" | "error" }
-      | undefined,
-    listeners: new Set<() => void>(),
-  };
-  (globalThis as Record<symbol, unknown>)[key] = channel;
-
-  try {
-    const harness = createHarness();
-    await start(harness);
-    assert.doesNotMatch(harness.render(), /disk/);
-
-    channel.snapshot = { text: "disk 39G", color: "error" };
-    for (const listener of channel.listeners) listener();
-
-    assert.match(harness.render(), /32% • disk 39G/);
-  } finally {
-    delete (globalThis as Record<symbol, unknown>)[key];
-  }
-});
-
-test("keeps one disk listener across restarts and removes it on shutdown", async () => {
-  const channel = {
-    snapshot: undefined,
-    listeners: new Set<() => void>(),
-  };
-  (globalThis as Record<symbol, unknown>)[DISK_STATUS_CHANNEL_KEY] = channel;
-  const harness = createHarness();
-
-  await start(harness);
-  assert.equal(channel.listeners.size, 1);
-
-  await harness.handlers.get("session_start")?.({}, harness.context);
-  assert.equal(channel.listeners.size, 1);
-
-  await harness.handlers.get("session_shutdown")?.({}, harness.context);
-  assert.equal(channel.listeners.size, 0);
 });
 
 test("fits dense global status within the terminal width", async () => {

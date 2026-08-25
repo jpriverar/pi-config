@@ -41,6 +41,8 @@ Subagent (general-purpose):
 
     Work from: [directory]
 
+    Your workspace is parent-owned. You cannot create, remove, release, repair, or retarget worktrees. Do not call pool-management tools or run worktree lifecycle commands; work only in the assigned directory.
+
     **While you work:** If you encounter something unexpected or unclear, **ask questions**.
     It's always OK to pause and clarify. Don't guess or make assumptions.
 

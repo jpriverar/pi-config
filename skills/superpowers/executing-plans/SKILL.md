@@ -13,10 +13,18 @@ Load plan, review critically, execute all tasks, report when complete.
 
 **Note:** Tell your human partner that Superpowers works much better with access to subagents (Claude Code, Codex CLI, Codex App, Copilot CLI, and Gemini CLI all qualify; see the per-platform tool refs in `../using-superpowers/references/`). If subagents are available, use superpowers:subagent-driven-development instead of this skill.
 
+## Workspace Contract
+
+Use superpowers:using-git-worktrees before loading the plan. A parent with the pool capability passes the plan's repository identifier and requested branch to `worktree_pool acquire`; an assigned child never acquires or releases one. An unavailable pool capability requires an explicit non-pool workflow instead of direct worktree lifecycle commands.
+
+For pooled execution, durably record `Pool workspace: <absolute path>` and `Pool claim: <claim ID>` in the plan's progress ledger before implementation. The implementer, every reviewer, and the finishing workflow must use that exact same workspace. After compaction, recover the same workspace from the ledger's absolute path and claim ID; never infer it from the branch or acquire a replacement claim.
+
+If execution delegates work, use superpowers:subagent-driven-development's exact foreground pooled call. A subagent call with omitted `async` must use `worktree: true`. A `workflowScript` call must use `worktree: true`. Native `worktree: true` retains its platform-managed isolation and cleanup.
+
 ## The Process
 
 ### Step 1: Load and Review Plan
-1. Ensure an isolated workspace: use superpowers:using-git-worktrees to create one or verify the existing one
+1. Ensure an isolated workspace: use superpowers:using-git-worktrees to acquire one or verify the existing one
 2. Read plan file
 3. Review critically - identify any questions or concerns about the plan
 4. If concerns: Raise them with your human partner before starting

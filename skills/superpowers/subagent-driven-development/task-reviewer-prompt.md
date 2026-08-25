@@ -50,7 +50,7 @@ Subagent (general-purpose):
     checking the call sites is the right method.
 
     Your review is read-only on this checkout. Do not mutate the working
-    tree, the index, HEAD, or branch state in any way.
+    tree, the index, HEAD, or branch state in any way. Your workspace is parent-owned. You cannot create, remove, release, repair, or retarget worktrees.
 
     ## You Do Not Dispatch Subagents
 

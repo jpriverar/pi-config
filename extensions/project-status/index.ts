@@ -11,7 +11,6 @@ import {
   type ClassifiedIssue,
 } from "../../lib/beads.js";
 import { resolveSessionProject } from "../../lib/session-project.js";
-import { getDiskStatusChannel } from "./disk-status-channel.js";
 
 const WIDGET_KEY = "project-status";
 
@@ -52,7 +51,6 @@ export default function projectStatus(pi: ExtensionAPI) {
   });
   let currentSessionName: string | undefined;
   let currentTaskState: TaskState = "unavailable";
-  let unsubscribeDiskStatus: (() => void) | undefined;
   let sessionGeneration = 0;
 
   function isCurrentSession(generation: number): boolean {
@@ -157,10 +155,6 @@ export default function projectStatus(pi: ExtensionAPI) {
         rounded > 90 ? "error" : rounded > 70 ? "warning" : "dim";
       rightParts.push(theme.fg(color, `${rounded}%`));
     }
-    const diskStatus = getDiskStatusChannel().snapshot;
-    if (diskStatus) {
-      rightParts.push(theme.fg(diskStatus.color, diskStatus.text));
-    }
     const right = rightParts.join(theme.fg("dim", " • "));
 
     if (!left && !right) {
@@ -213,17 +207,10 @@ export default function projectStatus(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     const generation = ++sessionGeneration;
-    unsubscribeDiskStatus?.();
-    const channel = getDiskStatusChannel();
-    const listener = () => refreshIdentity(ctx, generation);
-    channel.listeners.add(listener);
-    unsubscribeDiskStatus = () => channel.listeners.delete(listener);
     await refresh(ctx, generation);
   });
   pi.on("session_shutdown", async () => {
     sessionGeneration += 1;
-    unsubscribeDiskStatus?.();
-    unsubscribeDiskStatus = undefined;
   });
   pi.on("session_info_changed", async (_event, ctx) =>
     refresh(ctx, sessionGeneration),

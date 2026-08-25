@@ -28,6 +28,30 @@ import {
 const testsDirectory = dirname(fileURLToPath(import.meta.url));
 const scenariosDirectory = join(testsDirectory, "skill-scenarios");
 
+function markdownSection(contents: string, heading: string): string {
+  const lines = contents.split("\n");
+  let fenced = false;
+  let start = -1;
+  let level = 0;
+  for (let index = 0; index < lines.length; index++) {
+    if (/^```/.test(lines[index])) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
+    const match = lines[index].match(/^(#{2,6}) (.+?)\s*$/);
+    if (!match) continue;
+    if (start === -1 && match[2] === heading) {
+      start = index + 1;
+      level = match[1].length;
+    } else if (start !== -1 && match[1].length <= level) {
+      return lines.slice(start, index).join("\n");
+    }
+  }
+  assert.notEqual(start, -1, `missing markdown section: ${heading}`);
+  return lines.slice(start).join("\n");
+}
+
 async function eventuallyMissing(pid: number): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
@@ -40,6 +64,91 @@ async function eventuallyMissing(pid: number): Promise<void> {
   }
   assert.fail(`process ${pid} survived process-group termination`);
 }
+
+test("pooled lifecycle pressure scenario role-gates children and keeps parent authority through recovery", async () => {
+  const skills = join(testsDirectory, "..", "skills", "superpowers");
+  const [usingWorktrees, subagentDevelopment, executingPlans, finishing] =
+    await Promise.all([
+      readFile(join(skills, "using-git-worktrees", "SKILL.md"), "utf8"),
+      readFile(join(skills, "subagent-driven-development", "SKILL.md"), "utf8"),
+      readFile(join(skills, "executing-plans", "SKILL.md"), "utf8"),
+      readFile(
+        join(skills, "finishing-a-development-branch", "SKILL.md"),
+        "utf8",
+      ),
+    ]);
+
+  // Pressure: a child starts inside an arbitrary active-looking linked path, while
+  // the parent later retargets, survives compaction, and receives exact discard.
+  const childGate = markdownSection(
+    usingWorktrees,
+    "Role Gate: Children Keep the Assigned Workspace",
+  );
+  const parentAuthority = markdownSection(
+    usingWorktrees,
+    "Parent Workspace Authority",
+  );
+  const delegation = markdownSection(subagentDevelopment, "Pooled delegation");
+  const planWorkspace = markdownSection(executingPlans, "Workspace Contract");
+  const discard = markdownSection(
+    finishing,
+    "If your human partner asks to discard the work",
+  );
+
+  assert.match(childGate, /exact[\s\S]*parent-provided workspace/i);
+  assert.match(childGate, /retain[\s\S]*assigned cwd/i);
+  assert.match(
+    childGate,
+    /never invoke[\s\S]*pool action[\s\S]*list[\s\S]*acquire/i,
+  );
+  assert.doesNotMatch(childGate, /worktree_pool (?:list|acquire)\b/i);
+  assert.match(
+    parentAuthority,
+    /arbitrary active[\s\S]*not[\s\S]*ownership|never adopt[\s\S]*arbitrary active/i,
+  );
+  assert.match(
+    parentAuthority,
+    /previously[\s\S]*ledger[\s\S]*path[\s\S]*claim ID[\s\S]*otherwise[\s\S]*acquire/i,
+  );
+  assert.match(
+    parentAuthority,
+    /native[\s\S]*worktree_pool[\s\S]*plan's repository identifier[\s\S]*worktree_pool acquire/i,
+  );
+  assert.match(
+    parentAuthority,
+    /same branch[\s\S]*clean retarget[\s\S]*acquire result[\s\S]*author/i,
+  );
+  assert.match(delegation, /exact[\s\S]*path[\s\S]*claim ID/i);
+  assert.match(delegation, /compaction[\s\S]*same workspace/i);
+  assert.match(planWorkspace, /reviewer[\s\S]*finishing[\s\S]*same workspace/i);
+  assert.match(
+    discard,
+    /release[\s\S]*detach[\s\S]*branch[\s\S]*non-slot checkout[\s\S]*branch -D/i,
+  );
+});
+
+test("child workflow prompts preserve parent-owned worktree boundaries", async () => {
+  const promptDirectory = join(
+    testsDirectory,
+    "..",
+    "skills",
+    "superpowers",
+    "subagent-driven-development",
+  );
+  for (const prompt of [
+    "implementer-prompt.md",
+    "task-reviewer-prompt.md",
+    "re-review-prompt.md",
+  ]) {
+    const contents = await readFile(join(promptDirectory, prompt), "utf8");
+    assert.match(contents, /workspace is parent-owned/i, prompt);
+    assert.match(
+      contents,
+      /cannot create, remove, release, repair, or retarget worktrees/i,
+      prompt,
+    );
+  }
+});
 
 test("behavior evaluator requires two relevant questions and rejects concrete advice", async () => {
   const grill = await loadScenario("grill-me", scenariosDirectory);
