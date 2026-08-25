@@ -192,7 +192,7 @@ For a non-pool workspace, use the cleanup mechanism owned by the workflow select
 - Platform-native worktree: use the platform's workspace-exit or cleanup mechanism.
 - Native subagent with `worktree: true`: return from the child and let the subagent platform perform its managed cleanup.
 
-Do not substitute direct worktree lifecycle commands when the repository has no pool configuration. If cleanup is unavailable or refused because files are uncommitted, preserve the workspace and show the user the files at risk before asking how to proceed.
+Do not substitute direct worktree lifecycle commands when no pool claim is available. If cleanup is unavailable or refused because files are uncommitted, preserve the workspace and show the user the files at risk before asking how to proceed.
 
 ## Quick Reference
 

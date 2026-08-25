@@ -264,6 +264,7 @@ test("worktree selection role-gates children before parent pool authority", asyn
   );
   assert.match(childGate, /PI_SUBAGENT_DEPTH[^\n]*>\s*0|child role/i);
   assert.match(childGate, /exact[\s\S]*parent-provided workspace/i);
+  assert.match(childGate, /retain[\s\S]*assigned cwd/i);
   assert.match(
     childGate,
     /never[\s\S]*worktree_pool[\s\S]*including[^\n]*list[^\n]*acquire/i,
@@ -273,11 +274,15 @@ test("worktree selection role-gates children before parent pool authority", asyn
   assert.doesNotMatch(parentAuthority, /worktree_pool list/i);
   assert.match(
     parentAuthority,
+    /native[\s\S]*worktree_pool[\s\S]*plan's repository identifier[\s\S]*worktree_pool acquire/i,
+  );
+  assert.match(
+    parentAuthority,
     /previously[\s\S]*ledger[\s\S]*exact[\s\S]*path[\s\S]*claim ID[\s\S]*retain/i,
   );
   assert.match(
     parentAuthority,
-    /otherwise[\s\S]*worktree_pool acquire[\s\S]*requested branch/i,
+    /otherwise[\s\S]*requested branch[\s\S]*worktree_pool acquire/i,
   );
   assert.match(
     parentAuthority,
@@ -294,30 +299,45 @@ test("worktree selection role-gates children before parent pool authority", asyn
 });
 
 test("portable and child-owned workspace alternatives remain intact", async () => {
-  const usingWorktrees = await readFile(
-    join(
-      repository,
-      "skills",
-      "superpowers",
-      "using-git-worktrees",
-      "SKILL.md",
-    ),
-    "utf8",
+  const superpowers = join(repository, "skills", "superpowers");
+  const workflowPaths = [
+    "using-git-worktrees/SKILL.md",
+    "subagent-driven-development/SKILL.md",
+    "executing-plans/SKILL.md",
+    "finishing-a-development-branch/SKILL.md",
+  ];
+  const workflows = await Promise.all(
+    workflowPaths.map((path) => readFile(join(superpowers, path), "utf8")),
   );
-  const configured = markdownSection(
+  const usingWorktrees = workflows[0];
+  const availablePool = markdownSection(
     usingWorktrees,
-    "Configured repository and parent session: use the pool",
+    "Available pool capability and parent session: use the pool",
   );
-  const unconfigured = markdownSection(
+  const unavailablePool = markdownSection(
     usingWorktrees,
-    "Unconfigured repository: choose an explicit non-pool workflow",
+    "Unavailable pool capability: choose an explicit non-pool workflow",
   );
 
-  assert.match(configured, /assigned child[\s\S]*never acquire or release/i);
-  assert.match(unconfigured, /native[\s\S]*worktree: true/i);
-  assert.match(unconfigured, /already provided/i);
-  assert.match(unconfigured, /user's consent[\s\S]*current checkout/i);
-  assert.doesNotMatch(unconfigured, /git worktree (?:add|remove|move|repair)/i);
+  assert.match(
+    availablePool,
+    /native[\s\S]*worktree_pool[\s\S]*plan's repository identifier[\s\S]*requested branch[\s\S]*worktree_pool acquire/i,
+  );
+  assert.match(availablePool, /assigned child[\s\S]*never acquire or release/i);
+  assert.match(unavailablePool, /native[\s\S]*worktree: true/i);
+  assert.match(unavailablePool, /already provided/i);
+  assert.match(unavailablePool, /user's consent[\s\S]*current checkout/i);
+  assert.doesNotMatch(
+    unavailablePool,
+    /git worktree (?:add|remove|move|repair)/i,
+  );
+  for (const [index, contents] of workflows.entries()) {
+    assert.doesNotMatch(
+      contents,
+      /\b(?:configured|unconfigured|configuration|enrolled|enrollment)\b/i,
+      workflowPaths[index],
+    );
+  }
 });
 
 test("pooled execution ledgers and delegates preserve exact workspace identity", async () => {

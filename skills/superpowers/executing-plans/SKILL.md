@@ -15,7 +15,7 @@ Load plan, review critically, execute all tasks, report when complete.
 
 ## Workspace Contract
 
-Use superpowers:using-git-worktrees before loading the plan. A configured parent acquires a pool claim with `worktree_pool acquire`; an assigned child never acquires or releases one. An unconfigured repository requires an explicit non-pool workflow instead of direct worktree lifecycle commands.
+Use superpowers:using-git-worktrees before loading the plan. A parent with the pool capability passes the plan's repository identifier and requested branch to `worktree_pool acquire`; an assigned child never acquires or releases one. An unavailable pool capability requires an explicit non-pool workflow instead of direct worktree lifecycle commands.
 
 For pooled execution, durably record `Pool workspace: <absolute path>` and `Pool claim: <claim ID>` in the plan's progress ledger before implementation. The implementer, every reviewer, and the finishing workflow must use that exact same workspace. After compaction, recover the same workspace from the ledger's absolute path and claim ID; never infer it from the branch or acquire a replacement claim.
 

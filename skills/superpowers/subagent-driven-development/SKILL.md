@@ -148,7 +148,7 @@ On acquisition, write the exact returned absolute path and claim ID to the plan 
 
 This exception is only for the exact foreground pooled delegation above. A subagent call with omitted `async` must use `worktree: true`. A `workflowScript` call must use `worktree: true`. Multi-child workflows, background children, and mismatched paths are not pooled writers. Native `worktree: true` remains available and keeps its platform-managed lifecycle.
 
-If the repository is unconfigured, select an explicit non-pool workflow from superpowers:using-git-worktrees; there is no slot to acquire and no pooled delegation path.
+If the pool capability is unavailable, select an explicit non-pool workflow from superpowers:using-git-worktrees; there is no slot to acquire and no pooled delegation path.
 
 Conversation memory does not survive compaction. In real sessions,
 controllers that lost their place have re-dispatched entire completed task

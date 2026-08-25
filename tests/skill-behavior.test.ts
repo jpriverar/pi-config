@@ -96,6 +96,7 @@ test("pooled lifecycle pressure scenario role-gates children and keeps parent au
   );
 
   assert.match(childGate, /exact[\s\S]*parent-provided workspace/i);
+  assert.match(childGate, /retain[\s\S]*assigned cwd/i);
   assert.match(
     childGate,
     /never invoke[\s\S]*pool action[\s\S]*list[\s\S]*acquire/i,
@@ -108,6 +109,10 @@ test("pooled lifecycle pressure scenario role-gates children and keeps parent au
   assert.match(
     parentAuthority,
     /previously[\s\S]*ledger[\s\S]*path[\s\S]*claim ID[\s\S]*otherwise[\s\S]*acquire/i,
+  );
+  assert.match(
+    parentAuthority,
+    /native[\s\S]*worktree_pool[\s\S]*plan's repository identifier[\s\S]*worktree_pool acquire/i,
   );
   assert.match(
     parentAuthority,
