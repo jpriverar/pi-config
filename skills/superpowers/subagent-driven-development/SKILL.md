@@ -124,9 +124,31 @@ digraph process {
 ## Setup
 
 Ensure the work happens in an isolated workspace: use
-superpowers:using-git-worktrees to create one or verify the existing one.
+superpowers:using-git-worktrees to acquire one or verify the existing one.
 Never start implementation on a main/master branch without your human
 partner's explicit consent.
+
+### Pooled delegation
+
+When this parent holds a pool claim, dispatch exactly one foreground worker into the acquired path:
+
+```ts
+subagent({
+  agent: "worker",
+  task: "...",
+  cwd: pooledPath,
+  worktree: false,
+  async: false,
+})
+```
+
+The exact `cwd`, `worktree: false`, and explicit `async: false` are all required. The assigned child workspace is parent-owned; children never acquire or release pool claims and never create, remove, repair, or retarget worktrees. The parent alone releases the claim through the finishing workflow.
+
+On acquisition, write the exact returned absolute path and claim ID to the plan ledger; a previously ledgered exact pair may be retained by the same parent/session. That pair is the pooled workspace identity. Use it unchanged for every implementer, task reviewer, re-reviewer, final reviewer, and the finishing workflow; never infer ownership from a linked path or active listing, rediscover a path from a branch name, or acquire a replacement between roles.
+
+This exception is only for the exact foreground pooled delegation above. A subagent call with omitted `async` must use `worktree: true`. A `workflowScript` call must use `worktree: true`. Multi-child workflows, background children, and mismatched paths are not pooled writers. Native `worktree: true` remains available and keeps its platform-managed lifecycle.
+
+If the repository is unconfigured, select an explicit non-pool workflow from superpowers:using-git-worktrees; there is no slot to acquire and no pooled delegation path.
 
 Conversation memory does not survive compaction. In real sessions,
 controllers that lost their place have re-dispatched entire completed task
@@ -147,9 +169,14 @@ a ledger file, not only in todos.
   plan's progress: leave it in place and start your own, fresh.
 - Create the ledger with its identity as the first line:
   `# SDD ledger — plan: <plan file path>`.
-- The ledger is your recovery map: the commits it names exist in git even
-  when your context no longer remembers creating them. After compaction,
-  trust the ledger and `git log` over your own recollection.
+- For pooled execution, durably add `Pool workspace: <absolute path>` and
+  `Pool claim: <claim ID>` before the first dispatch. Every role uses that
+  exact pair through finishing.
+- The ledger is your recovery map: the commits and pooled identity it names
+  exist even when your context no longer remembers them. After compaction,
+  trust the ledger and `git log` over your own recollection. Resume in the
+  same workspace from the ledger's absolute path and claim ID; do not acquire
+  a new claim or dispatch into a newly inferred path.
 - `git clean -fdx` will destroy the workspace (it's git-ignored scratch); if
   that happens, recover from `git log`.
 
@@ -280,6 +307,7 @@ and fix-round diffs need it.
 - Record the implementer's agent identity from the dispatch result —
   fix-loop rounds 1-3 resume this agent.
 - Never dispatch multiple implementation subagents in parallel (conflicts).
+- For a pooled task, use the exact foreground call in Pooled delegation. Any omitted `async` requires `worktree: true`, and any `workflowScript` requires `worktree: true`.
 
 Template: [implementer-prompt.md](implementer-prompt.md)
 
