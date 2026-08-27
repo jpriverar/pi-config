@@ -14,6 +14,8 @@ type Handler = (event?: any, context?: any) => Promise<any> | any;
 type Tool = {
   name: string;
   description: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
   parameters: { required?: string[] };
   execute: (id: string, params: any) => Promise<any>;
 };
@@ -716,9 +718,36 @@ test("mutation tools preserve schemas, arguments, and decoded JSON output", asyn
 
   assert.deepEqual(file.parameters.required, ["title", "why"]);
   assert.deepEqual(close.parameters.required, ["id", "reason"]);
-  assert.match(file.description, /explicitly approved/);
-  assert.match(update.description, /No approval needed/);
-  assert.match(close.description, /No approval needed/);
+  assert.equal(
+    file.description,
+    "Create an explicitly approved work item in the Beads store.",
+  );
+  assert.equal(file.promptSnippet, "Create an approved Beads work item");
+  assert.deepEqual(file.promptGuidelines, [
+    "Use file_issue only after the user explicitly approves creating the work item; never turn optional ideas into tracked commitments.",
+  ]);
+  assert.equal(
+    update.description,
+    "Change the status, labels, or notes of an existing Beads work item.",
+  );
+  assert.equal(
+    update.promptSnippet,
+    "Claim or update an existing Beads work item",
+  );
+  assert.deepEqual(update.promptGuidelines, [
+    "Use update_issue to claim an approved item when substantial work starts, record meaningful phase changes, and mark blockers or deferrals.",
+  ]);
+  assert.equal(
+    close.description,
+    "Close a genuinely completed and verified Beads work item with a reason.",
+  );
+  assert.equal(
+    close.promptSnippet,
+    "Close a completed and verified Beads work item",
+  );
+  assert.deepEqual(close.promptGuidelines, [
+    "Use close_issue only after the work item is genuinely complete and verified.",
+  ]);
 
   const filed = await file.execute("call-1", {
     title: "New task",

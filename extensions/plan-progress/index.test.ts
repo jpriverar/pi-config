@@ -9,6 +9,9 @@ type RegisteredAction = {
   handler: (...args: any[]) => Promise<unknown> | unknown;
 };
 type RegisteredTool = {
+  description: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
   execute: (...args: any[]) => Promise<{ content: Array<{ text: string }> }>;
 };
 
@@ -110,6 +113,38 @@ async function runCommand(
   assert.ok(command, `${name} is registered`);
   await command.handler("", harness.context);
 }
+
+test("plan and spec tools expose concise system-prompt metadata", () => {
+  const harness = createHarness();
+  const setPlan = harness.tools.get("set_plan");
+  const setSpec = harness.tools.get("set_spec");
+  assert.ok(setPlan);
+  assert.ok(setSpec);
+
+  assert.equal(
+    setPlan.description,
+    "Register an active plan and display its live progress widget.",
+  );
+  assert.equal(
+    setPlan.promptSnippet,
+    "Register implementation plans and show live progress",
+  );
+  assert.deepEqual(setPlan.promptGuidelines, [
+    "Use set_plan after committing to a numbered implementation plan for substantial multi-step work; skip it for quick answers and bounded checks.",
+  ]);
+
+  assert.equal(
+    setSpec.description,
+    "Store a durable design or specification for side-panel display.",
+  );
+  assert.equal(
+    setSpec.promptSnippet,
+    "Store durable designs or specifications for side-panel access",
+  );
+  assert.deepEqual(setSpec.promptGuidelines, [
+    "Use set_spec when a design or specification becomes the durable reference for later implementation; skip scratch analysis.",
+  ]);
+});
 
 test("set_plan stores ordered steps and markdown", async () => {
   const harness = createHarness();

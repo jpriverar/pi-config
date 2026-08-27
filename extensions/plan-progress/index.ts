@@ -199,8 +199,11 @@ export default function planProgress(pi: ExtensionAPI) {
     name: "set_plan",
     label: "Set plan",
     description:
-      "Register an active plan for progress tracking. Call this after producing " +
-      "a numbered implementation plan so the user sees a live progress widget.",
+      "Register an active plan and display its live progress widget.",
+    promptSnippet: "Register implementation plans and show live progress",
+    promptGuidelines: [
+      "Use set_plan after committing to a numbered implementation plan for substantial multi-step work; skip it for quick answers and bounded checks.",
+    ],
     parameters: Type.Object({
       steps: Type.Array(Type.String(), {
         description: "Ordered list of step descriptions.",
@@ -283,8 +286,12 @@ export default function planProgress(pi: ExtensionAPI) {
     name: "set_spec",
     label: "Set spec",
     description:
-      "Store a spec or design document for side-panel display. The user can " +
-      "view it anytime via Ctrl+Alt+S without scrolling back through conversation.",
+      "Store a durable design or specification for side-panel display.",
+    promptSnippet:
+      "Store durable designs or specifications for side-panel access",
+    promptGuidelines: [
+      "Use set_spec when a design or specification becomes the durable reference for later implementation; skip scratch analysis.",
+    ],
     parameters: Type.Object({
       markdown: Type.String({
         description: "Full spec/design document in markdown.",

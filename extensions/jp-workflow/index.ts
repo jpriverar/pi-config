@@ -614,9 +614,11 @@ export default function jpWorkflow(pi: ExtensionAPI) {
   pi.registerTool({
     name: "file_issue",
     label: "File issue",
-    description:
-      "File a work item in the Beads store. Only call this after the user has explicitly approved " +
-      "the issue in conversation. Never file speculatively or in bulk without approval.",
+    description: "Create an explicitly approved work item in the Beads store.",
+    promptSnippet: "Create an approved Beads work item",
+    promptGuidelines: [
+      "Use file_issue only after the user explicitly approves creating the work item; never turn optional ideas into tracked commitments.",
+    ],
     parameters: Type.Object({
       title: Type.String({ description: "One line, imperative." }),
       why: Type.String({
@@ -658,10 +660,11 @@ export default function jpWorkflow(pi: ExtensionAPI) {
     name: "update_issue",
     label: "Update issue",
     description:
-      "Advance or annotate an issue in the Beads store: status, labels, or a note. No approval " +
-      "needed — this records work that already happened, not a new obligation. Claim an issue " +
-      "(status: 'in_progress') when starting it; mark it 'blocked' when it blocks. To close an " +
-      "issue, use close_issue instead — closing requires a reason and isn't handled here.",
+      "Change the status, labels, or notes of an existing Beads work item.",
+    promptSnippet: "Claim or update an existing Beads work item",
+    promptGuidelines: [
+      "Use update_issue to claim an approved item when substantial work starts, record meaningful phase changes, and mark blockers or deferrals.",
+    ],
     parameters: Type.Object({
       id: Type.String({ description: "Issue id, for example jp-abc." }),
       status: Type.Optional(
@@ -735,8 +738,11 @@ export default function jpWorkflow(pi: ExtensionAPI) {
     name: "close_issue",
     label: "Close issue",
     description:
-      "Close an issue in the Beads store. No approval needed, but only close work that is " +
-      "genuinely done and verified — a wrongly closed issue is lost work. Always pass a reason.",
+      "Close a genuinely completed and verified Beads work item with a reason.",
+    promptSnippet: "Close a completed and verified Beads work item",
+    promptGuidelines: [
+      "Use close_issue only after the work item is genuinely complete and verified.",
+    ],
     parameters: Type.Object({
       id: Type.String({ description: "Issue id, for example jp-abc." }),
       reason: Type.String({
