@@ -172,14 +172,13 @@ test("keeps autocomplete outside the prompt background", async () => {
   assert.ok(!alphaLine.includes(BACKGROUND));
 });
 
-test("renders only the disk-space extension status", async () => {
+test("keeps the custom footer empty", async () => {
   const harness = createHarness();
   await start(harness);
-  const diskStatus = "\x1b[33mdisk 79.5G\x1b[39m";
   const footerData = {
     getExtensionStatuses: () =>
       new Map([
-        ["disk-space", diskStatus],
+        ["disk-space", "disk 79.5G"],
         ["other-status", "hidden"],
       ]),
   };
@@ -189,8 +188,7 @@ test("renders only the disk-space extension status", async () => {
     footerData,
   );
 
-  assert.deepEqual(footer.render(80), [diskStatus]);
-  assert.ok(footer.render(6).every((line: string) => visibleWidth(line) <= 6));
+  assert.deepEqual(footer.render(80), []);
 });
 
 test("reinstalls for shortcuts and identity changes and supports explicit prompt toggles", async () => {

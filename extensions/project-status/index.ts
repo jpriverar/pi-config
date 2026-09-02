@@ -1,3 +1,6 @@
+import { statfs as readStatfs } from "node:fs/promises";
+import { homedir } from "node:os";
+
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -13,6 +16,35 @@ import {
 import { resolveSessionProject } from "../../lib/session-project.js";
 
 const WIDGET_KEY = "project-status";
+const GiB = 1024n ** 3n;
+const POLL_INTERVAL_MILLISECONDS = 60_000;
+const WARNING_FREE_BYTES = 150n * GiB;
+const ERROR_FREE_BYTES = 80n * GiB;
+
+type DiskSpaceDependencies = {
+  homePath: string;
+  statfs(path: string): Promise<{ bavail: bigint; bsize: bigint }>;
+  setInterval(callback: () => void, milliseconds: number): unknown;
+  clearInterval(handle: unknown): void;
+};
+
+type DiskStatus = { color: ThemeColor; text: string };
+
+const runtimeDiskSpaceDependencies: DiskSpaceDependencies = {
+  homePath: homedir(),
+  async statfs(path) {
+    const stats = await readStatfs(path, { bigint: true });
+    return { bavail: stats.bavail, bsize: stats.bsize };
+  },
+  setInterval,
+  clearInterval,
+};
+
+function formatFreeGiB(freeBytes: bigint): string {
+  const wholeGiB = freeBytes / GiB;
+  const tenths = ((freeBytes % GiB) * 10n) / GiB;
+  return tenths === 0n ? `${wholeGiB}G` : `${wholeGiB}.${tenths}G`;
+}
 
 interface Counts {
   inProgress: number;
@@ -40,7 +72,10 @@ function scopeIssues(
   );
 }
 
-export default function projectStatus(pi: ExtensionAPI) {
+export default function projectStatus(
+  pi: ExtensionAPI,
+  diskDeps: DiskSpaceDependencies = runtimeDiskSpaceDependencies,
+) {
   const client = createBeadsClient(async (command, args) => {
     const result = await pi.exec(command, [...args]);
     return {
@@ -51,6 +86,8 @@ export default function projectStatus(pi: ExtensionAPI) {
   });
   let currentSessionName: string | undefined;
   let currentTaskState: TaskState = "unavailable";
+  let currentDiskStatus: DiskStatus | undefined;
+  let diskPollTimer: unknown;
   let sessionGeneration = 0;
 
   function isCurrentSession(generation: number): boolean {
@@ -155,6 +192,11 @@ export default function projectStatus(pi: ExtensionAPI) {
         rounded > 90 ? "error" : rounded > 70 ? "warning" : "dim";
       rightParts.push(theme.fg(color, `${rounded}%`));
     }
+    if (currentDiskStatus) {
+      rightParts.push(
+        theme.fg(currentDiskStatus.color, currentDiskStatus.text),
+      );
+    }
     const right = rightParts.join(theme.fg("dim", " • "));
 
     if (!left && !right) {
@@ -205,12 +247,53 @@ export default function projectStatus(pi: ExtensionAPI) {
     renderStatus(ctx, currentSessionName, currentTaskState);
   }
 
+  async function refreshDisk(
+    ctx: ExtensionContext,
+    generation: number,
+  ): Promise<void> {
+    try {
+      const stats = await diskDeps.statfs(diskDeps.homePath);
+      if (!isCurrentSession(generation)) return;
+      const freeBytes = stats.bavail * stats.bsize;
+      currentDiskStatus = {
+        color:
+          freeBytes >= WARNING_FREE_BYTES
+            ? "dim"
+            : freeBytes >= ERROR_FREE_BYTES
+              ? "warning"
+              : "error",
+        text: `disk ${formatFreeGiB(freeBytes)}`,
+      };
+    } catch {
+      if (!isCurrentSession(generation)) return;
+      currentDiskStatus = { color: "error", text: "disk ?" };
+    }
+    renderStatus(ctx, currentSessionName, currentTaskState);
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     const generation = ++sessionGeneration;
+    if (diskPollTimer) {
+      diskDeps.clearInterval(diskPollTimer);
+      diskPollTimer = undefined;
+    }
+    currentDiskStatus = undefined;
     await refresh(ctx, generation);
+    if (!isCurrentSession(generation) || ctx.mode !== "tui") return;
+    await refreshDisk(ctx, generation);
+    if (!isCurrentSession(generation)) return;
+    diskPollTimer = diskDeps.setInterval(() => {
+      void refreshDisk(ctx, generation);
+    }, POLL_INTERVAL_MILLISECONDS);
+    (diskPollTimer as { unref?: () => void }).unref?.();
   });
   pi.on("session_shutdown", async () => {
     sessionGeneration += 1;
+    currentDiskStatus = undefined;
+    if (diskPollTimer) {
+      diskDeps.clearInterval(diskPollTimer);
+      diskPollTimer = undefined;
+    }
   });
   pi.on("session_info_changed", async (_event, ctx) =>
     refresh(ctx, sessionGeneration),
