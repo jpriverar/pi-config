@@ -158,8 +158,13 @@ export default function styledEditor(pi: ExtensionAPI): void {
     // Pi wires extension shortcuts after session_start handlers finish. Reinstall
     // on the next event-loop turn so CustomEditor copies the populated handler.
     setTimeout(() => installEditor(ctx), 0);
-    ctx.ui.setFooter(() => ({
-      render: () => [],
+    ctx.ui.setFooter((_tui, _theme, footerData) => ({
+      render: (width) => {
+        const diskStatus = footerData.getExtensionStatuses().get("disk-space");
+        return diskStatus
+          ? [truncateToWidth(diskStatus, Math.max(0, width), "")]
+          : [];
+      },
       invalidate: () => {},
     }));
   });

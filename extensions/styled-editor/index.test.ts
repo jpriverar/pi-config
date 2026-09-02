@@ -172,12 +172,39 @@ test("keeps autocomplete outside the prompt background", async () => {
   assert.ok(!alphaLine.includes(BACKGROUND));
 });
 
+test("renders only the disk-space extension status", async () => {
+  const harness = createHarness();
+  await start(harness);
+  const diskStatus = "\x1b[33mdisk 79.5G\x1b[39m";
+  const footerData = {
+    getExtensionStatuses: () =>
+      new Map([
+        ["disk-space", diskStatus],
+        ["other-status", "hidden"],
+      ]),
+  };
+  const footer = harness.footerFactories.at(-1)?.(
+    {},
+    harness.context.ui.theme,
+    footerData,
+  );
+
+  assert.deepEqual(footer.render(80), [diskStatus]);
+  assert.ok(footer.render(6).every((line: string) => visibleWidth(line) <= 6));
+});
+
 test("reinstalls for shortcuts and identity changes and supports explicit prompt toggles", async () => {
   const harness = createHarness();
   await start(harness);
 
   assert.ok(harness.editorFactories.length >= 2);
-  assert.deepEqual(harness.footerFactories.at(-1)?.().render(80), []);
+  const footerData = { getExtensionStatuses: () => new Map() };
+  assert.deepEqual(
+    harness.footerFactories
+      .at(-1)?.({}, harness.context.ui.theme, footerData)
+      .render(80),
+    [],
+  );
 
   const beforeModel = harness.editorFactories.length;
   await harness.handlers.get("model_select")?.({}, harness.context);
