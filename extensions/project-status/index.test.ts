@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
 import test from "node:test";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -8,6 +7,8 @@ import type { BeadsIssue } from "../../lib/beads.js";
 import projectStatus from "./index.js";
 
 process.env.BEADS_DIR = "/tmp/personal/.beads";
+
+const GiB = 1024n ** 3n;
 
 type Handler = (event?: unknown, context?: any) => Promise<unknown> | unknown;
 type Query = "active" | "ready" | "closed";
@@ -41,11 +42,14 @@ function createHarness(
     sessionName?: string;
     entries?: readonly Entry[];
     beforeExec?: (callNumber: number) => Promise<void>;
+    diskFreeGiB?: bigint;
+    diskUnavailable?: boolean;
   } = {},
 ) {
   const handlers = new Map<string, Handler>();
   const calls: string[][] = [];
   const staleAccesses: string[] = [];
+  const foregroundCalls: Array<[string, string]> = [];
   let stale = false;
   let thinkingLevel = "high";
   let sessionName =
@@ -93,7 +97,8 @@ function createHarness(
 
   const ui = {
     theme: {
-      fg(_color: string, text: string) {
+      fg(color: string, text: string) {
+        foregroundCalls.push([color, text]);
         return text;
       },
     },
@@ -102,6 +107,7 @@ function createHarness(
     },
   };
   const context = {
+    mode: "tui",
     sessionManager: {
       getEntries: () => options.entries ?? [],
       getSessionName: () => sessionName || undefined,
@@ -124,9 +130,20 @@ function createHarness(
     },
   };
 
-  projectStatus(pi as any);
+  projectStatus(pi as any, {
+    homePath: "/tmp",
+    async statfs() {
+      if (options.diskUnavailable) throw new Error("disk unavailable");
+      return { bavail: options.diskFreeGiB ?? 200n, bsize: GiB };
+    },
+    setInterval() {
+      return { unref() {} };
+    },
+    clearInterval() {},
+  });
   return {
     calls,
+    foregroundCalls,
     context,
     handlers,
     markStale() {
@@ -306,17 +323,10 @@ test("legacy exact-name sessions still drive identity and scope", async () => {
   assert.doesNotMatch(harness.render(), /blocked|ready|waiting/);
 });
 
-test("renders model, thinking, and context without a disk channel", async () => {
-  await assert.rejects(
-    access(new URL("./disk-status-channel.ts", import.meta.url)),
-    {
-      code: "ENOENT",
-    },
-  );
-
+test("renders disk beside model, thinking, and context", async () => {
   const harness = createHarness();
   await start(harness);
-  assert.match(harness.render(), /Opus 4.6 • high • 32%/);
+  assert.match(harness.render(), /Opus 4.6 • high • 32% • disk 200G/);
   assert.match(harness.render(), /pi-setup/);
 
   harness.setModel("Claude Sonnet 4.6 (AI Gateway, 1M)");
@@ -331,6 +341,31 @@ test("renders model, thinking, and context without a disk channel", async () => 
   await harness.handlers.get("session_info_changed")?.({}, harness.context);
   assert.match(harness.render(), /pr-review/);
   assert.doesNotMatch(harness.render(), /pi-setup/);
+});
+
+test("keeps the disk warning thresholds and failure state", async () => {
+  for (const [diskFreeGiB, color] of [
+    [150n, "dim"],
+    [149n, "warning"],
+    [79n, "error"],
+  ] as const) {
+    const harness = createHarness({ diskFreeGiB });
+    await start(harness);
+    assert.ok(
+      harness.foregroundCalls.some(
+        (call) => call[0] === color && call[1] === `disk ${diskFreeGiB}G`,
+      ),
+    );
+  }
+
+  const unavailable = createHarness({ diskUnavailable: true });
+  await start(unavailable);
+  assert.match(unavailable.render(), /disk \?/);
+  assert.ok(
+    unavailable.foregroundCalls.some(
+      (call) => call[0] === "error" && call[1] === "disk ?",
+    ),
+  );
 });
 
 test("fits dense global status within the terminal width", async () => {
