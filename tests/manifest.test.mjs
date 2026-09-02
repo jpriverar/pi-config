@@ -6,6 +6,7 @@ const expectedExtensions = [
   "./extensions/compact-tools/index.ts",
   "./extensions/permission-gate/index.ts",
   "./extensions/plan-progress/index.ts",
+  "./extensions/disk-space-status/index.ts",
   "./extensions/styled-editor/index.ts",
   "./extensions/herdr-ask-user-bridge/index.ts",
   "./extensions/jp-workflow/index.ts",
