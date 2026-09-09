@@ -45,6 +45,7 @@ const ALL_ISSUE_STATUSES = [
   "closed",
 ] as const;
 const WORKSTREAM_LABEL_PREFIX = "workstream:";
+const PROJECT_PICKER_VISIBLE_ITEMS = 8;
 
 function primaryWorkstream(issue: ClassifiedIssue): string | undefined {
   return issue.workstreams[0];
@@ -68,6 +69,82 @@ function sameLabelSet(left: ReadonlySet<string>, right: ReadonlySet<string>) {
   return (
     left.size === right.size && [...left].every((label) => right.has(label))
   );
+}
+
+async function selectProject(
+  ctx: ExtensionContext,
+  title: string,
+  items: string[],
+): Promise<string | undefined> {
+  if (ctx.mode !== "tui" || items.length <= PROJECT_PICKER_VISIBLE_ITEMS) {
+    return ctx.ui.select(title, items);
+  }
+
+  return ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) => {
+    let selectedIndex = 0;
+    const visibleCount = Math.min(PROJECT_PICKER_VISIBLE_ITEMS, items.length);
+
+    return {
+      render(width: number) {
+        const contentWidth = Math.max(1, width - 2);
+        const startIndex = Math.max(
+          0,
+          Math.min(
+            selectedIndex - Math.floor(visibleCount / 2),
+            items.length - visibleCount,
+          ),
+        );
+        const endIndex = Math.min(startIndex + visibleCount, items.length);
+        const lines = [
+          theme.fg(
+            "accent",
+            theme.bold(truncateToWidth(title, Math.max(1, width))),
+          ),
+        ];
+
+        for (let index = startIndex; index < endIndex; index++) {
+          const item = truncateToWidth(items[index], contentWidth);
+          lines.push(
+            index === selectedIndex
+              ? theme.fg("accent", `→ ${item}`)
+              : `  ${theme.fg("text", item)}`,
+          );
+        }
+
+        const position =
+          items.length > visibleCount
+            ? ` • ${selectedIndex + 1}/${items.length}`
+            : "";
+        lines.push(
+          theme.fg(
+            "dim",
+            truncateToWidth(
+              `↑↓ navigate • enter select • esc cancel${position}`,
+              Math.max(1, width),
+            ),
+          ),
+        );
+        return lines;
+      },
+      invalidate() {},
+      handleInput(data: string) {
+        if (keybindings.matches(data, "tui.select.up") || data === "k") {
+          selectedIndex = Math.max(0, selectedIndex - 1);
+          tui.requestRender();
+        } else if (
+          keybindings.matches(data, "tui.select.down") ||
+          data === "j"
+        ) {
+          selectedIndex = Math.min(items.length - 1, selectedIndex + 1);
+          tui.requestRender();
+        } else if (keybindings.matches(data, "tui.select.confirm")) {
+          done(items[selectedIndex]);
+        } else if (keybindings.matches(data, "tui.select.cancel")) {
+          done(undefined);
+        }
+      },
+    };
+  });
 }
 
 export default function tasksOverlay(pi: ExtensionAPI) {
@@ -466,7 +543,7 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       namesByLabel.set(label, project.name);
     }
 
-    const selected = await ctx.ui.select("Switch project", labels);
+    const selected = await selectProject(ctx, "Switch project", labels);
     if (selected === undefined) return;
 
     const current = resolveSessionProject(ctx.sessionManager);
