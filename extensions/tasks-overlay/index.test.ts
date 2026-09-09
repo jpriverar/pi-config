@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { Key } from "@earendil-works/pi-tui";
+
 import type { BeadsExecResult, BeadsIssue } from "../../lib/beads.js";
 import tasksOverlay from "./index.js";
 
@@ -51,6 +53,7 @@ function createHarness(
     registrySetResult?: BeadsExecResult;
     registrySetMutates?: boolean;
     select?: (items: string[]) => string | undefined;
+    customInputs?: string[];
     input?: (title: string, placeholder?: string) => string | undefined;
     confirm?: (title: string, message: string) => boolean;
   } = {},
@@ -67,6 +70,7 @@ function createHarness(
   const inputs: Array<{ title: string; placeholder?: string }> = [];
   const confirmations: Array<{ title: string; message: string }> = [];
   let rendered = "";
+  const renders: string[] = [];
   let sessionName =
     options.sessionName === null
       ? undefined
@@ -212,6 +216,7 @@ function createHarness(
     },
   };
   const context = {
+    mode: "tui",
     sessionManager: {
       getEntries: () => entries,
       getSessionName: () => sessionName,
@@ -223,8 +228,35 @@ function createHarness(
         notifications.push({ message, type });
       },
       async custom(factory: Function) {
-        const component = factory({ requestRender() {} }, theme, {}, () => {});
-        rendered = component.render(100).join("\n");
+        let result: unknown;
+        let component: any;
+        const render = () => {
+          rendered = component.render(100).join("\n");
+          renders.push(rendered);
+        };
+        component = factory(
+          { requestRender: render },
+          theme,
+          {
+            matches(data: string, action: string) {
+              if (action === "tui.select.up") return data === Key.up;
+              if (action === "tui.select.down") return data === Key.down;
+              if (action === "tui.select.confirm") return data === Key.enter;
+              if (action === "tui.select.cancel") return data === Key.escape;
+              return false;
+            },
+          },
+          (value: unknown) => {
+            result = value;
+          },
+        );
+        render();
+
+        for (const input of options.customInputs ?? []) {
+          component.handleInput(input);
+        }
+
+        return result;
       },
       async select(title: string, items: string[]) {
         selections.push({ title, items });
@@ -251,6 +283,7 @@ function createHarness(
     notifications,
     renamedSessions,
     render: () => rendered,
+    renders,
     selections,
     inputs,
     confirmations,
@@ -453,6 +486,25 @@ test("project picker keeps closed-only projects available for new work", async (
     "Active Project — In progress: 0 • Blocked: 0 • Ready: 0 • Waiting: 1",
     "Closed Project — No open tasks",
   ]);
+});
+
+test("project picker stays bounded while selecting an off-screen project", async () => {
+  const issues = Array.from({ length: 16 }, (_, index) =>
+    issue(`closed-${index}`, "closed", [
+      `workstream:Project ${String(index).padStart(2, "0")}`,
+    ]),
+  );
+  const harness = createHarness({
+    sessionName: null,
+    issues,
+    customInputs: [...Array(16).fill(Key.down), Key.enter],
+  });
+
+  await switchProject(harness);
+
+  assert.ok(harness.renders.length > 1);
+  assert.ok(harness.renders.every((render) => render.split("\n").length <= 10));
+  assert.deepEqual(harness.appendedEntries, [projectEntry("Project 15")]);
 });
 
 test("selecting an explicit current project is a case-insensitive no-op", async () => {
