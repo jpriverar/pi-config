@@ -16,6 +16,7 @@ import {
   createBeadsClient,
   normalizeBeadsLabel,
   type ClassifiedIssue,
+  type IssueStatus,
   type Readiness,
 } from "../../lib/beads.js";
 import {
@@ -87,8 +88,9 @@ export default function tasksOverlay(pi: ExtensionAPI) {
 
   async function getIssues(
     project?: string,
+    statuses?: readonly IssueStatus[],
   ): Promise<ClassifiedIssue[] | undefined> {
-    const listed = await client.listIssues();
+    const listed = await client.listIssues(statuses);
     if (!listed.ok) return undefined;
 
     const ready = await client.listReadyIssueIds();
@@ -412,7 +414,7 @@ export default function tasksOverlay(pi: ExtensionAPI) {
   }
 
   async function switchProject(ctx: ExtensionContext): Promise<void> {
-    const issues = await getIssues();
+    const issues = await getIssues(undefined, ALL_ISSUE_STATUSES);
     if (!issues) {
       ctx.ui.notify("Projects unavailable", "warning");
       return;
@@ -438,7 +440,9 @@ export default function tasksOverlay(pi: ExtensionAPI) {
         };
         projects.set(key, project);
       }
-      project.counts[issue.readiness]++;
+      if (issue.status !== "closed" && issue.status !== "deferred") {
+        project.counts[issue.readiness]++;
+      }
     }
 
     const global = "Global / no project";
@@ -450,7 +454,14 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       return leftName < rightName ? -1 : leftName > rightName ? 1 : 0;
     });
     for (const project of sortedProjects) {
-      const label = `${project.name} — In progress: ${project.counts.in_progress} • Blocked: ${project.counts.blocked} • Ready: ${project.counts.ready} • Waiting: ${project.counts.waiting}`;
+      const activeCount = Object.values(project.counts).reduce(
+        (total, count) => total + count,
+        0,
+      );
+      const label =
+        activeCount === 0
+          ? `${project.name} — No open tasks`
+          : `${project.name} — In progress: ${project.counts.in_progress} • Blocked: ${project.counts.blocked} • Ready: ${project.counts.ready} • Waiting: ${project.counts.waiting}`;
       labels.push(label);
       namesByLabel.set(label, project.name);
     }
