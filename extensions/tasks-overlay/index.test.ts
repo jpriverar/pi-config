@@ -437,7 +437,7 @@ test("project picker offers only Global when no issue has a workstream", async (
   assert.deepEqual(harness.renamedSessions, []);
 });
 
-test("project picker excludes workstreams represented only by closed tasks", async () => {
+test("project picker keeps closed-only projects available for new work", async () => {
   const harness = createHarness({
     sessionName: null,
     issues: [
@@ -448,10 +448,11 @@ test("project picker excludes workstreams represented only by closed tasks", asy
 
   await switchProject(harness);
 
-  assert.deepEqual(
-    harness.selections[0].items.map((item) => item.split(" —")[0]),
-    [GLOBAL_PROJECT, "Active Project"],
-  );
+  assert.deepEqual(harness.selections[0].items, [
+    GLOBAL_PROJECT,
+    "Active Project — In progress: 0 • Blocked: 0 • Ready: 0 • Waiting: 1",
+    "Closed Project — No open tasks",
+  ]);
 });
 
 test("selecting an explicit current project is a case-insensitive no-op", async () => {
@@ -950,7 +951,7 @@ for (const [name, message] of [
   });
 }
 
-for (const unavailable of ["active", "ready"] as const) {
+for (const unavailable of ["all", "ready"] as const) {
   test(`${unavailable} query failure warns and does not rename the project`, async () => {
     const harness = createHarness({
       issues: [issue("one")],
