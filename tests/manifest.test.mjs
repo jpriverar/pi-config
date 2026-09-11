@@ -18,7 +18,10 @@ const expectedSkills = [
   "./skills/grill-me",
   "./skills/thinking-partner",
   "./skills/handoff",
+  "./skills/thermo-nuclear-code-quality-review",
 ];
+
+const expectedPrompts = ["./prompts/review.md"];
 
 const expectedThemes = [
   "./themes/modus-vivendi-tinted.json",
@@ -35,6 +38,7 @@ test("package manifest exposes the public Pi package contract", async () => {
   assert.equal(pkg.engines.node, ">=22.19.0");
   assert.deepEqual(pkg.pi.extensions, expectedExtensions);
   assert.deepEqual(pkg.pi.skills, expectedSkills);
+  assert.deepEqual(pkg.pi.prompts, expectedPrompts);
   assert.deepEqual(pkg.pi.themes, expectedThemes);
   assert.deepEqual(pkg.peerDependencies, {
     "@earendil-works/pi-coding-agent": "*",

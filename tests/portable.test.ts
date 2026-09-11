@@ -119,7 +119,7 @@ test("package scripts cover the bootstrap release gates", () => {
   );
   assert.equal(
     pkg.scripts["format:check"],
-    "prettier --check package.json tsconfig.json 'extensions/**/*.ts' 'lib/**/*.ts' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
+    "prettier --check package.json tsconfig.json 'extensions/**/*.ts' 'lib/**/*.ts' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md skills/thermo-nuclear-code-quality-review/SKILL.md 'prompts/*.md' 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
   );
   assert.match(pkg.scripts["verify:skills"], /--mode baseline/);
   assert.match(pkg.scripts["verify:skills"], /--mode package/);
@@ -516,10 +516,34 @@ test("rejects runtime-data paths", async (t) => {
   }
 });
 
+test("accepts manifest-declared prompt templates", () => {
+  const fixture = createFixture({
+    "package.json": `${JSON.stringify(
+      {
+        name: "fixture",
+        version: "1.0.0",
+        pi: { prompts: ["./prompts/review.md"] },
+      },
+      null,
+      2,
+    )}\n`,
+    "prompts/review.md": "Review $ARGUMENTS\n",
+  });
+
+  const result = fixture.run();
+
+  assert.equal(result.status, 0, String(result.stderr));
+});
+
 test("rejects missing manifest resources and unknown top-level paths", async (t) => {
-  await t.test("missing resource", () => {
+  await t.test("missing theme resource", () => {
     assertRejected({
       "package.json": `${JSON.stringify({ name: "fixture", version: "1.0.0", pi: { themes: ["./themes/missing.json"] } }, null, 2)}\n`,
+    });
+  });
+  await t.test("missing prompt resource", () => {
+    assertRejected({
+      "package.json": `${JSON.stringify({ name: "fixture", version: "1.0.0", pi: { prompts: ["./prompts/missing.md"] } }, null, 2)}\n`,
     });
   });
   await t.test("unknown root", () => {

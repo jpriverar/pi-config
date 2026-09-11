@@ -32,6 +32,7 @@ const approvedRootDirectories = new Set([
   ".github",
   "extensions",
   "lib",
+  "prompts",
   "scripts",
   "skills",
   "tests",
@@ -317,7 +318,7 @@ function validateManifest(root, entries, errors) {
     return;
   }
   const tracked = new Set(entries.map((entry) => entry.path));
-  for (const type of ["extensions", "skills", "themes"]) {
+  for (const type of ["extensions", "prompts", "skills", "themes"]) {
     for (const resource of pkg.pi?.[type] ?? []) {
       if (typeof resource !== "string") {
         report(errors, "package.json", `${type} resource is not a string`);

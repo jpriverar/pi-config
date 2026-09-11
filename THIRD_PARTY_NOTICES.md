@@ -31,3 +31,12 @@ and are licensed under the MIT License. A copy of the license is included at
 `skills/superpowers/LICENSE`.
 
 Source: https://github.com/obra/superpowers
+
+## Cursor Thermo-Nuclear Code Quality Review
+
+The `thermo-nuclear-code-quality-review` skill is adapted from Cursor's
+`cursor-team-kit` skill, copyright 2026 Cursor and licensed under the MIT
+License. The adaptation is pinned to upstream revision `6e3d2ea`.
+
+Source: https://github.com/cursor/plugins/blob/6e3d2ea/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md
+License: https://github.com/cursor/plugins/blob/6e3d2ea/cursor-team-kit/LICENSE

@@ -27,7 +27,12 @@ import {
 import { fileURLToPath } from "node:url";
 
 const scenarioTimeoutMs = 120_000;
-const skillNames = ["grill-me", "thinking-partner", "handoff"] as const;
+const skillNames = [
+  "grill-me",
+  "thinking-partner",
+  "handoff",
+  "thermo-nuclear-code-quality-review",
+] as const;
 type SkillName = (typeof skillNames)[number];
 type Mode = "baseline" | "package";
 

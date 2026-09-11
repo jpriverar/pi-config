@@ -25,7 +25,9 @@ const publicResources = {
     "./skills/grill-me",
     "./skills/thinking-partner",
     "./skills/handoff",
+    "./skills/thermo-nuclear-code-quality-review",
   ],
+  prompts: ["./prompts/review.md"],
   themes: ["./themes/modus-vivendi-tinted.json", "./themes/gold-rush.json"],
 };
 
