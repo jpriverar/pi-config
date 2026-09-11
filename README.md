@@ -19,13 +19,15 @@ Any clone path is valid; whichever checkout you bootstrap becomes the local
 package source that Pi loads.
 
 The script installs and owns Node.js 22.19.0 via Volta, Pi 0.84.1, this
-checkout as the local Pi package source, and five public npm package sources:
+checkout as the local Pi package source, five public npm package sources, and
+upstream Superpowers:
 
 - `npm:pi-mcp-adapter@2.26.0`
 - `npm:pi-subagents@0.50.0`
 - `npm:context-mode@1.0.169`
 - `npm:pi-markdown-preview@0.14.1`
 - `npm:@juicesharp/rpiv-ask-user-question@2.6.1`
+- `git:github.com/obra/superpowers`
 
 It reconciles reviewed settings in `$HOME/.pi/agent`, including the
 `gold-rush` theme, manages one marker-delimited shell block for `VOLTA_HOME`,
@@ -71,8 +73,8 @@ The package manifest loads:
 - eight extensions for compact built-in tools, permission gates, plan and spec
   progress, the styled editor, Herdr questionnaire state, task workflow, project
   status, and `/tasks`;
-- four skill roots: Superpowers, critical review, collaborative thinking, and
-  handoffs;
+- four skill roots: critical review, collaborative thinking, handoffs, and the
+  Thermo-Nuclear code-quality review;
 - the `modus-vivendi-tinted` and `gold-rush` themes.
 
 Use `pi config` to enable or disable individual package resources after

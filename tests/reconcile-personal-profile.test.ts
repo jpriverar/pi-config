@@ -16,6 +16,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  MANAGED_GIT_SOURCES,
   MANAGED_NPM_PACKAGES,
   reconcileSettings,
   reconcileShell,
@@ -106,6 +107,7 @@ test("fresh settings load the checkout and exact public packages", async (t) => 
     packages: [
       state.repoDir,
       ...MANAGED_NPM_PACKAGES.map(({ source }) => source),
+      ...MANAGED_GIT_SOURCES,
     ],
     hideThinkingBlock: true,
     quietStartup: true,
@@ -123,6 +125,8 @@ test("existing settings preserve unrelated entries and reruns are idempotent", a
       "npm:some-public-helper@1.2.3",
       "npm:context-mode@0.9.0",
       "npm:context-mode@0.8.0",
+      "git:github.com/obra/superpowers@main",
+      "https://github.com/obra/superpowers",
       "git:github.com/jpriverar/pi-config@old-ref",
     ],
   };
@@ -140,6 +144,7 @@ test("existing settings preserve unrelated entries and reruns are idempotent", a
   assert.deepEqual(settings.packages, [
     "npm:some-public-helper@1.2.3",
     "npm:context-mode@1.0.169",
+    ...MANAGED_GIT_SOURCES,
     state.repoDir,
     "npm:pi-mcp-adapter@2.26.0",
     "npm:pi-subagents@0.50.0",
@@ -184,6 +189,7 @@ test("unrelated provider and auth settings containing the work marker are preser
     "npm:some-public-helper@1.2.3",
     state.repoDir,
     ...MANAGED_NPM_PACKAGES.map(({ source }) => source),
+    ...MANAGED_GIT_SOURCES,
   ]);
 });
 
@@ -273,6 +279,7 @@ test("unknown public package sources are preserved", async (t) => {
     "https://github.com/someone/other-plugin",
     state.repoDir,
     ...MANAGED_NPM_PACKAGES.map(({ source }) => source),
+    ...MANAGED_GIT_SOURCES,
   ]);
 });
 
@@ -585,6 +592,28 @@ test("installed package verification rejects missing managed settings sources", 
     verifyInstalledPackages(state),
     new Error(
       `Managed core package source is not configured exactly once: ${state.repoDir}`,
+    ),
+  );
+});
+
+test("installed package verification rejects equivalent duplicate Git sources", async (t) => {
+  const state = await fixture();
+  t.after(() => rm(state.root, { recursive: true, force: true }));
+
+  const canonicalSource = MANAGED_GIT_SOURCES[0];
+  await writeSettings(state.agentDir, {
+    packages: [
+      state.repoDir,
+      ...MANAGED_NPM_PACKAGES.map(({ source }) => source),
+      canonicalSource,
+      `${canonicalSource}@main`,
+    ],
+  });
+
+  await assert.rejects(
+    verifyInstalledPackages(state),
+    new Error(
+      `Managed package source is not configured exactly once: ${canonicalSource}`,
     ),
   );
 });

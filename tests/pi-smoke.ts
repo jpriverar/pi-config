@@ -42,7 +42,6 @@ const publicManifest = {
     "./extensions/tasks-overlay/index.ts",
   ],
   skills: [
-    "./skills/superpowers",
     "./skills/grill-me",
     "./skills/thinking-partner",
     "./skills/handoff",

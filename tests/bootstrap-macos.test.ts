@@ -34,6 +34,7 @@ const managedSources = [
   "npm:context-mode@1.0.169",
   "npm:pi-markdown-preview@0.14.1",
   "npm:@juicesharp/rpiv-ask-user-question@2.6.1",
+  "git:github.com/obra/superpowers",
 ];
 const workMarker = ["data", "dog"].join("");
 

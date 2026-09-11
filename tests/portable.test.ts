@@ -33,14 +33,12 @@ function createFixture(files: Record<string, string | Buffer> = {}): {
     "README.md": "Reviewed public package. Placeholder: YOUR_TOKEN_HERE\n",
     "package.json": `${JSON.stringify({ name: "fixture", version: "1.0.0", pi: {} }, null, 2)}\n`,
     "package-lock.json": `${JSON.stringify({ packages: { "": {}, "node_modules/example": { resolved: "https://registry.npmjs.org/example/-/example-1.0.0.tgz" } } }, null, 2)}\n`,
-    "scripts/refresh-superpowers.sh": "#!/bin/sh\nset -eu\n",
   };
   for (const [path, content] of Object.entries({ ...baseFiles, ...files })) {
     const target = join(root, path);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content);
   }
-  chmodSync(join(root, "scripts", "refresh-superpowers.sh"), 0o755);
   execFileSync("git", ["add", "."], { cwd: root });
 
   return {
@@ -90,26 +88,6 @@ test("accepts only reviewed text, registry metadata, placeholders, and executabl
   assert.match(String(result.stdout), /Portable package verified/);
 });
 
-test("accepts the immutable reviewed vendor executable set", () => {
-  const reviewed = [
-    ["brainstorming", "scripts", "start-server.sh"],
-    ["brainstorming", "scripts", "stop-server.sh"],
-    ["subagent-driven-development", "scripts", "review-package"],
-    ["subagent-driven-development", "scripts", "sdd-workspace"],
-    ["subagent-driven-development", "scripts", "task-brief"],
-    ["systematic-debugging", "find-polluter.sh"],
-    ["writing-skills", "render-graphs.js"],
-  ].map((parts) => join("skills", "superpowers", ...parts));
-  const fixture = createFixture(
-    Object.fromEntries(reviewed.map((path) => [path, "#!/bin/sh\nexit 0\n"])),
-  );
-  for (const path of reviewed) chmodSync(join(fixture.root, path), 0o755);
-  execFileSync("git", ["add", "."], { cwd: fixture.root });
-
-  const result = fixture.run();
-  assert.equal(result.status, 0, String(result.stderr));
-});
-
 test("package scripts cover the bootstrap release gates", () => {
   const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8"));
 
@@ -137,12 +115,13 @@ test("README documents the public macOS bootstrap flow and boundaries", () => {
   );
   for (const snippet of [
     "Homebrew is the only prerequisite.",
-    "The script installs and owns Node.js 22.19.0 via Volta, Pi 0.84.1, this checkout as the local Pi package source, and five public npm package sources:",
+    "The script installs and owns Node.js 22.19.0 via Volta, Pi 0.84.1, this checkout as the local Pi package source, five public npm package sources, and upstream Superpowers:",
     "- `npm:pi-mcp-adapter@2.26.0`",
     "- `npm:pi-subagents@0.50.0`",
     "- `npm:context-mode@1.0.169`",
     "- `npm:pi-markdown-preview@0.14.1`",
     "- `npm:@juicesharp/rpiv-ask-user-question@2.6.1`",
+    "- `git:github.com/obra/superpowers`",
     "Any clone path is valid; whichever checkout you bootstrap becomes the local package source that Pi loads.",
     "Provider setup stays personal and interactive through `/login`.",
     "`$HOME/.pi/agent`",
@@ -351,8 +330,8 @@ test("rejects unreviewed executable modes", async (t) => {
       execFileSync("git", ["add", "scripts/other.sh"], { cwd: root });
     });
   });
-  await t.test("unknown vendor file", () => {
-    const path = join("skills", "superpowers", "unknown.sh");
+  await t.test("unknown skill file", () => {
+    const path = join("skills", "grill-me", "unknown.sh");
     assertRejected({ [path]: "#!/bin/sh\n" }, (root) => {
       chmodSync(join(root, path), 0o755);
       execFileSync("git", ["add", path], { cwd: root });
@@ -430,42 +409,6 @@ test("accepts credential placeholders and environment references", () => {
 test("rejects URLs on hosts outside the public allowlist", () => {
   const url = ["https", "://", "example", ".com/resource"].join("");
   assertRejected({ "tests/url.txt": `${url}\n` });
-});
-
-test("uses an explicit reviewed URL host set for vendored skills", async (t) => {
-  const reviewedHosts = [
-    "agentskills.io",
-    "code.claude.com",
-    "github.com",
-    "localhost",
-    "mintcdn.com",
-    "platform.claude.com",
-    "primeradiant.com",
-  ];
-  await t.test("known hosts", () => {
-    const urls = reviewedHosts
-      .map((host) => ["https", "://", host, "/reviewed"].join(""))
-      .join("\n");
-    const fixture = createFixture({
-      "skills/superpowers/reviewed.md": `${urls}\n`,
-    });
-    const result = fixture.run();
-    assert.equal(result.status, 0, String(result.stderr));
-  });
-  await t.test("unknown host", () => {
-    const url = ["https", "://", "unknown", ".invalid/reviewed"].join("");
-    assertRejected({ "skills/superpowers/reviewed.md": `${url}\n` });
-  });
-  await t.test("private path", () => {
-    const home = ["/", "Users", "/", "vendor-user", "/private"].join("");
-    assertRejected({ "skills/superpowers/reviewed.md": `${home}\n` });
-  });
-  await t.test("credential payload", () => {
-    const key = ["vendor", "sec" + "ret"].join("_");
-    assertRejected({
-      "skills/superpowers/reviewed.md": `${key}=live-value-123\n`,
-    });
-  });
 });
 
 test("validates URL strings recursively in package-lock metadata", async (t) => {

@@ -14,7 +14,6 @@ const expectedExtensions = [
 ];
 
 const expectedSkills = [
-  "./skills/superpowers",
   "./skills/grill-me",
   "./skills/thinking-partner",
   "./skills/handoff",

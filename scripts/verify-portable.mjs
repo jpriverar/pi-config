@@ -5,19 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const authoredExecutables = new Set([
-  "scripts/refresh-superpowers.sh",
-  "scripts/bootstrap-macos.sh",
-]);
-const reviewedVendorExecutables = new Set([
-  "skills/superpowers/brainstorming/scripts/start-server.sh",
-  "skills/superpowers/brainstorming/scripts/stop-server.sh",
-  "skills/superpowers/subagent-driven-development/scripts/review-package",
-  "skills/superpowers/subagent-driven-development/scripts/sdd-workspace",
-  "skills/superpowers/subagent-driven-development/scripts/task-brief",
-  "skills/superpowers/systematic-debugging/find-polluter.sh",
-  "skills/superpowers/writing-skills/render-graphs.js",
-]);
+const authoredExecutables = new Set(["scripts/bootstrap-macos.sh"]);
 const approvedRootFiles = new Set([
   ".gitignore",
   ".prettierignore",
@@ -45,18 +33,8 @@ const allowedUrlHosts = new Set([
   "opensource.org",
   "protesilaos.com",
 ]);
-const reviewedVendorPrefix = "skills/superpowers/";
 const bootstrapArtifacts = new Set(["README.md", "scripts/bootstrap-macos.sh"]);
 const forbiddenWorkMarker = ["data", "dog"].join("");
-const reviewedVendorUrlHosts = new Set([
-  "agentskills.io",
-  "code.claude.com",
-  "github.com",
-  "localhost",
-  "mintcdn.com",
-  "platform.claude.com",
-  "primeradiant.com",
-]);
 const placeholderValues = new Set([
   "placeholder",
   "redacted",
@@ -111,10 +89,7 @@ function validateTrackedPath(entry, errors) {
   if (mode === "120000") report(errors, path, "tracked symlink is forbidden");
   if (mode === "160000") report(errors, path, "Git submodule is forbidden");
   if (mode.endsWith("755")) {
-    if (
-      !authoredExecutables.has(path) &&
-      !reviewedVendorExecutables.has(path)
-    ) {
+    if (!authoredExecutables.has(path)) {
       report(errors, path, "executable mode is not reviewed");
     }
   } else if (mode !== "100644") {
@@ -262,7 +237,6 @@ function validateBootstrapArtifacts(path, text, errors) {
 }
 
 function validateUrls(path, text, errors) {
-  const vendored = path.startsWith(reviewedVendorPrefix);
   if (path === "package-lock.json") {
     let lock;
     try {
@@ -274,7 +248,7 @@ function validateUrls(path, text, errors) {
     const visit = (value) => {
       if (typeof value === "string") {
         for (const url of urlsInText(value)) {
-          validateUrl(path, url, false, errors);
+          validateUrl(path, url, errors);
         }
       } else if (Array.isArray(value)) {
         for (const item of value) visit(item);
@@ -287,11 +261,11 @@ function validateUrls(path, text, errors) {
   }
 
   for (const value of urlsInText(text)) {
-    validateUrl(path, value, vendored, errors);
+    validateUrl(path, value, errors);
   }
 }
 
-function validateUrl(path, value, vendored, errors) {
+function validateUrl(path, value, errors) {
   if (/^https?:\/\/host:port(?:\/|$)/.test(value) || value === "http://") {
     return;
   }
@@ -302,8 +276,7 @@ function validateUrl(path, value, vendored, errors) {
     report(errors, path, `invalid URL ${JSON.stringify(value)}`);
     return;
   }
-  const hosts = vendored ? reviewedVendorUrlHosts : allowedUrlHosts;
-  if (!hosts.has(url.hostname.toLowerCase())) {
+  if (!allowedUrlHosts.has(url.hostname.toLowerCase())) {
     report(errors, path, `URL host is not reviewed: ${url.hostname}`);
   }
 }

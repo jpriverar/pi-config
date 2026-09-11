@@ -56,6 +56,11 @@ export const MANAGED_NPM_PACKAGES = Object.freeze([
   },
 ]);
 
+/** @type {ReadonlyArray<string>} */
+export const MANAGED_GIT_SOURCES = Object.freeze([
+  "git:github.com/obra/superpowers",
+]);
+
 /** @type {FileOperations} */
 const defaultFileOperations = {
   lstat,
@@ -173,10 +178,18 @@ function isCoreSource(source, repoDir) {
   );
 }
 
+/** @param {string} source */
+function isSuperpowersSource(source) {
+  return /^(?:git:github\.com\/|https:\/\/github\.com\/)obra\/superpowers(?:\.git)?(?:@.*)?$/.test(
+    source,
+  );
+}
+
 /** @param {string[]} existingPackages @param {string} repoDir @returns {string[]} */
 function reconcilePackages(existingPackages, repoDir) {
   const packages = [];
   const seenManagedPackages = new Set();
+  const seenManagedGitSources = new Set();
   let corePresent = false;
 
   for (const source of existingPackages) {
@@ -184,6 +197,15 @@ function reconcilePackages(existingPackages, repoDir) {
       if (!corePresent) {
         packages.push(repoDir);
         corePresent = true;
+      }
+      continue;
+    }
+
+    if (isSuperpowersSource(source)) {
+      const canonicalSource = MANAGED_GIT_SOURCES[0];
+      if (!seenManagedGitSources.has(canonicalSource)) {
+        packages.push(canonicalSource);
+        seenManagedGitSources.add(canonicalSource);
       }
       continue;
     }
@@ -210,6 +232,12 @@ function reconcilePackages(existingPackages, repoDir) {
 
   for (const { name, source } of MANAGED_NPM_PACKAGES) {
     if (!seenManagedPackages.has(name)) {
+      packages.push(source);
+    }
+  }
+
+  for (const source of MANAGED_GIT_SOURCES) {
+    if (!seenManagedGitSources.has(source)) {
       packages.push(source);
     }
   }
@@ -470,6 +498,15 @@ export async function verifyInstalledPackages(options) {
     throw new Error(
       `Managed core package source is not configured exactly once: ${options.repoDir}`,
     );
+  }
+
+  for (const source of MANAGED_GIT_SOURCES) {
+    const equivalentSources = configuredPackages.filter(isSuperpowersSource);
+    if (equivalentSources.length !== 1 || equivalentSources[0] !== source) {
+      throw new Error(
+        `Managed package source is not configured exactly once: ${source}`,
+      );
+    }
   }
 
   for (const { name, source, version } of MANAGED_NPM_PACKAGES) {

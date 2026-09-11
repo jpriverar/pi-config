@@ -155,7 +155,8 @@ reconcile_packages() {
     "npm:pi-subagents@0.50.0" \
     "npm:context-mode@1.0.169" \
     "npm:pi-markdown-preview@0.14.1" \
-    "npm:@juicesharp/rpiv-ask-user-question@2.6.1"
+    "npm:@juicesharp/rpiv-ask-user-question@2.6.1" \
+    "git:github.com/obra/superpowers"
   do
     run_step "Pi install $source" pi install "$source"
   done

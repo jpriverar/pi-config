@@ -21,7 +21,6 @@ const publicResources = {
     "./extensions/tasks-overlay/index.ts",
   ],
   skills: [
-    "./skills/superpowers",
     "./skills/grill-me",
     "./skills/thinking-partner",
     "./skills/handoff",
@@ -116,7 +115,7 @@ test("resolves every explicit manifest resource", async () => {
       ),
     )
   ).flat();
-  assert.ok(skillFiles.length > publicResources.skills.length);
+  assert.ok(skillFiles.length >= publicResources.skills.length);
   for (const skill of publicResources.skills) {
     assert.ok(
       skillFiles.some((file) => file.startsWith(resolve(repository, skill))),

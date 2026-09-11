@@ -24,14 +24,6 @@ the MIT License.
 
 Source: https://github.com/lmilojevicc/pi-zentui
 
-## Superpowers v6.3.0
-
-The vendored Superpowers skills are copyright Jesse Vincent and contributors
-and are licensed under the MIT License. A copy of the license is included at
-`skills/superpowers/LICENSE`.
-
-Source: https://github.com/obra/superpowers
-
 ## Cursor Thermo-Nuclear Code Quality Review
 
 The `thermo-nuclear-code-quality-review` skill is adapted from Cursor's
