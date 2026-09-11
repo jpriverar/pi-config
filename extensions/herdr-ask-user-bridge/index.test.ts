@@ -46,18 +46,29 @@ test("reports questionnaire waits as Herdr blocked state", async () => {
   ]);
 });
 
-test("reports research-web confirmation waits as Herdr blocked state", async () => {
+test("aggregates research-web waits by tool-call ID", async () => {
   const loaded = await loadBridge();
   const events = createEventBus();
   const reports: unknown[] = [];
   events.on("herdr:blocked", (payload) => reports.push(payload));
   loaded.createHerdrAskUserBridge()({ events });
 
-  events.emit("research-web:blocked", { active: true, reason: "high_context" });
-  events.emit("research-web:blocked", {
-    active: false,
-    reason: "high_context",
-  });
+  const emit = (toolCallId: string, phase: "started" | "finished"): void => {
+    events.emit("research-web:blocked", {
+      toolCallId,
+      phase,
+      reason: "high_context",
+    });
+  };
+
+  emit("call-1", "started");
+  emit("call-1", "started");
+  emit("call-2", "started");
+  emit("call-1", "finished");
+  emit("call-1", "finished");
+  emit("unknown", "finished");
+  emit("call-2", "finished");
+  emit("call-2", "finished");
 
   assert.deepEqual(reports, [
     { active: true, label: "Waiting for web search approval" },
@@ -73,7 +84,22 @@ test("ignores malformed blocked-state payloads", async () => {
   loaded.createHerdrAskUserBridge()({ events });
 
   events.emit("rpiv:ask-user:blocked", null);
-  events.emit("research-web:blocked", { active: "yes" });
+  events.emit("research-web:blocked", null);
+  events.emit("research-web:blocked", {
+    toolCallId: "call-1",
+    phase: "waiting",
+    reason: "high_context",
+  });
+  events.emit("research-web:blocked", {
+    toolCallId: "",
+    phase: "started",
+    reason: "high_context",
+  });
+  events.emit("research-web:blocked", {
+    toolCallId: "call-1",
+    phase: "started",
+    reason: "unknown",
+  });
 
   assert.deepEqual(reports, []);
 });
