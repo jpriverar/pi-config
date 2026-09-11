@@ -24,14 +24,18 @@ function createEventBus() {
   };
 }
 
-test("reports questionnaire waits as Herdr blocked state", async () => {
+async function loadBridge() {
   const loaded = await import("./index.js").catch(() => undefined);
   assert.equal(typeof loaded?.createHerdrAskUserBridge, "function");
+  return loaded as unknown as BridgeModule;
+}
 
+test("reports questionnaire waits as Herdr blocked state", async () => {
+  const loaded = await loadBridge();
   const events = createEventBus();
   const reports: unknown[] = [];
   events.on("herdr:blocked", (payload) => reports.push(payload));
-  (loaded as unknown as BridgeModule).createHerdrAskUserBridge()({ events });
+  loaded.createHerdrAskUserBridge()({ events });
 
   events.emit("rpiv:ask-user:blocked", { active: true });
   events.emit("rpiv:ask-user:blocked", { active: false });
@@ -40,4 +44,36 @@ test("reports questionnaire waits as Herdr blocked state", async () => {
     { active: true, label: "Waiting for user input" },
     { active: false },
   ]);
+});
+
+test("reports research-web confirmation waits as Herdr blocked state", async () => {
+  const loaded = await loadBridge();
+  const events = createEventBus();
+  const reports: unknown[] = [];
+  events.on("herdr:blocked", (payload) => reports.push(payload));
+  loaded.createHerdrAskUserBridge()({ events });
+
+  events.emit("research-web:blocked", { active: true, reason: "high_context" });
+  events.emit("research-web:blocked", {
+    active: false,
+    reason: "high_context",
+  });
+
+  assert.deepEqual(reports, [
+    { active: true, label: "Waiting for web search approval" },
+    { active: false },
+  ]);
+});
+
+test("ignores malformed blocked-state payloads", async () => {
+  const loaded = await loadBridge();
+  const events = createEventBus();
+  const reports: unknown[] = [];
+  events.on("herdr:blocked", (payload) => reports.push(payload));
+  loaded.createHerdrAskUserBridge()({ events });
+
+  events.emit("rpiv:ask-user:blocked", null);
+  events.emit("research-web:blocked", { active: "yes" });
+
+  assert.deepEqual(reports, []);
 });
