@@ -54,12 +54,25 @@ test("reports research-web waits as Herdr blocked state", () => {
   ]);
 });
 
+test("reports force-push waits as Herdr blocked state", () => {
+  const { events, reports } = setupBridge();
+
+  events.emit("force-push:blocked", { active: true });
+  events.emit("force-push:blocked", { active: false });
+
+  assert.deepEqual(reports, [
+    { active: true, label: "Waiting for force-push approval" },
+    { active: false },
+  ]);
+});
+
 test("ignores malformed blocked-state payloads", () => {
   const { events, reports } = setupBridge();
 
   events.emit("rpiv:ask-user:blocked", null);
   events.emit("research-web:blocked", null);
   events.emit("research-web:blocked", { active: "yes" });
+  events.emit("force-push:blocked", null);
 
   assert.deepEqual(reports, []);
 });

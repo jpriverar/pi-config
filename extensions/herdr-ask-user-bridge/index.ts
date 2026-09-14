@@ -33,4 +33,9 @@ export default function herdrAskUserBridge(pi: EventAPI): void {
     "research-web:blocked",
     "Waiting for web search approval",
   );
+  bridgeBlockedEvent(
+    pi,
+    "force-push:blocked",
+    "Waiting for force-push approval",
+  );
 }
