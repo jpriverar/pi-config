@@ -4,6 +4,7 @@ import test from "node:test";
 
 const expectedExtensions = [
   "./extensions/compact-tools/index.ts",
+  "./extensions/force-push/index.ts",
   "./extensions/permission-gate/index.ts",
   "./extensions/plan-progress/index.ts",
   "./extensions/styled-editor/index.ts",

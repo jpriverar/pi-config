@@ -12,6 +12,7 @@ const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const publicResources = {
   extensions: [
     "./extensions/compact-tools/index.ts",
+    "./extensions/force-push/index.ts",
     "./extensions/permission-gate/index.ts",
     "./extensions/plan-progress/index.ts",
     "./extensions/styled-editor/index.ts",
@@ -151,6 +152,7 @@ test("imports and registers every manifest extension without collisions", async 
     "edit",
     "file_issue",
     "find",
+    "force_push_current_branch",
     "grep",
     "ls",
     "read",
