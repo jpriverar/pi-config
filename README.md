@@ -70,9 +70,9 @@ the configured store that is appropriate to share with that model.
 
 The package manifest loads:
 
-- eight extensions for compact built-in tools, permission gates, plan and spec
-  progress, the styled editor, Herdr questionnaire state, task workflow, project
-  status, and `/tasks`;
+- nine extensions for compact built-in tools, safe force pushes, permission
+  gates, plan and spec progress, the styled editor, Herdr blocked-state mapping,
+  task workflow, project status, and `/tasks`;
 - four skill roots: critical review, collaborative thinking, handoffs, and the
   Thermo-Nuclear code-quality review;
 - the `modus-vivendi-tinted` and `gold-rush` themes.

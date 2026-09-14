@@ -33,6 +33,7 @@ const scriptRepository = dirname(dirname(fileURLToPath(import.meta.url)));
 const publicManifest = {
   extensions: [
     "./extensions/compact-tools/index.ts",
+    "./extensions/force-push/index.ts",
     "./extensions/permission-gate/index.ts",
     "./extensions/plan-progress/index.ts",
     "./extensions/styled-editor/index.ts",
