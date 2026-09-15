@@ -154,7 +154,7 @@ test("ignores malformed auth challenge events", () => {
       toolCallId: "call-1",
       phase: "started",
       method: "device-code",
-      url: "https://login.example/device",
+      url: "https://github.com/login/device",
     },
     {
       challengeId: "call-1:1",
