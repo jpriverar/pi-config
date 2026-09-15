@@ -66,6 +66,113 @@ test("reports force-push waits as Herdr blocked state", () => {
   ]);
 });
 
+test("aggregates auth challenges by challenge ID", () => {
+  const { events, reports } = setupBridge();
+
+  const auth = (
+    challengeId: string,
+    phase: "started" | "finished",
+    outcome: "succeeded" | "failed" | "tool-ended" = "succeeded",
+    method: "browser" | "device-code" = "browser",
+  ): void => {
+    events.emit("auth-aware-bash:challenge", {
+      challengeId,
+      toolCallId: challengeId.split(":")[0],
+      phase,
+      method,
+      ...(phase === "finished" ? { outcome } : {}),
+    });
+  };
+
+  auth("call-1:1", "started");
+  auth("call-1:1", "started");
+  auth("call-2:1", "started", "succeeded", "device-code");
+  auth("call-3:1", "started");
+  auth("call-1:1", "finished");
+  auth("unknown:1", "finished");
+  auth("call-2:1", "finished", "tool-ended", "device-code");
+  auth("call-3:1", "finished", "failed");
+
+  assert.deepEqual(reports, [
+    { active: true, label: "Waiting for browser authentication" },
+    { active: false },
+  ]);
+});
+
+test("ignores malformed auth challenge events", () => {
+  const { events, reports } = setupBridge();
+
+  const malformed: unknown[] = [
+    null,
+    {},
+    {
+      challengeId: "",
+      toolCallId: "call-1",
+      phase: "started",
+      method: "browser",
+    },
+    {
+      challengeId: "call-1:1",
+      toolCallId: "",
+      phase: "started",
+      method: "browser",
+    },
+    {
+      challengeId: "call-1:1",
+      toolCallId: "call-1",
+      phase: "waiting",
+      method: "browser",
+    },
+    {
+      challengeId: "call-1:1",
+      toolCallId: "call-1",
+      phase: "started",
+      method: "password",
+    },
+    {
+      challengeId: "call-1:1",
+      toolCallId: "call-1",
+      phase: "started",
+      method: "browser",
+      outcome: "succeeded",
+    },
+    {
+      challengeId: "call-1:1",
+      toolCallId: "call-1",
+      phase: "finished",
+      method: "browser",
+    },
+    {
+      challengeId: "call-1:1",
+      toolCallId: "call-1",
+      phase: "finished",
+      method: "browser",
+      outcome: "cancelled",
+    },
+    {
+      challengeId: "call-1:1",
+      toolCallId: "call-1",
+      phase: "started",
+      method: "device-code",
+      url: "https://github.com/login/device",
+    },
+    {
+      challengeId: "call-1:1",
+      toolCallId: "call-1",
+      phase: "finished",
+      method: "device-code",
+      outcome: "failed",
+      deviceCode: "ABCD-EFGH",
+    },
+  ];
+
+  for (const payload of malformed) {
+    events.emit("auth-aware-bash:challenge", payload);
+  }
+
+  assert.deepEqual(reports, []);
+});
+
 test("ignores malformed blocked-state payloads", () => {
   const { events, reports } = setupBridge();
 
