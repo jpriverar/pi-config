@@ -35,6 +35,7 @@ const allowedUrlHosts = new Set([
 ]);
 const bootstrapArtifacts = new Set(["README.md", "scripts/bootstrap-macos.sh"]);
 const forbiddenWorkMarker = ["data", "dog"].join("");
+const approvedMetricKeys = new Set(["totalTokens"]);
 const placeholderValues = new Set([
   "placeholder",
   "redacted",
@@ -184,6 +185,7 @@ function validateCredentials(path, text, errors) {
   const sensitiveKey = /api[_-]?key|token|secret|password|credential/i;
   for (const match of text.matchAll(assignment)) {
     if (!sensitiveKey.test(match[1])) continue;
+    if (approvedMetricKeys.has(match[1])) continue;
     if (!isPlaceholder(match[2])) {
       report(
         errors,
