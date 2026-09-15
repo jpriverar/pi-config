@@ -358,6 +358,21 @@ test("rejects private homes, work trees, and manifest escapes", async (t) => {
   });
 });
 
+test("accepts non-credential token usage counters", () => {
+  const fixture = createFixture({
+    "tests/usage.ts": [
+      "export const usage = {",
+      "  totalTokens: 123,",
+      "  cost: {},",
+      "};",
+      "",
+    ].join("\n"),
+  });
+  const result = fixture.run();
+
+  assert.equal(result.status, 0, String(result.stderr));
+});
+
 test("rejects credential-shaped assignments and payloads", async (t) => {
   const sensitiveKeys = [
     ["database", "pass" + "word"].join("_"),
