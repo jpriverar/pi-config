@@ -281,7 +281,7 @@ git commit -m "move worktree pool into personal core"
 - Produces: `WorktreePool.acquire(request, owner, identity?)`, complete read-only pool observations, `loadWorktreePoolRuntime()`, and generic `withFileOperationLock()`.
 - Preserves: raw tool schema; callers cannot supply claim/path IDs through `worktree_pool`.
 
-- [ ] **Step 1: Write failing deterministic-identity and observation tests**
+- [x] **Step 1: Write failing deterministic-identity and observation tests**
 
 Add focused tests proving:
 
@@ -301,7 +301,7 @@ assert.equal(listed.clean, true);
 
 Also assert that `index.ts` tool parameters do not expose `claimId` for acquire or `pathId` at all.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -311,7 +311,7 @@ npm run test:file -- extensions/worktree-pool/pool.test.ts extensions/worktree-p
 
 Expected: FAIL because injected acquisition identity and complete observations do not exist.
 
-- [ ] **Step 3: Implement the task-agnostic seams**
+- [x] **Step 3: Implement the task-agnostic seams**
 
 Change the pool signature exactly to:
 
@@ -345,17 +345,17 @@ export function currentOwner(sessionId: string): OwnerIdentity;
 
 `index.ts` calls these functions and retains the raw tool behavior.
 
-- [ ] **Step 4: Write a failing generic lock-root test**
+- [x] **Step 4: Write a failing generic lock-root test**
 
 Create `tests/file-operation-lock.test.ts` proving two calls against the same explicit lock root serialize and dead local owners are reclaimed, while unreadable or remote-owner records fail closed.
 
-- [ ] **Step 5: Run the lock test and verify RED**
+- [x] **Step 5: Run the lock test and verify RED**
 
 Run: `npm run test:file -- tests/file-operation-lock.test.ts`
 
 Expected: FAIL because `lib/file-operation-lock.ts` does not exist.
 
-- [ ] **Step 6: Extract the generic file lock**
+- [x] **Step 6: Extract the generic file lock**
 
 Move the lock-container implementation into:
 
@@ -370,7 +370,7 @@ export async function withFileOperationLock<T>(
 
 Keep `extensions/worktree-pool/operation-lock.ts` as a thin wrapper that passes `join(repository.commonDir, "pi-worktree-pool")`. The generic module must not import worktree, Beads, or lifecycle types.
 
-- [ ] **Step 7: Run all pool and lock tests**
+- [x] **Step 7: Run all pool and lock tests**
 
 Run:
 
@@ -380,7 +380,7 @@ npm run test:file -- tests/file-operation-lock.test.ts extensions/worktree-pool/
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit the pool seams**
+- [x] **Step 8: Commit the pool seams**
 
 ```bash
 git add lib/file-operation-lock.ts tests/file-operation-lock.test.ts extensions/worktree-pool

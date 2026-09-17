@@ -28,6 +28,8 @@ const UUIDS = [
   "623e4567-e89b-42d3-a456-426614174005",
   "723e4567-e89b-42d3-a456-426614174006",
   "823e4567-e89b-42d3-a456-426614174007",
+  "923e4567-e89b-42d3-a456-426614174008",
+  "a23e4567-e89b-42d3-a456-426614174009",
 ];
 
 const runGit: GitRunner = async (cwd, args) => {
@@ -164,6 +166,48 @@ async function leaseFiles(poolRoot: string): Promise<string[]> {
 }
 
 describe("bounded allocation", () => {
+  test("uses supplied opaque identities and lists complete observations", async () => {
+    const h = await createHarness();
+    try {
+      const identity = { claimId: UUIDS[8], pathId: UUIDS[9] };
+      const acquired = await h.pool.acquire(
+        { repository: "repo", branch: "observed" },
+        owner(100, "alice"),
+        identity,
+      );
+      expect(acquired.claimId).toBe(identity.claimId);
+      expect(basename(acquired.path)).toBe(`worktree-${identity.pathId}`);
+
+      const [listed] = (await h.pool.list("repo")).repositories[0].worktrees;
+      expect(listed).toMatchObject({
+        claimId: identity.claimId,
+        currentBranch: "observed",
+        head: acquired.head,
+        clean: true,
+        branchProtectsHead: true,
+      });
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("rejects invalid supplied identities before reserving capacity", async () => {
+    const h = await createHarness();
+    try {
+      await expect(
+        h.pool.acquire(
+          { repository: "repo", branch: "invalid-identity" },
+          owner(100, "alice"),
+          { claimId: "not-safe", pathId: UUIDS[9] },
+        ),
+      ).rejects.toThrow("claim ID");
+      expect(await leaseFiles(h.poolRoot)).toEqual([]);
+      expect(await managedRegistrations(h.primary)).toEqual([]);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   test("allows one session to acquire distinct worktrees up to capacity", async () => {
     const h = await createHarness();
     try {

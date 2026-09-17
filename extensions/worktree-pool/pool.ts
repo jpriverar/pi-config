@@ -12,6 +12,7 @@ import {
 
 import { isValidPoolCapacity, POOL_CAPACITY_REQUIREMENT } from "./capacity.js";
 import {
+  formatClaimReason,
   parseClaimReason,
   type ClaimRecord,
   tryLockWorktree,
@@ -28,6 +29,7 @@ import {
 import { inspectRepository } from "./git-state.js";
 import {
   createManagedWorktree,
+  managedWorktreePath,
   removeManagedWorktree,
   verifyManagedWorktree,
 } from "./managed-worktree.js";
@@ -67,6 +69,7 @@ type ResolvedStartPoint = { ref: string; head: string; fetched: boolean };
 type LeaseObservation = {
   evidence: PoolStateEvidence;
   currentBranch: string | null;
+  head: string | null;
   clean: boolean | null;
   branchProtectsHead: boolean | null;
   authorityError?: string;
@@ -82,6 +85,10 @@ export type PoolWorktreeListing = {
   path: string;
   state: string;
   branch?: string;
+  currentBranch: string | null;
+  head: string | null;
+  clean: boolean | null;
+  branchProtectsHead: boolean | null;
   reason?: string;
   evidence: PoolStateEvidence;
 };
@@ -141,9 +148,15 @@ export class WorktreePool {
   async acquire(
     request: AcquireRequest,
     owner: OwnerIdentity,
+    identity: { claimId: string; pathId: string } = {
+      claimId: this.uuid(),
+      pathId: this.uuid(),
+    },
   ): Promise<AcquireResult> {
     validateBranch(request.branch);
     const repository = this.repository(request.repository);
+    formatClaimReason(identity.claimId, owner);
+    const path = managedWorktreePath(repository, identity.pathId);
     if (!isValidPoolCapacity(repository.capacity)) {
       throw new Error(
         `invalid pool capacity ${repository.capacity}: ${POOL_CAPACITY_REQUIREMENT}`,
@@ -179,9 +192,7 @@ export class WorktreePool {
           );
         }
 
-        const pathId = this.uuid();
-        const claimId = this.uuid();
-        const path = `${repository.poolDir}/worktree-${pathId}`;
+        const { claimId, pathId } = identity;
         const creating: LeaseRecord = {
           version: 1,
           claimId,
@@ -451,6 +462,10 @@ export class WorktreePool {
             path: gate.path,
             state: "needs-attention",
             reason: gate.reason,
+            currentBranch: null,
+            head: null,
+            clean: null,
+            branchProtectsHead: null,
             evidence: {
               pathExists: null,
               registered: null,
@@ -473,6 +488,10 @@ export class WorktreePool {
           path: record.path,
           state: healthy ? "active" : "needs-attention",
           branch: record.branch,
+          currentBranch: observation.currentBranch,
+          head: observation.head,
+          clean: observation.clean,
+          branchProtectsHead: observation.branchProtectsHead,
           ...(!healthy
             ? { reason: this.observationReason(record, observation) }
             : {}),
@@ -487,22 +506,36 @@ export class WorktreePool {
     return [
       ...indexed,
       ...(await Promise.all(
-        unindexed.map(
-          async (worktree): Promise<PoolWorktreeListing> => ({
+        unindexed.map(async (worktree): Promise<PoolWorktreeListing> => {
+          const exists = await pathExists(worktree.path).catch(() => null);
+          const branch = worktree.branch?.replace(/^refs\/heads\//, "");
+          const clean =
+            exists === true
+              ? await this.isClean(worktree.path).catch(() => null)
+              : null;
+          const branchProtectsHead =
+            exists === true && branch !== undefined
+              ? await this.branchProtectsHead(worktree.path, branch).catch(
+                  () => null,
+                )
+              : null;
+          return {
             path: worktree.path,
             state: "needs-attention",
-            ...(worktree.branch === undefined
-              ? {}
-              : { branch: worktree.branch.replace(/^refs\/heads\//, "") }),
+            ...(branch === undefined ? {} : { branch }),
+            currentBranch: branch ?? null,
+            head: worktree.head,
+            clean,
+            branchProtectsHead,
             reason:
               "managed Git registration has no valid discovery record and consumes capacity",
             evidence: {
-              pathExists: await pathExists(worktree.path).catch(() => null),
+              pathExists: exists,
               registered: true,
               nativeClaimMatches: null,
             },
-          }),
-        ),
+          };
+        }),
       )),
     ];
   }
@@ -545,6 +578,7 @@ export class WorktreePool {
       evidence: { pathExists: observedPath, registered, nativeClaimMatches },
       currentBranch:
         registration?.branch?.replace(/^refs\/heads\//, "") ?? null,
+      head: registration?.head ?? null,
       clean,
       branchProtectsHead,
       ...(authorityError === undefined ? {} : { authorityError }),

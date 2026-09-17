@@ -1,15 +1,14 @@
-import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { homedir, hostname as readHostname } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { hostname as readHostname } from "node:os";
 
 import { evaluatePoolCommand } from "./command-policy.js";
-import { loadPoolConfig, resolveRepository } from "./config.js";
-import type { OwnerIdentity } from "./operation-lock.js";
-import { WorktreePool } from "./pool.js";
-import type { GitResult, ResolvedRepository } from "./types.js";
+import {
+  currentOwner,
+  loadWorktreePoolRuntime,
+  type WorktreePoolRuntime,
+} from "./runtime.js";
+
+export { poolGitArguments } from "./runtime.js";
+export type { WorktreePoolRuntime } from "./runtime.js";
 
 const ACTIONS = ["list", "acquire", "release", "repair"] as const;
 type PoolAction = (typeof ACTIONS)[number];
@@ -47,11 +46,6 @@ type ExtensionAPI = {
   }): void;
 };
 
-export type WorktreePoolRuntime = {
-  root: string;
-  pool: WorktreePool;
-  repositories: ResolvedRepository[];
-};
 export type WorktreePoolExtensionDependencies = {
   now(): number;
   pid: number;
@@ -93,12 +87,12 @@ export function createWorktreePoolExtension(
   deps: WorktreePoolExtensionDependencies,
 ) {
   return function worktreePoolExtension(pi: ExtensionAPI): void {
-    const ownerFor = (ctx: ExtensionContext): OwnerIdentity => ({
-      pid: deps.pid,
-      sessionId: ctx.sessionManager.getSessionId(),
-      host: deps.hostname,
-      started: deps.now(),
-    });
+    const ownerFor = (ctx: ExtensionContext) =>
+      currentOwner(ctx.sessionManager.getSessionId(), {
+        pid: deps.pid,
+        hostname: deps.hostname,
+        now: deps.now,
+      });
 
     pi.registerTool({
       name: "worktree_pool",
@@ -188,6 +182,17 @@ function validateActionParameters(params: PoolParameters): void {
     throw new Error(
       `unknown worktree_pool action ${JSON.stringify(params.action)}`,
     );
+  const allowedFields: Record<PoolAction, ReadonlySet<string>> = {
+    list: new Set(["action", "repository"]),
+    acquire: new Set(["action", "repository", "branch", "startPoint"]),
+    release: new Set(["action", "repository", "claimId"]),
+    repair: new Set(["action", "repository", "slot"]),
+  };
+  for (const field of Object.keys(params)) {
+    if (!allowedFields[params.action].has(field)) {
+      throw new Error(`worktree_pool ${params.action}.${field} is not allowed`);
+    }
+  }
   if (params.action !== "list" || params.repository !== undefined)
     requireText(params.repository, `${params.action}.repository`);
   if (params.action === "acquire") requireText(params.branch, "acquire.branch");
@@ -228,85 +233,12 @@ function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function operationLockPidLiveness(pid: number): "live" | "dead" | "ambiguous" {
-  try {
-    process.kill(pid, 0);
-    return "live";
-  } catch (error) {
-    const code =
-      typeof error === "object" && error !== null && "code" in error
-        ? String(error.code)
-        : undefined;
-    if (code === "EPERM") return "live";
-    if (code === "ESRCH") return "dead";
-    return "ambiguous";
-  }
-}
-
-async function run(command: string, args: string[]): Promise<GitResult> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-  });
-}
-
-export function poolGitArguments(cwd: string, args: string[]): string[] {
-  return ["-C", cwd, "-c", "core.fsmonitor=false", ...args];
-}
-
-const runGit = (cwd: string, args: string[]) =>
-  run("git", poolGitArguments(cwd, args));
-
-const CONFIG_PATH = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "config.json",
-);
 const productionDependencies: WorktreePoolExtensionDependencies = {
   now: Date.now,
   pid: process.pid,
   hostname: readHostname(),
-  async loadRuntime(repositoryIdentifiers, purpose = "identity") {
-    const config = await loadPoolConfig(CONFIG_PATH, {
-      home: homedir(),
-      runGit,
-      realpath,
-    });
-    const identifiers =
-      repositoryIdentifiers.length === 0
-        ? [...config.overrides.keys()]
-        : repositoryIdentifiers;
-    const repositories = await Promise.all(
-      [...new Set(identifiers)].map((identifier) =>
-        resolveRepository(config, identifier, purpose, { runGit, realpath }),
-      ),
-    );
-    return {
-      root: config.root,
-      repositories,
-      pool: new WorktreePool({
-        repositories,
-        runGit,
-        operationLock: {
-          now: Date.now,
-          sleep: async (milliseconds) => {
-            await new Promise((resolve) => setTimeout(resolve, milliseconds));
-          },
-          isPidAlive: operationLockPidLiveness,
-          hostname: readHostname(),
-          timeoutMs: 5_000,
-        },
-        uuid: randomUUID,
-      }),
-    };
+  loadRuntime(repositoryIdentifiers, purpose = "identity") {
+    return loadWorktreePoolRuntime(repositoryIdentifiers, purpose);
   },
 };
 

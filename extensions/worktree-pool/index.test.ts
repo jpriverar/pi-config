@@ -244,6 +244,22 @@ describe("worktree_pool tool", () => {
     expect(h.runtimeLoads).toBe(0);
   });
 
+  test("does not expose stable identity inputs through raw acquire", async () => {
+    const h = harness();
+    const parameters = h.tools.get("worktree_pool")!.parameters as {
+      properties: Record<string, unknown>;
+    };
+    expect(parameters.properties).not.toHaveProperty("pathId");
+    await expect(
+      h.call({
+        action: "acquire",
+        repository: "demo",
+        branch: "topic",
+        claimId: CLAIM_ID,
+      }),
+    ).rejects.toThrow("acquire.claimId");
+  });
+
   test("allows pool actions from child depth", async () => {
     process.env.PI_SUBAGENT_DEPTH = "1";
     const h = harness();
