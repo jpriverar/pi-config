@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "root": "~/dd/.worktree-pools",
+  "repositoryRoot": "~/dd",
+  "defaultCapacity": 3,
+  "exclude": [],
+  "repositories": [
+    {
+      "name": "dd-source",
+      "capacity": 5
+    }
+  ]
+}

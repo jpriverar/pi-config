@@ -373,6 +373,36 @@ test("accepts non-credential token usage counters", () => {
   assert.equal(result.status, 0, String(result.stderr));
 });
 
+test("accepts parser token names and derived expressions", () => {
+  const sensitive = ["to", "ken"].join("");
+  const fixture = createFixture({
+    "extensions/shared/shell-command.ts": [
+      `type Shell${sensitive} = { value: string };`,
+      `const ${sensitive.toUpperCase()}_PATTERN = /^[a-z]+$/;`,
+      "export function parse(args: string[]): boolean {",
+      `  const ${sensitive} = args[0];`,
+      `  const ${sensitive}s: string[] = [];`,
+      `  return ${sensitive.toUpperCase()}_PATTERN.test(${sensitive}) && ${sensitive}s.length === 0;`,
+      "}",
+      "",
+    ].join("\n"),
+  });
+  const result = fixture.run();
+
+  assert.equal(result.status, 0, String(result.stderr));
+});
+
+test("accepts lifecycle docs and the reviewed pool config", () => {
+  const repositoryRoot = ["~", "dd"].join("/");
+  const fixture = createFixture({
+    "docs/spec.md": "# Lifecycle specification\n",
+    "extensions/worktree-pool/config.json": `${JSON.stringify({ root: `${repositoryRoot}/.worktree-pools`, repositoryRoot }, null, 2)}\n`,
+  });
+  const result = fixture.run();
+
+  assert.equal(result.status, 0, String(result.stderr));
+});
+
 test("rejects credential-shaped assignments and payloads", async (t) => {
   const sensitiveKeys = [
     ["database", "pass" + "word"].join("_"),

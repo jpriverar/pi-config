@@ -70,15 +70,22 @@ the configured store that is appropriate to share with that model.
 
 The package manifest loads:
 
-- nine extensions for compact built-in tools, safe force pushes, permission
+- ten extensions for compact built-in tools, safe force pushes, permission
   gates, plan and spec progress, the styled editor, Herdr blocked-state mapping,
-  task workflow, project status, and `/tasks`;
+  bounded worktree allocation, task workflow, project status, and `/tasks`;
 - four skill roots: critical review, collaborative thinking, handoffs, and the
   Thermo-Nuclear code-quality review;
 - the `modus-vivendi-tinted` and `gold-rush` themes.
 
 Use `pi config` to enable or disable individual package resources after
 installation.
+
+## Worktree pool
+
+The package includes a bounded, conservative worktree allocator. Its core knows
+only repositories, branches, Git registrations, opaque claims, capacity, and
+clean release. Task ownership and lifecycle policy live in the separate
+`task-lifecycle` extension.
 
 ## Permission guardrail
 

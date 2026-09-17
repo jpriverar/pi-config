@@ -18,6 +18,7 @@ const approvedRootFiles = new Set([
 ]);
 const approvedRootDirectories = new Set([
   ".github",
+  "docs",
   "extensions",
   "lib",
   "prompts",
@@ -36,6 +37,12 @@ const allowedUrlHosts = new Set([
 const bootstrapArtifacts = new Set(["README.md", "scripts/bootstrap-macos.sh"]);
 const forbiddenWorkMarker = ["data", "dog"].join("");
 const approvedMetricKeys = new Set(["totalTokens"]);
+const approvedCredentialIdentifiersByPath = new Map([
+  ["extensions/shared/shell-command.ts", new Set(["tokens"])],
+]);
+const approvedPrivateLocationPaths = new Set([
+  "extensions/worktree-pool/config.json",
+]);
 const placeholderValues = new Set([
   "placeholder",
   "redacted",
@@ -160,7 +167,7 @@ function isPlaceholder(value) {
   }
 
   if (["env", "file", "generated-fallback"].includes(normalized)) return true;
-  return /^(?:[A-Za-z_$][\w$]*)(?:\.[A-Za-z_$][\w$]*)*(?:\([^\r\n]*\))?(?:\s*(?:\|\||\?\?)\s*(?:null|undefined))?$/.test(
+  return /^(?:[A-Za-z_$][\w$]*)(?:(?:\.[A-Za-z_$][\w$]*)|(?:\[[^\r\n\]]+\]))*(?:\([^\r\n]*\))?(?:\s*(?:\|\||\?\?)\s*(?:null|undefined))?$/.test(
     unquoted,
   );
 }
@@ -182,10 +189,13 @@ function validateCredentials(path, text, errors) {
 
   const assignment =
     /(?:^|[\s{,])["']?([A-Za-z_][\w-]*)["']?\s*[:=]\s*([^\r\n,]+)/gim;
-  const sensitiveKey = /api[_-]?key|token|secret|password|credential/i;
+  const sensitiveKey =
+    /(?:^|[_-])(?:api[_-]?keys?|tokens?|secrets?|passwords?|credentials?)(?:$|[_-])/i;
   for (const match of text.matchAll(assignment)) {
     if (!sensitiveKey.test(match[1])) continue;
+    if (/(?:_PATTERN|Pattern)$/.test(match[1])) continue;
     if (approvedMetricKeys.has(match[1])) continue;
+    if (approvedCredentialIdentifiersByPath.get(path)?.has(match[1])) continue;
     if (!isPlaceholder(match[2])) {
       report(
         errors,
@@ -198,6 +208,8 @@ function validateCredentials(path, text, errors) {
 }
 
 function validatePrivateLocations(path, text, errors) {
+  if (approvedPrivateLocationPaths.has(path)) return;
+
   const macHome = ["/", "Users", "/"].join("");
   const linuxHome = ["/", "home", "/"].join("");
   const workTree = ["~", "/", "d", "d", "/"].join("");

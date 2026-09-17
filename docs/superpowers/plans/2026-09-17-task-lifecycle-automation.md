@@ -187,6 +187,10 @@ export interface WorktreePoolPort {
 - Modify: `package.json`
 - Modify: `README.md`
 - Modify: `tests/manifest.test.mjs`
+- Modify: `tests/package-load.test.ts`
+- Create: `tests/expect.ts`
+- Create: `extensions/shared/shell-command.ts`
+- Create: `extensions/shared/shell-command.test.ts`
 - Create: `extensions/worktree-pool/*.ts`
 - Create: `extensions/worktree-pool/config.json`
 
@@ -194,7 +198,7 @@ export interface WorktreePoolPort {
 - Consumes: the reviewed worktree-pool implementation at `experimental@a51892dd128cc08bb2cc922077f5a8c44e3df06d:users/jp.riveraruiz/pi-config/agent/extensions/worktree-pool/`.
 - Produces: package resource `./extensions/worktree-pool/index.ts` and the unchanged raw `worktree_pool` tool.
 
-- [ ] **Step 1: Add failing package-manifest and source-boundary tests**
+- [x] **Step 1: Add failing package-manifest and source-boundary tests**
 
 Add to `tests/manifest.test.mjs`:
 
@@ -218,15 +222,15 @@ for (const forbidden of ["piLifecycle", "LifecycleIssue", "taskId", "BEADS_DIR",
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run: `node --test tests/manifest.test.mjs`
 
 Expected: FAIL because `./extensions/worktree-pool/index.ts` is absent from the package manifest.
 
-- [ ] **Step 3: Copy the reviewed pool and register it**
+- [x] **Step 3: Copy the reviewed pool and register it**
 
-Copy every tracked file from the source directory into `extensions/worktree-pool/`, preserving filenames and tests. Add `./extensions/worktree-pool/index.ts` to `package.json#pi.extensions` immediately before `jp-workflow`. Do not import Beads or task lifecycle code.
+Copy every tracked file from the source directory into `extensions/worktree-pool/`, preserving filenames and tests. Copy its task-agnostic `extensions/shared/shell-command.ts` dependency and test. Adapt Bun-only test imports and `import.meta.path` to the package's Node 22/`tsx --test` conventions through `tests/expect.ts`; do not add Bun as a second runtime. Add `./extensions/worktree-pool/index.ts` to `package.json#pi.extensions` immediately before `jp-workflow`. Do not import Beads or task lifecycle code.
 
 Add to `README.md`:
 
@@ -239,20 +243,21 @@ clean release. Task ownership and lifecycle policy live in the separate
 `task-lifecycle` extension.
 ```
 
-- [ ] **Step 4: Run destination pool and manifest tests**
+- [x] **Step 4: Run destination pool and manifest tests**
 
 Run:
 
 ```bash
-npm run test:file -- extensions/worktree-pool/*.test.ts tests/manifest.test.mjs
+npm run test:file -- extensions/shared/shell-command.test.ts extensions/worktree-pool/*.test.ts
+node --test tests/manifest.test.mjs
 ```
 
 Expected: all migrated tests and manifest tests PASS.
 
-- [ ] **Step 5: Commit the pool migration**
+- [x] **Step 5: Commit the pool migration**
 
 ```bash
-git add package.json README.md tests/manifest.test.mjs extensions/worktree-pool
+git add package.json README.md tests/manifest.test.mjs tests/package-load.test.ts tests/expect.ts extensions/shared extensions/worktree-pool docs/superpowers/plans/2026-09-17-task-lifecycle-automation.md
 git diff --cached --name-only
 git commit -m "move worktree pool into personal core"
 ```

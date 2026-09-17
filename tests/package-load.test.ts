@@ -17,6 +17,7 @@ const publicResources = {
     "./extensions/plan-progress/index.ts",
     "./extensions/styled-editor/index.ts",
     "./extensions/herdr-ask-user-bridge/index.ts",
+    "./extensions/worktree-pool/index.ts",
     "./extensions/jp-workflow/index.ts",
     "./extensions/project-status/index.ts",
     "./extensions/tasks-overlay/index.ts",
@@ -159,6 +160,7 @@ test("imports and registers every manifest extension without collisions", async 
     "set_plan",
     "set_spec",
     "update_issue",
+    "worktree_pool",
     "write",
   ]);
   for (const command of [
