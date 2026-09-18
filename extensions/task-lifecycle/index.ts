@@ -3,10 +3,16 @@ import { readFileSync } from "node:fs";
 import { hostname as readHostname } from "node:os";
 
 import { resolveBeadsDir, type BeadsExec } from "../../lib/beads.js";
+import type { AcquireResult } from "../worktree-pool/pool.js";
 import { loadWorktreePoolRuntime } from "../worktree-pool/runtime.js";
 import { createLifecycleStore } from "../../lib/task-lifecycle/beads-store.js";
 import { createCheckAdapterRegistry } from "../../lib/task-lifecycle/checks.js";
 import { classifyTaskToolRequirement } from "../../lib/task-lifecycle/tool-guard.js";
+import {
+  readWorktreeLifecycleContext,
+  WORKTREE_LIFECYCLE_CONTEXT_KEY,
+  type WorktreeLifecycleContext,
+} from "../../lib/task-lifecycle/worktree-tool-context.js";
 import {
   TaskLifecycleService,
   type CloseDispositionInput,
@@ -70,7 +76,7 @@ export interface TaskLifecycleToolService {
   ): Promise<LifecycleIssue[]>;
   refreshSessionActivity(owner: LockOwner): Promise<LifecycleIssue[]>;
   interruptSession(owner: LockOwner, reason: string): Promise<LifecycleIssue[]>;
-  acquireWorktree(
+  prepareWorktreeAcquire(
     request: {
       taskId: string;
       repository: string;
@@ -79,16 +85,24 @@ export interface TaskLifecycleToolService {
     },
     owner: LockOwner,
     operationId?: string,
+  ): Promise<Extract<WorktreeLifecycleContext, { mode: "acquire" }>>;
+  finalizeWorktreeAcquire(
+    context: Extract<WorktreeLifecycleContext, { mode: "acquire" }>,
+    acquired: AcquireResult,
+    owner: LockOwner,
   ): Promise<LifecycleIssue>;
-  releaseWorktree(
+  associatedTasksForClaim(claimId: string): Promise<LifecycleIssue[]>;
+  prepareWorktreeRelease(
     taskId: string,
     claimId: string,
     owner: LockOwner,
     operationId?: string,
+  ): Promise<Extract<WorktreeLifecycleContext, { mode: "release" }>>;
+  finalizeWorktreeRelease(
+    context: Extract<WorktreeLifecycleContext, { mode: "release" }>,
+    owner: LockOwner,
   ): Promise<LifecycleIssue>;
   activeTasksForSession(sessionId: string): Promise<LifecycleIssue[]>;
-  hasActiveTask(sessionId: string): Promise<boolean>;
-  isClaimAssociated(claimId: string): Promise<boolean>;
 }
 
 interface ExtensionContext {
@@ -435,64 +449,6 @@ export function createTaskLifecycleExtension(
       },
     });
 
-    pi.registerTool({
-      name: "task_worktree_acquire",
-      label: "Acquire task worktree",
-      description:
-        "Acquire a bounded worktree while persisting its exact task association and deterministic pool identities.",
-      parameters: objectSchema(
-        {
-          taskId: taskIdProperty,
-          repository: { type: "string", minLength: 1 },
-          branch: { type: "string", minLength: 1 },
-          startPoint: { type: "string", minLength: 1 },
-          operationId: operationIdProperty,
-        },
-        ["taskId", "repository", "branch"],
-      ),
-      async execute(id, params, _signal, _update, context) {
-        return toolResult(
-          await deps.service.acquireWorktree(
-            {
-              taskId: params.taskId,
-              repository: params.repository,
-              branch: params.branch,
-              ...(params.startPoint === undefined
-                ? {}
-                : { startPoint: params.startPoint }),
-            },
-            ownerFor(context),
-            operationFor(id, params),
-          ),
-        );
-      },
-    });
-
-    pi.registerTool({
-      name: "task_worktree_release",
-      label: "Release task worktree",
-      description:
-        "Release one task-associated worktree by exact claim ID using a persisted two-phase handoff.",
-      parameters: objectSchema(
-        {
-          taskId: taskIdProperty,
-          claimId: { type: "string", minLength: 1 },
-          operationId: operationIdProperty,
-        },
-        ["taskId", "claimId"],
-      ),
-      async execute(id, params, _signal, _update, context) {
-        return toolResult(
-          await deps.service.releaseWorktree(
-            params.taskId,
-            params.claimId,
-            ownerFor(context),
-            operationFor(id, params),
-          ),
-        );
-      },
-    });
-
     pi.on("session_start", async (_event, context) => {
       await deps.service.reconcileDue(ownerFor(context), {
         taskLimit: deps.sessionReconcileLimit,
@@ -516,60 +472,71 @@ export function createTaskLifecycleExtension(
     pi.on("tool_execution_end", refreshActivity);
     pi.on("before_agent_start", () => undefined);
     pi.on("tool_call", async (event, context) => {
-      if (event?.toolName === "worktree_pool" && isRecord(event.input)) {
-        if (event.input.action === "acquire") {
-          if (
-            await deps.service.hasActiveTask(
-              context.sessionManager.getSessionId(),
-            )
-          ) {
-            return block(
-              "An Active lifecycle task must use task_worktree_acquire so task/resource state stays coordinated.",
-            );
-          }
-          return undefined;
-        }
-        if (
-          event.input.action === "release" &&
-          typeof event.input.claimId === "string" &&
-          (await deps.service.isClaimAssociated(event.input.claimId))
-        ) {
-          return block(
-            "This claim is lifecycle-associated; use task_worktree_release so release intent and completion are persisted.",
-          );
-        }
-      }
-
       const toolName =
         typeof event?.toolName === "string" ? event.toolName : "";
+      if (
+        toolName === "worktree_pool" &&
+        isRecord(event.input) &&
+        event.input.action === "release"
+      ) {
+        return preparePoolRelease(
+          event,
+          context,
+          ownerFor(context),
+          deps.service,
+        );
+      }
+
       const requirement = classifyTaskToolRequirement(toolName, event?.input);
       if (requirement.kind === "none") return undefined;
 
-      let activeTasks: LifecycleIssue[];
-      try {
-        activeTasks = await deps.service.activeTasksForSession(
-          context.sessionManager.getSessionId(),
-        );
-      } catch {
-        return block(`unable to verify Active task ownership for ${toolName}`);
-      }
+      const active = await activeTaskForProtectedCall(
+        toolName,
+        context,
+        deps.service,
+      );
+      if ("block" in active) return active;
+      const activeTask = active.task;
 
-      if (activeTasks.length > 1) {
-        const taskIds = activeTasks
-          .map((issue) => issue.id)
-          .sort((left, right) => left.localeCompare(right));
-        return block(
-          `session owns multiple Active tasks: ${taskIds.join(", ")}; repair lifecycle state before retrying`,
-        );
-      }
-
-      const activeTask = activeTasks[0] ?? null;
       if (requirement.kind === "active-task") {
-        return activeTask === null
-          ? block(
-              `${toolName} execution requires an Active task; claim a task before retrying`,
-            )
-          : undefined;
+        if (activeTask === null) {
+          return block(
+            toolName === "worktree_pool"
+              ? "worktree_pool acquire requires an Active task; claim a task before retrying"
+              : `${toolName} execution requires an Active task; claim a task before retrying`,
+          );
+        }
+        if (
+          toolName !== "worktree_pool" ||
+          !isRecord(event.input) ||
+          typeof event.toolCallId !== "string"
+        ) {
+          return undefined;
+        }
+        const repository = readNonEmptyString(event.input.repository);
+        const branch = readNonEmptyString(event.input.branch);
+        if (repository === null || branch === null) return undefined;
+        try {
+          const prepared = await deps.service.prepareWorktreeAcquire(
+            {
+              taskId: activeTask.id,
+              repository,
+              branch,
+              ...(readNonEmptyString(event.input.startPoint) === null
+                ? {}
+                : { startPoint: event.input.startPoint as string }),
+            },
+            ownerFor(context),
+            event.toolCallId,
+          );
+          event.input.repository = prepared.repository;
+          event.input[WORKTREE_LIFECYCLE_CONTEXT_KEY] = prepared;
+          return undefined;
+        } catch {
+          return block(
+            "unable to prepare worktree_pool acquire lifecycle state",
+          );
+        }
       }
       if (requirement.kind === "same-task") {
         if (activeTask === null) {
@@ -590,6 +557,227 @@ export function createTaskLifecycleExtension(
         `session already owns active task ${activeTask.id}; wait, close, or relinquish it before claiming ${requirement.taskId}`,
       );
     });
+
+    pi.on("tool_result", async (event, context) => {
+      if (
+        event?.toolName !== "worktree_pool" ||
+        event.isError === true ||
+        !isRecord(event.input) ||
+        event.input[WORKTREE_LIFECYCLE_CONTEXT_KEY] === undefined
+      ) {
+        return undefined;
+      }
+      let lifecycleContext: WorktreeLifecycleContext;
+      try {
+        const parsed = readWorktreeLifecycleContext(event.input);
+        if (parsed === null) throw new Error("missing lifecycle context");
+        lifecycleContext = parsed;
+      } catch {
+        return lifecycleFinalizationError("operation");
+      }
+      if (event.input.action !== lifecycleContext.mode) {
+        return lifecycleFinalizationError(lifecycleContext.mode);
+      }
+      try {
+        if (lifecycleContext.mode === "acquire") {
+          const receipt = readAcquireReceipt(event.details);
+          if (receipt === null) {
+            return lifecycleFinalizationError("acquire", lifecycleContext);
+          }
+          await deps.service.finalizeWorktreeAcquire(
+            lifecycleContext,
+            receipt,
+            ownerFor(context),
+          );
+        } else {
+          const released = readReleased(event.details);
+          if (released === null) {
+            return lifecycleFinalizationError("release", lifecycleContext);
+          }
+          if (!released) return undefined;
+          await deps.service.finalizeWorktreeRelease(
+            lifecycleContext,
+            ownerFor(context),
+          );
+        }
+        return undefined;
+      } catch {
+        return lifecycleFinalizationError(
+          lifecycleContext.mode,
+          lifecycleContext,
+        );
+      }
+    });
+  };
+}
+
+type BlockResult = { block: true; reason: string };
+
+async function activeTaskForProtectedCall(
+  toolName: string,
+  context: ExtensionContext,
+  service: TaskLifecycleToolService,
+): Promise<{ task: LifecycleIssue | null } | BlockResult> {
+  let activeTasks: LifecycleIssue[];
+  try {
+    activeTasks = await service.activeTasksForSession(
+      context.sessionManager.getSessionId(),
+    );
+  } catch {
+    return {
+      block: true,
+      reason: `unable to verify Active task ownership for ${toolName}`,
+    };
+  }
+  if (activeTasks.length > 1) {
+    const taskIds = activeTasks
+      .map((issue) => issue.id)
+      .sort((left, right) => left.localeCompare(right));
+    return {
+      block: true,
+      reason: `session owns multiple Active tasks: ${taskIds.join(", ")}; repair lifecycle state before retrying`,
+    };
+  }
+  return { task: activeTasks[0] ?? null };
+}
+
+async function preparePoolRelease(
+  event: any,
+  context: ExtensionContext,
+  owner: LockOwner,
+  service: TaskLifecycleToolService,
+): Promise<BlockResult | undefined> {
+  const claimId = readNonEmptyString(event.input.claimId);
+  if (claimId === null || typeof event.toolCallId !== "string") {
+    return undefined;
+  }
+
+  let associated: LifecycleIssue[];
+  try {
+    associated = await service.associatedTasksForClaim(claimId);
+  } catch {
+    return {
+      block: true,
+      reason: "unable to verify worktree lifecycle association for release",
+    };
+  }
+  if (associated.length === 0) return undefined;
+  if (associated.length > 1) {
+    const ids = associated
+      .map((issue) => issue.id)
+      .sort((left, right) => left.localeCompare(right));
+    return {
+      block: true,
+      reason: `worktree claim ${claimId} is associated with multiple lifecycle tasks: ${ids.join(", ")}; repair lifecycle state before retrying`,
+    };
+  }
+
+  const active = await activeTaskForProtectedCall(
+    "worktree_pool",
+    context,
+    service,
+  );
+  if ("block" in active) return active;
+  const task = associated[0];
+  if (active.task === null) {
+    return {
+      block: true,
+      reason: `worktree_pool release requires active task ${task.id}; claim it before retrying`,
+    };
+  }
+  if (active.task.id !== task.id) {
+    return {
+      block: true,
+      reason: `session owns active task ${active.task.id}, not ${task.id}`,
+    };
+  }
+
+  try {
+    const prepared = await service.prepareWorktreeRelease(
+      task.id,
+      claimId,
+      owner,
+      event.toolCallId,
+    );
+    event.input.repository = prepared.repository;
+    event.input[WORKTREE_LIFECYCLE_CONTEXT_KEY] = prepared;
+    return undefined;
+  } catch {
+    return {
+      block: true,
+      reason: "unable to prepare worktree_pool release lifecycle state",
+    };
+  }
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readAcquireReceipt(value: unknown): AcquireResult | null {
+  if (!isRecord(value)) return null;
+  const claimId = readNonEmptyString(value.claimId);
+  const path = readNonEmptyString(value.path);
+  const branch = readNonEmptyString(value.branch);
+  const head = readNonEmptyString(value.head);
+  const startPoint = readNonEmptyString(value.startPoint);
+  const startPointHead = readNonEmptyString(value.startPointHead);
+  const relationship = value.relationship;
+  if (
+    claimId === null ||
+    path === null ||
+    branch === null ||
+    head === null ||
+    startPoint === null ||
+    startPointHead === null ||
+    typeof value.reused !== "boolean" ||
+    typeof value.startPointFetched !== "boolean" ||
+    (relationship !== "equal" &&
+      relationship !== "contains-start-point" &&
+      relationship !== "behind-start-point" &&
+      relationship !== "diverged")
+  ) {
+    return null;
+  }
+  return {
+    claimId,
+    path,
+    branch,
+    reused: value.reused,
+    head,
+    startPoint,
+    startPointHead,
+    startPointFetched: value.startPointFetched,
+    relationship,
+  };
+}
+
+function readReleased(value: unknown): boolean | null {
+  return isRecord(value) && typeof value.released === "boolean"
+    ? value.released
+    : null;
+}
+
+function lifecycleFinalizationError(
+  mode: string,
+  context?: WorktreeLifecycleContext,
+) {
+  const text =
+    context === undefined
+      ? `unable to finalize worktree_pool ${mode} lifecycle state`
+      : `worktree_pool ${mode} completed for claim ${context.claimId}, but task ${context.taskId} lifecycle finalization failed; reconcile the task before continuing`;
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text,
+      },
+    ],
+    details:
+      context === undefined
+        ? { action: mode }
+        : { action: mode, claimId: context.claimId, taskId: context.taskId },
+    isError: true,
   };
 }
 

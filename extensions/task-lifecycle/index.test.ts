@@ -5,6 +5,7 @@ import type {
   LifecycleIssue,
   LockOwner,
 } from "../../lib/task-lifecycle/types.js";
+import { WORKTREE_LIFECYCLE_CONTEXT_KEY } from "../../lib/task-lifecycle/worktree-tool-context.js";
 import {
   createTaskLifecycleExtension,
   type TaskLifecycleToolService,
@@ -77,7 +78,9 @@ function harness() {
   const guardState = {
     activeTasks: [] as LifecycleIssue[],
     activeTaskLookupError: null as Error | null,
-    associatedClaims: new Set<string>(),
+    associatedTasks: [] as LifecycleIssue[],
+    associationLookupError: null as Error | null,
+    finalizationError: null as Error | null,
   };
   const service: TaskLifecycleToolService = {
     async claim(...args: Parameters<TaskLifecycleToolService["claim"]>) {
@@ -140,16 +143,49 @@ function harness() {
       calls.push({ name: "interruptSession", args });
       return [];
     },
-    async acquireWorktree(
-      ...args: Parameters<TaskLifecycleToolService["acquireWorktree"]>
-    ) {
-      calls.push({ name: "acquireWorktree", args });
+    async prepareWorktreeAcquire(...args: any[]) {
+      calls.push({ name: "prepareWorktreeAcquire", args });
+      const request = args[0];
+      return {
+        version: 1,
+        mode: "acquire",
+        taskId: request.taskId,
+        operationId: args[2],
+        claimId: "claim-1",
+        pathId: "path-1",
+        repository: request.repository,
+      } as const;
+    },
+    async finalizeWorktreeAcquire(...args: any[]) {
+      calls.push({ name: "finalizeWorktreeAcquire", args });
+      if (guardState.finalizationError !== null) {
+        throw guardState.finalizationError;
+      }
       return normalizedIssue();
     },
-    async releaseWorktree(
-      ...args: Parameters<TaskLifecycleToolService["releaseWorktree"]>
-    ) {
-      calls.push({ name: "releaseWorktree", args });
+    async associatedTasksForClaim(...args: any[]) {
+      calls.push({ name: "associatedTasksForClaim", args });
+      if (guardState.associationLookupError !== null) {
+        throw guardState.associationLookupError;
+      }
+      return guardState.associatedTasks;
+    },
+    async prepareWorktreeRelease(...args: any[]) {
+      calls.push({ name: "prepareWorktreeRelease", args });
+      return {
+        version: 1,
+        mode: "release",
+        taskId: args[0],
+        operationId: args[3],
+        claimId: args[1],
+        repository: "repo",
+      } as const;
+    },
+    async finalizeWorktreeRelease(...args: any[]) {
+      calls.push({ name: "finalizeWorktreeRelease", args });
+      if (guardState.finalizationError !== null) {
+        throw guardState.finalizationError;
+      }
       return normalizedIssue();
     },
     async activeTasksForSession(
@@ -160,18 +196,6 @@ function harness() {
         throw guardState.activeTaskLookupError;
       }
       return guardState.activeTasks;
-    },
-    async hasActiveTask(
-      ...args: Parameters<TaskLifecycleToolService["hasActiveTask"]>
-    ) {
-      calls.push({ name: "hasActiveTask", args });
-      return guardState.activeTasks.length > 0;
-    },
-    async isClaimAssociated(
-      ...args: Parameters<TaskLifecycleToolService["isClaimAssociated"]>
-    ) {
-      calls.push({ name: "isClaimAssociated", args });
-      return guardState.associatedClaims.has(args[0]);
     },
   };
   const pi = {
@@ -217,8 +241,6 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
       "task_reconcile",
       "task_close",
       "task_reopen",
-      "task_worktree_acquire",
-      "task_worktree_release",
     ],
   );
   assert.deepEqual(
@@ -231,6 +253,7 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
       "tool_execution_end",
       "before_agent_start",
       "tool_call",
+      "tool_result",
     ],
   );
   for (const tool of h.tools.values()) {
@@ -462,60 +485,81 @@ test("fails protected calls closed for ambiguous ownership and store errors", as
   );
 });
 
-test("task worktree tools route only task and pool coordinates", async () => {
-  const h = harness();
-
-  await h.tools.get("task_worktree_acquire")!.execute(
-    "acquire-call",
-    {
-      taskId: "jp-1",
-      repository: "DataDog/dd-source",
-      branch: "jpriverar/topic",
-      startPoint: "origin/main",
-    },
-    null,
-    null,
-    h.context,
-  );
-  await h.tools
-    .get("task_worktree_release")!
-    .execute(
-      "release-call",
-      { taskId: "jp-1", claimId: "claim-1" },
-      null,
-      null,
-      h.context,
-    );
-
-  assert.deepEqual(
-    h.calls.slice(0, 2).map((call) => call.name),
-    ["acquireWorktree", "releaseWorktree"],
-  );
-  assert.deepEqual(h.calls[0].args[0], {
-    taskId: "jp-1",
-    repository: "DataDog/dd-source",
-    branch: "jpriverar/topic",
-    startPoint: "origin/main",
-  });
-  assert.equal(h.calls[0].args[2], "acquire-call");
-  assert.equal(h.calls[1].args[3], "release-call");
-});
-
-test("guards raw pool mutations while preserving inspection and taskless work", async () => {
+test("requires an Active task and prepares ordinary pool acquisition", async () => {
   const h = harness();
   const guard = h.handlers.get("tool_call")![0];
+  const input: Record<string, unknown> = {
+    action: "acquire",
+    repository: "repo",
+    branch: "topic",
+  };
+
+  assert.deepEqual(
+    await guard(
+      { toolCallId: "acquire-call", toolName: "worktree_pool", input },
+      h.context,
+    ),
+    {
+      block: true,
+      reason:
+        "worktree_pool acquire requires an Active task; claim a task before retrying",
+    },
+  );
 
   h.guardState.activeTasks = [activeIssue("jp-a")];
-  const blockedAcquire = await guard(
-    {
-      toolName: "worktree_pool",
-      input: { action: "acquire", repository: "repo", branch: "topic" },
-    },
-    h.context,
+  assert.equal(
+    await guard(
+      { toolCallId: "acquire-call", toolName: "worktree_pool", input },
+      h.context,
+    ),
+    undefined,
   );
-  assert.ok(blockedAcquire && typeof blockedAcquire === "object");
-  assert.equal((blockedAcquire as any).block, true);
-  assert.match((blockedAcquire as any).reason, /task_worktree_acquire/);
+  assert.deepEqual(input[WORKTREE_LIFECYCLE_CONTEXT_KEY], {
+    version: 1,
+    mode: "acquire",
+    taskId: "jp-a",
+    operationId: "acquire-call",
+    claimId: "claim-1",
+    pathId: "path-1",
+    repository: "repo",
+  });
+  const prepare = h.calls.find(
+    (call) => call.name === "prepareWorktreeAcquire",
+  )!;
+  assert.deepEqual(prepare.args[0], {
+    taskId: "jp-a",
+    repository: "repo",
+    branch: "topic",
+  });
+  assert.equal(prepare.args[2], "acquire-call");
+});
+
+test("prepares associated release and preserves recovery operations", async () => {
+  const h = harness();
+  const guard = h.handlers.get("tool_call")![0];
+  h.guardState.activeTasks = [activeIssue("jp-a")];
+  h.guardState.associatedTasks = [activeIssue("jp-a")];
+  const input: Record<string, unknown> = {
+    action: "release",
+    repository: "repo",
+    claimId: "claim-1",
+  };
+
+  assert.equal(
+    await guard(
+      { toolCallId: "release-call", toolName: "worktree_pool", input },
+      h.context,
+    ),
+    undefined,
+  );
+  assert.deepEqual(input[WORKTREE_LIFECYCLE_CONTEXT_KEY], {
+    version: 1,
+    mode: "release",
+    taskId: "jp-a",
+    operationId: "release-call",
+    claimId: "claim-1",
+    repository: "repo",
+  });
   assert.equal(
     await guard(
       { toolName: "worktree_pool", input: { action: "list" } },
@@ -531,35 +575,226 @@ test("guards raw pool mutations while preserving inspection and taskless work", 
     undefined,
   );
 
-  h.guardState.activeTasks = [];
+  const recovery = harness();
   assert.equal(
-    await guard(
-      { toolName: "worktree_pool", input: { action: "acquire" } },
-      h.context,
-    ),
-    undefined,
-  );
-  h.guardState.associatedClaims.add("claim-1");
-  const blockedRelease = await guard(
-    {
-      toolName: "worktree_pool",
-      input: { action: "release", claimId: "claim-1" },
-    },
-    h.context,
-  );
-  assert.ok(blockedRelease && typeof blockedRelease === "object");
-  assert.equal((blockedRelease as any).block, true);
-  assert.match((blockedRelease as any).reason, /task_worktree_release/);
-  assert.equal(
-    await guard(
+    await recovery.handlers.get("tool_call")![0](
       {
         toolName: "worktree_pool",
         input: { action: "release", claimId: "unassociated" },
+      },
+      recovery.context,
+    ),
+    undefined,
+  );
+});
+
+test("fails associated release closed for foreign, ambiguous, or unknown ownership", async () => {
+  const release = {
+    toolCallId: "release-call",
+    toolName: "worktree_pool",
+    input: { action: "release", repository: "repo", claimId: "claim-1" },
+  };
+
+  const foreign = harness();
+  foreign.guardState.activeTasks = [activeIssue("jp-b")];
+  foreign.guardState.associatedTasks = [activeIssue("jp-a")];
+  assert.deepEqual(
+    await foreign.handlers.get("tool_call")![0](release, foreign.context),
+    { block: true, reason: "session owns active task jp-b, not jp-a" },
+  );
+
+  const ambiguous = harness();
+  ambiguous.guardState.associatedTasks = [
+    activeIssue("jp-z"),
+    activeIssue("jp-a"),
+  ];
+  assert.deepEqual(
+    await ambiguous.handlers.get("tool_call")![0](release, ambiguous.context),
+    {
+      block: true,
+      reason:
+        "worktree claim claim-1 is associated with multiple lifecycle tasks: jp-a, jp-z; repair lifecycle state before retrying",
+    },
+  );
+
+  const unavailable = harness();
+  unavailable.guardState.associationLookupError = new Error(
+    "private task data and raw stderr",
+  );
+  const result = await unavailable.handlers.get("tool_call")![0](
+    release,
+    unavailable.context,
+  );
+  assert.deepEqual(result, {
+    block: true,
+    reason: "unable to verify worktree lifecycle association for release",
+  });
+  assert.doesNotMatch(JSON.stringify(result), /private task data|raw stderr/);
+});
+
+test("finalizes successful ordinary pool results and skips failures", async () => {
+  const h = harness();
+  const finalize = h.handlers.get("tool_result")![0];
+  const acquireContext = {
+    version: 1,
+    mode: "acquire",
+    taskId: "jp-a",
+    operationId: "acquire-call",
+    claimId: "claim-1",
+    pathId: "path-1",
+    repository: "repo",
+  } as const;
+
+  assert.equal(
+    await finalize(
+      {
+        toolName: "worktree_pool",
+        input: {
+          action: "acquire",
+          [WORKTREE_LIFECYCLE_CONTEXT_KEY]: acquireContext,
+        },
+        details: {
+          claimId: "claim-1",
+          path: "/tmp/worktree",
+          branch: "topic",
+          reused: false,
+          head: "abc123",
+          startPoint: "origin/main",
+          startPointHead: "abc123",
+          startPointFetched: true,
+          relationship: "equal",
+        },
+        isError: false,
       },
       h.context,
     ),
     undefined,
   );
+  assert.equal(h.calls.at(-1)?.name, "finalizeWorktreeAcquire");
+
+  await finalize(
+    {
+      toolName: "worktree_pool",
+      input: {
+        action: "release",
+        [WORKTREE_LIFECYCLE_CONTEXT_KEY]: {
+          version: 1,
+          mode: "release",
+          taskId: "jp-a",
+          operationId: "release-call",
+          claimId: "claim-1",
+          repository: "repo",
+        },
+      },
+      details: { released: true, path: "/tmp/worktree" },
+      isError: false,
+    },
+    h.context,
+  );
+  assert.equal(h.calls.at(-1)?.name, "finalizeWorktreeRelease");
+
+  const count = h.calls.length;
+  await finalize(
+    {
+      toolName: "worktree_pool",
+      input: {
+        action: "acquire",
+        [WORKTREE_LIFECYCLE_CONTEXT_KEY]: acquireContext,
+      },
+      details: null,
+      isError: true,
+    },
+    h.context,
+  );
+  assert.equal(h.calls.length, count);
+  assert.deepEqual(
+    await finalize(
+      {
+        toolName: "worktree_pool",
+        input: {
+          action: "acquire",
+          [WORKTREE_LIFECYCLE_CONTEXT_KEY]: acquireContext,
+        },
+        details: {
+          claimId: "claim-1",
+          path: "/tmp/worktree",
+          branch: "topic",
+          head: "abc123",
+        },
+        isError: false,
+      },
+      h.context,
+    ),
+    {
+      content: [
+        {
+          type: "text",
+          text: "worktree_pool acquire completed for claim claim-1, but task jp-a lifecycle finalization failed; reconcile the task before continuing",
+        },
+      ],
+      details: { action: "acquire", claimId: "claim-1", taskId: "jp-a" },
+      isError: true,
+    },
+  );
+  assert.equal(h.calls.length, count);
+  await finalize(
+    {
+      toolName: "worktree_pool",
+      input: {
+        action: "release",
+        [WORKTREE_LIFECYCLE_CONTEXT_KEY]: {
+          version: 1,
+          mode: "release",
+          taskId: "jp-a",
+          operationId: "release-call",
+          claimId: "claim-1",
+          repository: "repo",
+        },
+      },
+      details: { released: false, path: "/tmp/worktree" },
+      isError: false,
+    },
+    h.context,
+  );
+  assert.equal(h.calls.length, count);
+});
+
+test("returns a curated error when pool result finalization fails", async () => {
+  const h = harness();
+  h.guardState.finalizationError = new Error(
+    "private task data and raw stderr",
+  );
+  const result = await h.handlers.get("tool_result")![0](
+    {
+      toolName: "worktree_pool",
+      input: {
+        action: "release",
+        [WORKTREE_LIFECYCLE_CONTEXT_KEY]: {
+          version: 1,
+          mode: "release",
+          taskId: "jp-a",
+          operationId: "release-call",
+          claimId: "claim-1",
+          repository: "repo",
+        },
+      },
+      details: { released: true, path: "/tmp/worktree" },
+      isError: false,
+    },
+    h.context,
+  );
+
+  assert.deepEqual(result, {
+    content: [
+      {
+        type: "text",
+        text: "worktree_pool release completed for claim claim-1, but task jp-a lifecycle finalization failed; reconcile the task before continuing",
+      },
+    ],
+    details: { action: "release", claimId: "claim-1", taskId: "jp-a" },
+    isError: true,
+  });
+  assert.doesNotMatch(JSON.stringify(result), /private task data|raw stderr/);
 });
 
 test("session and activity hooks reconcile synchronously without timers", async () => {

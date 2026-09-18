@@ -8,8 +8,6 @@ const sameTaskTools = new Set([
   "task_attach_artifact",
   "task_wait",
   "task_close",
-  "task_worktree_acquire",
-  "task_worktree_release",
 ]);
 
 export function classifyTaskToolRequirement(
@@ -20,6 +18,13 @@ export function classifyTaskToolRequirement(
     return isRecord(input) && typeof input.action === "string"
       ? { kind: "none" }
       : { kind: "active-task" };
+  }
+  if (
+    toolName === "worktree_pool" &&
+    isRecord(input) &&
+    input.action === "acquire"
+  ) {
+    return { kind: "active-task" };
   }
 
   const taskId = readTaskId(input);
