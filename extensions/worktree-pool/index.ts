@@ -1,5 +1,9 @@
 import { hostname as readHostname } from "node:os";
 
+import {
+  readWorktreeLifecycleContext,
+  WORKTREE_LIFECYCLE_CONTEXT_KEY,
+} from "../../lib/task-lifecycle/worktree-tool-context.js";
 import { evaluatePoolCommand } from "./command-policy.js";
 import {
   currentOwner,
@@ -19,6 +23,7 @@ type PoolParameters = {
   startPoint?: string;
   claimId?: string;
   slot?: string;
+  [WORKTREE_LIFECYCLE_CONTEXT_KEY]?: unknown;
 };
 
 type ExtensionContext = {
@@ -101,7 +106,16 @@ export function createWorktreePoolExtension(
         "List, acquire, release, or non-destructively repair machine-wide bounded ephemeral worktrees.",
       parameters: toolParameters,
       async execute(_id, params, _signal, _update, ctx) {
+        const lifecycleContext = readWorktreeLifecycleContext(params);
         validateActionParameters(params);
+        if (
+          lifecycleContext !== null &&
+          lifecycleContext.mode !== params.action
+        ) {
+          throw new Error(
+            `worktree lifecycle context mode ${lifecycleContext.mode} does not match ${params.action} action`,
+          );
+        }
         const purpose = params.action === "acquire" ? "acquire" : "identity";
         const repositories =
           params.repository === undefined ? [] : [params.repository];
@@ -125,6 +139,12 @@ export function createWorktreePoolExtension(
                 : { startPoint: params.startPoint }),
             },
             owner,
+            lifecycleContext?.mode === "acquire"
+              ? {
+                  claimId: lifecycleContext.claimId,
+                  pathId: lifecycleContext.pathId,
+                }
+              : undefined,
           );
           return result(
             `${acquired.reused ? "Reused" : "Acquired"} ${acquired.path} on ${acquired.branch} ` +
@@ -184,8 +204,19 @@ function validateActionParameters(params: PoolParameters): void {
     );
   const allowedFields: Record<PoolAction, ReadonlySet<string>> = {
     list: new Set(["action", "repository"]),
-    acquire: new Set(["action", "repository", "branch", "startPoint"]),
-    release: new Set(["action", "repository", "claimId"]),
+    acquire: new Set([
+      "action",
+      "repository",
+      "branch",
+      "startPoint",
+      WORKTREE_LIFECYCLE_CONTEXT_KEY,
+    ]),
+    release: new Set([
+      "action",
+      "repository",
+      "claimId",
+      WORKTREE_LIFECYCLE_CONTEXT_KEY,
+    ]),
     repair: new Set(["action", "repository", "slot"]),
   };
   for (const field of Object.keys(params)) {

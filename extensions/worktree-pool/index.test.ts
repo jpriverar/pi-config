@@ -70,8 +70,13 @@ class FakePool {
   async acquire(
     request: AcquireRequest,
     owner: OwnerIdentity,
+    identity?: { claimId: string; pathId: string },
   ): Promise<AcquireResult> {
-    this.calls.push({ name: "acquire", args: [request, owner] });
+    this.calls.push({
+      name: "acquire",
+      args:
+        identity === undefined ? [request, owner] : [request, owner, identity],
+    });
     return {
       claimId: CLAIM_ID,
       path: POOLED_PATH,
@@ -250,6 +255,7 @@ describe("worktree_pool tool", () => {
       properties: Record<string, unknown>;
     };
     expect(parameters.properties).not.toHaveProperty("pathId");
+    expect(parameters.properties).not.toHaveProperty("__piTaskLifecycle");
     await expect(
       h.call({
         action: "acquire",
@@ -258,6 +264,60 @@ describe("worktree_pool tool", () => {
         claimId: CLAIM_ID,
       }),
     ).rejects.toThrow("acquire.claimId");
+  });
+
+  test("forwards validated private acquire identities to the pool", async () => {
+    const h = harness();
+    await h.call({
+      action: "acquire",
+      repository: "demo",
+      branch: "topic",
+      __piTaskLifecycle: {
+        version: 1,
+        mode: "acquire",
+        taskId: "jp-1",
+        operationId: "tool-call-1",
+        claimId: CLAIM_ID,
+        pathId: "22222222-2222-4222-8222-222222222222",
+        repository: "demo",
+      },
+    });
+
+    expect(h.pool.calls[0].args[2]).toEqual({
+      claimId: CLAIM_ID,
+      pathId: "22222222-2222-4222-8222-222222222222",
+    });
+  });
+
+  test("rejects malformed or action-mismatched private identities", async () => {
+    const h = harness();
+    await expect(
+      h.call({
+        action: "acquire",
+        repository: "demo",
+        branch: "topic",
+        __piTaskLifecycle: {
+          version: 1,
+          mode: "acquire",
+          taskId: "jp-1",
+        },
+      }),
+    ).rejects.toThrow("invalid worktree lifecycle context");
+    await expect(
+      h.call({
+        action: "acquire",
+        repository: "demo",
+        branch: "topic",
+        __piTaskLifecycle: {
+          version: 1,
+          mode: "release",
+          taskId: "jp-1",
+          operationId: "release-call",
+          claimId: CLAIM_ID,
+          repository: "demo",
+        },
+      }),
+    ).rejects.toThrow("does not match acquire action");
   });
 
   test("allows pool actions from child depth", async () => {
