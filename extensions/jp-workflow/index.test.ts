@@ -953,6 +953,7 @@ function lifecycle(
 test("renders explicit lifecycle sections and deterministic waiting details", async () => {
   const oneDayAgo = new Date(Date.now() - 86_400_000).toISOString();
   const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000).toISOString();
+  const nextCheckAt = new Date(Date.now() + 3_600_000).toISOString();
   const dependency = issue(
     "jp-654",
     "open",
@@ -979,7 +980,7 @@ test("renders explicit lifecycle sections and deterministic waiting details", as
     state: "pending",
     createdAt: twoDaysAgo,
     lastCheckedAt: twoDaysAgo,
-    nextCheckAt: "2026-09-18T14:00:00.000Z",
+    nextCheckAt,
     lastObservation: "open",
     errorCount: 0,
   });
@@ -1001,7 +1002,9 @@ test("renders explicit lifecycle sections and deterministic waiting details", as
   );
   assert.match(
     hidden.message.content,
-    /jp-789 Fix review issue · PR open · next check 14:00 · waiting 2d/,
+    new RegExp(
+      `jp-789 Fix review issue · PR open · next check ${nextCheckAt.slice(11, 16)} · waiting 2d`,
+    ),
   );
   assert.doesNotMatch(
     hidden.message.content,
