@@ -861,7 +861,7 @@ git commit -m "reconcile lifecycle checks"
 - Consumes: read-only lifecycle decoding from `lib/task-lifecycle/model.ts` and native dependency IDs from Beads.
 - Produces: compact Active, Actionable, and Waiting presentation with inline warnings; no network calls.
 
-- [ ] **Step 1: Write failing Beads classification tests**
+- [x] **Step 1: Write failing Beads classification tests**
 
 Add cases proving:
 
@@ -874,17 +874,17 @@ assert.match(classify(malformedLifecycle).warnings[0], /unsupported piLifecycle/
 
 `BeadsClient.listBlockingDependencies(id)` must execute `bd dep list <id> --json` and retain only unresolved `dependency_type === "blocks"` records.
 
-- [ ] **Step 2: Run Beads tests and verify RED**
+- [x] **Step 2: Run Beads tests and verify RED**
 
 Run: `npm run test:file -- tests/beads.test.ts`
 
 Expected: FAIL because lifecycle metadata and blocker details are not decoded.
 
-- [ ] **Step 3: Extend read-only Beads classification**
+- [x] **Step 3: Extend read-only Beads classification**
 
 Add lifecycle view fields to `BeadsIssue` and `ClassifiedIssue`. Lifecycle metadata controls presentation when valid; native readiness prevents a drifted `phase=actionable` issue with an unresolved blocker from appearing ready. Legacy issues retain current behavior plus migration warnings.
 
-- [ ] **Step 4: Write failing workflow and overlay presentation tests**
+- [x] **Step 4: Write failing workflow and overlay presentation tests**
 
 Assert exact visible and hidden sections:
 
@@ -898,11 +898,11 @@ jp-789 Fix review issue · PR open · next check 14:00 · waiting 2d
 
 Assert a dependency-waiting task appears exactly once and never under Ready/Open/Actionable. Assert overdue checks and retained-resource warnings are inline annotations, not separate lifecycle states. Assert the injected block contains only normalized untrusted task data.
 
-- [ ] **Step 5: Implement lifecycle-aware rendering**
+- [x] **Step 5: Implement lifecycle-aware rendering**
 
 Keep network and pool reads out of `before_agent_start`. Native dependency IDs come from Beads. Pool observations are persisted by explicit lifecycle reconciliation and rendered as warnings from metadata. Reuse the same classified data for startup card, hidden injection, and `/tasks` overlay.
 
-- [ ] **Step 6: Run all task-view tests**
+- [x] **Step 6: Run all task-view tests**
 
 Run:
 
@@ -912,7 +912,7 @@ npm run test:file -- tests/beads.test.ts extensions/jp-workflow/index.test.ts ex
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit lifecycle presentation**
+- [x] **Step 7: Commit lifecycle presentation**
 
 ```bash
 git add lib/beads.ts tests/beads.test.ts extensions/jp-workflow extensions/tasks-overlay

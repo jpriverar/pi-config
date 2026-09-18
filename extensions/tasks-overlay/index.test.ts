@@ -27,6 +27,9 @@ const rawIssue = (issue: BeadsIssue) => ({
   title: issue.title,
   status: issue.status,
   labels: issue.labels,
+  ...(issue.lifecycle === undefined
+    ? {}
+    : { metadata: { piLifecycle: issue.lifecycle } }),
 });
 
 function issue(
@@ -86,6 +89,20 @@ function createHarness(
   const pi = {
     async exec(_command: string, args: string[]) {
       calls.push(args);
+      if (args[0] === "dep" && args[1] === "list") {
+        const target = issues.find((issue) => issue.id === args[2]);
+        return {
+          code: 0,
+          stdout: JSON.stringify(
+            (target?.blockingDependencies ?? []).map((dependency) => ({
+              id: dependency.id,
+              status: dependency.status,
+              dependency_type: dependency.dependencyType,
+            })),
+          ),
+          stderr: "",
+        };
+      }
       if (args[0] === "config" && args[1] === "get") {
         const queued = registryGetResults.shift();
         if (queued) return queued;
@@ -383,9 +400,9 @@ test("project picker groups primary workstreams and shows readiness counts", asy
   );
   assert.match(
     harness.selections[0].items[1],
-    /Alpha.*In progress: 1.*Blocked: 1.*Ready: 1.*Waiting: 1/,
+    /Alpha.*Active: 1.*Actionable: 1.*Waiting: 2/,
   );
-  assert.match(harness.selections[0].items[2], /Beta.*In progress: 1/);
+  assert.match(harness.selections[0].items[2], /Beta.*Active: 1/);
   assert.equal(harness.selections[0].items.length, 3);
   assert.deepEqual(harness.renamedSessions, ["Alpha-580c8e67"]);
 });
@@ -483,7 +500,7 @@ test("project picker keeps closed-only projects available for new work", async (
 
   assert.deepEqual(harness.selections[0].items, [
     GLOBAL_PROJECT,
-    "Active Project — In progress: 0 • Blocked: 0 • Ready: 0 • Waiting: 1",
+    "Active Project — Active: 0 • Actionable: 0 • Waiting: 1",
     "Closed Project — No open tasks",
   ]);
 });
@@ -1171,10 +1188,9 @@ test("renders every classified status and leaves needs:jp as a marker", async ()
 
   await show(harness);
 
-  assert.match(harness.render(), /In progress \(1\)/);
-  assert.match(harness.render(), /Blocked \(1\)/);
-  assert.match(harness.render(), /Ready \(1\)/);
-  assert.match(harness.render(), /Waiting \(1\)/);
+  assert.match(harness.render(), /Active \(1\)/);
+  assert.match(harness.render(), /Actionable \(1\)/);
+  assert.match(harness.render(), /Waiting \(2\)/);
   assert.match(harness.render(), /Task doing ← you/);
   assert.match(harness.render(), /Task waiting ← you/);
 });
@@ -1313,3 +1329,37 @@ for (const unavailable of ["active", "ready"] as const) {
     assert.equal(harness.notifications[0].type, "warning");
   });
 }
+
+test("renders managed dependency waits once with inline authority", async () => {
+  const enteredAt = new Date(Date.now() - 86_400_000).toISOString();
+  const waiting = issue("jp-654", "open", ["workstream:pi-setup"]);
+  waiting.title = "Roll out migration";
+  waiting.lifecycle = {
+    version: 1,
+    phase: "waiting",
+    waiting: { kind: "dependency" },
+    stateEnteredAt: enteredAt,
+    lastProgressAt: enteredAt,
+    execution: null,
+    artifacts: [],
+    activeCheck: null,
+    checkHistory: [],
+    transitionHistory: [],
+    resources: [],
+    disposition: null,
+  };
+  waiting.blockingDependencies = [
+    { id: "jp-600", status: "open", dependencyType: "blocks" },
+  ];
+  const harness = createHarness({ issues: [waiting], readyIds: [] });
+
+  await show(harness);
+
+  assert.match(harness.render(), /Waiting \(1\)/);
+  assert.match(
+    harness.render(),
+    /jp-654 Roll out migration · blocked by jp-600 · waiting 1d/,
+  );
+  assert.doesNotMatch(harness.render(), /(Ready|Actionable) \(1\)/);
+  assert.equal((harness.render().match(/jp-654/g) ?? []).length, 1);
+});

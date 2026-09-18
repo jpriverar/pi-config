@@ -12,8 +12,9 @@ import {
 } from "@earendil-works/pi-tui";
 
 import {
-  classifyReadiness,
   createBeadsClient,
+  lifecycleAnnotation,
+  listClassifiedIssues,
   normalizeBeadsLabel,
   type ClassifiedIssue,
   type IssueStatus,
@@ -167,13 +168,10 @@ export default function tasksOverlay(pi: ExtensionAPI) {
     project?: string,
     statuses?: readonly IssueStatus[],
   ): Promise<ClassifiedIssue[] | undefined> {
-    const listed = await client.listIssues(statuses);
+    const listed = await listClassifiedIssues(client, statuses);
     if (!listed.ok) return undefined;
 
-    const ready = await client.listReadyIssueIds();
-    if (!ready.ok) return undefined;
-
-    const issues = classifyReadiness(listed.value, ready.value);
+    const issues = listed.value;
     if (!project) return issues;
 
     const target = project.toLowerCase();
@@ -204,23 +202,21 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       color: ThemeColor;
     }> = [
       {
-        label: "◐ In progress",
+        label: "◐ Active",
         items: issues.filter((issue) => issue.readiness === "in_progress"),
         color: "warning",
       },
       {
-        label: "● Blocked",
-        items: issues.filter((issue) => issue.readiness === "blocked"),
-        color: "error",
-      },
-      {
-        label: "○ Ready",
+        label: "○ Actionable",
         items: issues.filter((issue) => issue.readiness === "ready"),
         color: "text",
       },
       {
         label: "◌ Waiting",
-        items: issues.filter((issue) => issue.readiness === "waiting"),
+        items: issues.filter(
+          (issue) =>
+            issue.readiness === "waiting" || issue.readiness === "blocked",
+        ),
         color: "muted",
       },
     ];
@@ -240,7 +236,7 @@ export default function tasksOverlay(pi: ExtensionAPI) {
         for (const issue of group.items) {
           const marker = issue.needsJp ? theme.fg("warning", " ← you") : "";
           lines.push(
-            `  ${theme.fg(group.color, STATUS_ICON[issue.readiness])} ${theme.fg("dim", issue.id)} ${issue.title}${marker}`,
+            `  ${theme.fg(group.color, STATUS_ICON[issue.readiness])} ${theme.fg("dim", issue.id)} ${issue.title}${lifecycleAnnotation(issue)}${marker}`,
           );
         }
       }
@@ -538,7 +534,7 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       const label =
         activeCount === 0
           ? `${project.name} — No open tasks`
-          : `${project.name} — In progress: ${project.counts.in_progress} • Blocked: ${project.counts.blocked} • Ready: ${project.counts.ready} • Waiting: ${project.counts.waiting}`;
+          : `${project.name} — Active: ${project.counts.in_progress} • Actionable: ${project.counts.ready} • Waiting: ${project.counts.blocked + project.counts.waiting}`;
       labels.push(label);
       namesByLabel.set(label, project.name);
     }

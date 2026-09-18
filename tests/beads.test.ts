@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   classifyReadiness,
   createBeadsClient,
+  lifecycleAnnotation,
   resolveBeadsDir,
   type BeadsExec,
   type BeadsExecResult,
@@ -595,26 +596,201 @@ test("classifies readiness and derives labels once in source order", () => {
     {
       ...issues[0],
       readiness: "in_progress",
+      blockingTaskIds: [],
+      warnings: [],
       workstreams: ["first", "second"],
       needsJp: true,
     },
     {
       ...issues[1],
       readiness: "blocked",
+      blockingTaskIds: [],
+      warnings: [],
       workstreams: [],
       needsJp: false,
     },
     {
       ...issues[2],
       readiness: "ready",
+      blockingTaskIds: [],
+      warnings: [],
       workstreams: ["core"],
       needsJp: false,
     },
     {
       ...issues[3],
       readiness: "waiting",
+      blockingTaskIds: [],
+      warnings: [],
       workstreams: [],
       needsJp: false,
     },
   ]);
+});
+
+test("lists only unresolved native blocking dependencies", async () => {
+  const fake = fakeExec(
+    success([
+      { id: "jp-open", status: "open", dependency_type: "blocks" },
+      { id: "jp-closed", status: "closed", dependency_type: "blocks" },
+      { id: "jp-related", status: "open", dependency_type: "relates_to" },
+    ]),
+  );
+  const client = createBeadsClient(fake.exec, {
+    env: { BEADS_DIR: store },
+  });
+
+  const result = await client.listBlockingDependencies("jp-1");
+
+  assert.deepEqual(fake.calls, [
+    {
+      command: "bd",
+      args: ["dep", "list", "jp-1", "--json", "--db", store],
+    },
+  ]);
+  assert.deepEqual(result, {
+    ok: true,
+    value: [{ id: "jp-open", status: "open", dependencyType: "blocks" }],
+  });
+});
+
+test("classifies managed lifecycle phases and native blockers", () => {
+  const managed = (phase: string, waiting: unknown = null) => ({
+    version: 1,
+    phase,
+    waiting,
+    stateEnteredAt: "2026-09-16T10:00:00.000Z",
+    lastProgressAt: "2026-09-16T10:00:00.000Z",
+    execution:
+      phase === "active"
+        ? {
+            sessionId: "session-1",
+            claimedAt: "2026-09-16T10:00:00.000Z",
+            lastActivityAt: "2026-09-16T10:00:00.000Z",
+            expiresAt: "2026-09-18T10:00:00.000Z",
+            resourceSnapshot: {
+              observedAt: "2026-09-16T10:00:00.000Z",
+              resourceIds: [],
+            },
+          }
+        : null,
+    artifacts: [],
+    activeCheck: null,
+    checkHistory: [],
+    transitionHistory: [],
+    resources: [],
+    disposition: null,
+  });
+  const dependencyWaiting = {
+    id: "jp-waiting",
+    title: "Roll out migration",
+    status: "open",
+    labels: [],
+    lifecycle: managed("waiting", { kind: "dependency" }),
+    blockingDependencies: [
+      { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+    ],
+  } as unknown as BeadsIssue;
+  const driftedActionable = {
+    id: "jp-drifted",
+    title: "Drifted actionable",
+    status: "open",
+    labels: [],
+    lifecycle: managed("actionable"),
+    blockingDependencies: [
+      { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+    ],
+  } as unknown as BeadsIssue;
+
+  const [waiting, drifted] = classifyReadiness(
+    [dependencyWaiting, driftedActionable],
+    new Set(["jp-drifted"]),
+  );
+
+  assert.equal(waiting.readiness, "waiting");
+  assert.deepEqual(waiting.blockingTaskIds, ["jp-blocker"]);
+  assert.equal(waiting.lifecyclePhase, "waiting");
+  assert.equal(drifted.readiness, "waiting");
+  assert.match(drifted.warnings[0], /unresolved blocker/);
+});
+
+test("surfaces malformed lifecycle metadata as a migration warning", async () => {
+  const raw = issue({ metadata: { piLifecycle: { version: 2 } } });
+  const client = createBeadsClient(fakeExec(success([raw])).exec, {
+    env: { BEADS_DIR: store },
+  });
+  const listed = await client.listIssues();
+  assert.equal(listed.ok, true);
+  if (!listed.ok) return;
+
+  const classified = classifyReadiness(listed.value, new Set(["jp-1"]));
+
+  assert.match(classified[0].warnings[0], /unsupported piLifecycle version 2/);
+});
+
+test("renders overdue checks and retained resources as waiting warnings", () => {
+  const enteredAt = "2026-09-16T10:00:00.000Z";
+  const lifecycle = {
+    version: 1,
+    phase: "waiting",
+    waiting: { kind: "check" },
+    stateEnteredAt: enteredAt,
+    lastProgressAt: enteredAt,
+    execution: null,
+    artifacts: [],
+    activeCheck: {
+      id: "manual-1",
+      kind: "manual",
+      targetArtifactIds: [],
+      predicate: {},
+      onSatisfied: "actionable",
+      wakeOn: ["action_required"],
+      state: "pending",
+      createdAt: enteredAt,
+      lastCheckedAt: null,
+      nextCheckAt: "2026-09-17T09:00:00.000Z",
+      lastObservation: null,
+      errorCount: 0,
+    },
+    checkHistory: [],
+    transitionHistory: [],
+    resources: [
+      {
+        id: "resource-1",
+        kind: "worktree",
+        repository: "pi-config",
+        claimId: "claim-1",
+        pathId: "path-1",
+        operationId: "op-1",
+        path: "/tmp/worktree",
+        branch: "topic",
+        branchArtifactId: null,
+        acquiredAt: enteredAt,
+        releasedAt: null,
+        cleanupState: "active",
+      },
+    ],
+    disposition: null,
+  };
+  const [classified] = classifyReadiness(
+    [
+      {
+        id: "jp-wait",
+        title: "Wait",
+        status: "blocked",
+        labels: [],
+        lifecycle,
+      } as unknown as BeadsIssue,
+    ],
+    new Set(),
+  );
+
+  const rendered = lifecycleAnnotation(
+    classified,
+    Date.parse("2026-09-18T10:00:00.000Z"),
+  );
+
+  assert.match(rendered, /check overdue/);
+  assert.match(rendered, /retained worktree claim-1/);
+  assert.equal(classified.readiness, "waiting");
 });

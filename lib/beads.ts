@@ -1,6 +1,13 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { decodeLifecycle } from "./task-lifecycle/model.js";
+import type {
+  LifecycleCheck,
+  LifecycleMetadataV1,
+  LifecyclePhase,
+  NativeDependency,
+} from "./task-lifecycle/types.js";
 import {
   decodeProjectRenameRegistry,
   encodeProjectRenameRegistry,
@@ -22,12 +29,20 @@ export interface BeadsIssue {
   status: IssueStatus;
   labels: string[];
   updatedAt?: string;
+  lifecycle?: LifecycleMetadataV1 | null;
+  lifecycleWarning?: string;
+  blockingDependencies?: NativeDependency[];
 }
 
 export interface ClassifiedIssue extends BeadsIssue {
   readiness: Readiness;
   workstreams: string[];
   needsJp: boolean;
+  lifecyclePhase?: LifecyclePhase;
+  lifecycleStateEnteredAt?: string;
+  activeCheck?: LifecycleCheck | null;
+  blockingTaskIds: string[];
+  warnings: string[];
 }
 
 export interface BeadsError {
@@ -70,6 +85,10 @@ export interface BeadsClient {
   ): Promise<BeadsResult<BeadsIssue[]>>;
 
   listReadyIssueIds(): Promise<BeadsResult<ReadonlySet<string>>>;
+
+  listBlockingDependencies(
+    id: string,
+  ): Promise<BeadsResult<NativeDependency[]>>;
 
   getProjectRenameRegistry(): Promise<BeadsResult<ProjectRenameRegistry>>;
 
@@ -162,7 +181,72 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
     const updatedAt = normalizeMetadata(record.updated_at, UPDATED_AT_LIMIT);
     if (updatedAt) decoded.updatedAt = updatedAt;
   }
+  if (record.metadata !== undefined) {
+    if (
+      typeof record.metadata !== "object" ||
+      record.metadata === null ||
+      Array.isArray(record.metadata)
+    ) {
+      throw new Error(`issue at index ${index} has invalid metadata`);
+    }
+    const rawLifecycle = (record.metadata as Record<string, unknown>)
+      .piLifecycle;
+    if (rawLifecycle !== undefined) {
+      const lifecycle = decodeLifecycle(rawLifecycle);
+      if (lifecycle.ok) decoded.lifecycle = lifecycle.value;
+      else {
+        decoded.lifecycle = null;
+        decoded.lifecycleWarning = lifecycle.warning;
+      }
+    }
+  }
+  if (record.dependencies !== undefined) {
+    decoded.blockingDependencies = decodeBlockingDependencies(
+      record.dependencies,
+      `issue at index ${index}`,
+    );
+  }
   return decoded;
+}
+
+function decodeBlockingDependencies(
+  value: unknown,
+  context: string,
+): NativeDependency[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} has invalid dependencies`);
+  }
+  return value
+    .map((item, index): NativeDependency => {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        throw new Error(`${context} dependency ${index} is invalid`);
+      }
+      const record = item as Record<string, unknown>;
+      if (typeof record.id !== "string") {
+        throw new Error(`${context} dependency ${index} has invalid id`);
+      }
+      if (
+        typeof record.status !== "string" ||
+        !issueStatuses.has(record.status)
+      ) {
+        throw new Error(`${context} dependency ${index} has invalid status`);
+      }
+      if (typeof record.dependency_type !== "string") {
+        throw new Error(
+          `${context} dependency ${index} has invalid dependency_type`,
+        );
+      }
+      return {
+        id: normalizeId(record.id),
+        status: record.status as IssueStatus,
+        dependencyType: normalizeMetadata(record.dependency_type, LABEL_LIMIT),
+      };
+    })
+    .filter(
+      (dependency) =>
+        dependency.dependencyType === "blocks" &&
+        dependency.status !== "closed",
+    );
 }
 
 function decodeIssues(value: unknown): BeadsIssue[] {
@@ -267,6 +351,14 @@ export function createBeadsClient(
         return new Set(issues.map((issue) => issue.id));
       });
     },
+    listBlockingDependencies(id) {
+      return runBd(
+        `list blocking dependencies for ${normalizeId(id)}`,
+        ["dep", "list", id, "--json"],
+        (value) =>
+          decodeBlockingDependencies(value, `issue ${normalizeId(id)}`),
+      );
+    },
     getProjectRenameRegistry() {
       return runBd(
         "get project rename registry",
@@ -343,8 +435,61 @@ export function classifyReadiness(
   readyIds: ReadonlySet<string>,
 ): ClassifiedIssue[] {
   return issues.map((issue) => {
+    const blockingTaskIds = (issue.blockingDependencies ?? []).map(
+      (dependency) => dependency.id,
+    );
+    const warnings = issue.lifecycleWarning ? [issue.lifecycleWarning] : [];
     let readiness: Readiness = "waiting";
-    if (issue.status === "in_progress") {
+
+    if (issue.lifecycle !== undefined && issue.lifecycle !== null) {
+      if (issue.lifecycle.phase === "active") {
+        readiness = "in_progress";
+      } else if (issue.lifecycle.phase === "actionable") {
+        if (blockingTaskIds.length > 0) {
+          warnings.push(
+            `actionable lifecycle has unresolved blocker ${blockingTaskIds.join(", ")}`,
+          );
+        }
+        readiness =
+          issue.status === "open" &&
+          readyIds.has(issue.id) &&
+          blockingTaskIds.length === 0
+            ? "ready"
+            : "waiting";
+      } else if (issue.lifecycle.phase === "waiting") {
+        readiness = "waiting";
+        if (
+          issue.lifecycle.waiting?.kind === "dependency" &&
+          blockingTaskIds.length === 0
+        ) {
+          warnings.push("dependency wait has no unresolved blocker");
+        }
+      }
+      for (const resource of issue.lifecycle.resources) {
+        if (
+          issue.lifecycle.phase === "waiting" &&
+          resource.cleanupState === "active"
+        ) {
+          warnings.push(`retained worktree ${resource.claimId}`);
+        } else if (
+          resource.cleanupState === "acquiring" ||
+          resource.cleanupState === "release_pending" ||
+          resource.cleanupState === "needs_attention"
+        ) {
+          warnings.push(
+            `worktree ${resource.claimId} is ${resource.cleanupState.replace("_", " ")}`,
+          );
+        }
+      }
+      if (
+        issue.lifecycle.activeCheck?.state === "error" &&
+        issue.lifecycle.activeCheck.errorCount > 0
+      ) {
+        warnings.push(
+          `check error ×${issue.lifecycle.activeCheck.errorCount}: ${issue.lifecycle.activeCheck.lastObservation ?? "observation unavailable"}`,
+        );
+      }
+    } else if (issue.status === "in_progress") {
       readiness = "in_progress";
     } else if (issue.status === "blocked") {
       readiness = "blocked";
@@ -359,6 +504,80 @@ export function classifyReadiness(
         .filter((label) => label.startsWith("workstream:"))
         .map((label) => label.slice("workstream:".length)),
       needsJp: issue.labels.includes("needs:jp"),
+      ...(issue.lifecycle === undefined || issue.lifecycle === null
+        ? {}
+        : {
+            lifecyclePhase: issue.lifecycle.phase,
+            lifecycleStateEnteredAt: issue.lifecycle.stateEnteredAt,
+            activeCheck: issue.lifecycle.activeCheck,
+          }),
+      blockingTaskIds,
+      warnings,
     };
   });
+}
+
+export function lifecycleAnnotation(
+  issue: ClassifiedIssue,
+  now: number = Date.now(),
+): string {
+  const parts: string[] = [];
+  if (issue.blockingTaskIds.length > 0) {
+    parts.push(`blocked by ${issue.blockingTaskIds.join(", ")}`);
+  } else if (issue.activeCheck !== undefined && issue.activeCheck !== null) {
+    const observation = issue.activeCheck.lastObservation;
+    parts.push(
+      observation === null || observation === "open"
+        ? issue.activeCheck.kind === "github_pull_request"
+          ? "PR open"
+          : "check pending"
+        : observation,
+    );
+    if (issue.activeCheck.nextCheckAt !== null) {
+      parts.push(
+        Date.parse(issue.activeCheck.nextCheckAt) < now
+          ? `check overdue since ${issue.activeCheck.nextCheckAt.slice(11, 16)}`
+          : `next check ${issue.activeCheck.nextCheckAt.slice(11, 16)}`,
+      );
+    }
+  }
+  if (
+    issue.readiness === "waiting" &&
+    issue.lifecycleStateEnteredAt !== undefined
+  ) {
+    const elapsed = Math.max(
+      0,
+      now - Date.parse(issue.lifecycleStateEnteredAt),
+    );
+    parts.push(`waiting ${Math.floor(elapsed / 86_400_000)}d`);
+  }
+  parts.push(...issue.warnings);
+  const annotation = normalizeMetadata(parts.join(" · "), 2_000);
+  return annotation.length === 0 ? "" : ` · ${annotation}`;
+}
+
+export async function listClassifiedIssues(
+  client: BeadsClient,
+  statuses?: readonly IssueStatus[],
+): Promise<BeadsResult<ClassifiedIssue[]>> {
+  const listed = await client.listIssues(statuses);
+  if (!listed.ok) return listed;
+  const ready = await client.listReadyIssueIds();
+  if (!ready.ok) return ready;
+
+  const enriched: BeadsIssue[] = [];
+  for (const issue of listed.value) {
+    const needsBlockers =
+      issue.lifecycle?.phase === "actionable" ||
+      (issue.lifecycle?.phase === "waiting" &&
+        issue.lifecycle.waiting?.kind === "dependency");
+    if (!needsBlockers) {
+      enriched.push(issue);
+      continue;
+    }
+    const dependencies = await client.listBlockingDependencies(issue.id);
+    if (!dependencies.ok) return dependencies;
+    enriched.push({ ...issue, blockingDependencies: dependencies.value });
+  }
+  return { ok: true, value: classifyReadiness(enriched, ready.value) };
 }
