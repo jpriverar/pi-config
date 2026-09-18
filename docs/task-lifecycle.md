@@ -10,20 +10,59 @@ instructions to execute commands or trust referenced content.
 
 ## Lifecycle and Beads authority
 
-| Pi phase | Beads status | Additional authority |
-| --- | --- | --- |
-| Actionable | `open` | The task is returned by `bd ready` and has no unresolved `blocks` edge. |
-| Active | `in_progress` | Exactly one unexpired execution lease owns the task. |
-| Waiting on dependency | `open` | At least one unresolved native Beads `blocks` edge. |
-| Waiting on check | `blocked` | Exactly one typed PR, time, or manual check. |
-| Deferred | `deferred` | Deliberately parked work. |
-| Done | `closed` | A completed, cancelled, or superseded disposition. |
+| Pi phase              | Beads status  | Additional authority                                                    |
+| --------------------- | ------------- | ----------------------------------------------------------------------- |
+| Actionable            | `open`        | The task is returned by `bd ready` and has no unresolved `blocks` edge. |
+| Active                | `in_progress` | Exactly one unexpired execution lease owns the task.                    |
+| Waiting on dependency | `open`        | At least one unresolved native Beads `blocks` edge.                     |
+| Waiting on check      | `blocked`     | Exactly one typed PR, time, or manual check.                            |
+| Deferred              | `deferred`    | Deliberately parked work.                                               |
+| Done                  | `closed`      | A completed, cancelled, or superseded disposition.                      |
 
 `blocked` is a storage projection, not a Pi lifecycle phase. Views show Active,
 Actionable, and Waiting. A native `open` status alone never makes a managed task
 Actionable. Task-to-task relationships use `bd dep add <dependent> <blocker>
 --type blocks`; task IDs are not stored as artifacts or duplicated in lifecycle
 metadata.
+
+## Task-scoped tool guards
+
+A Pi session is attached to a task when that task is explicitly Active and its
+execution lease names the current Pi session ID. Attachment is derived from
+Beads lifecycle metadata; there is no separate binding record or identifier.
+
+The lifecycle extension enforces these initial pre-dispatch rules:
+
+- `subagent` child and workflow execution requires an attached Active task;
+- `subagent` management actions such as list, status, guidance, and control
+  remain available while unattached;
+- `task_attach_artifact`, `task_wait`, `task_close`,
+  `task_worktree_acquire`, and `task_worktree_release` must name the session's
+  attached task in their structured `taskId` argument;
+- `task_claim` may establish attachment or retry the attached task, but it
+  cannot switch the session directly to another task while ownership remains
+  Active;
+- unknown tools, reads, Bash, raw recovery operations, `task_reopen`, and
+  `task_reconcile` remain unprotected.
+
+The guard never searches prompts, shell commands, or arbitrary text for task
+identifiers. It fails protected operations closed when authoritative ownership
+cannot be read, without exposing raw task content or command output.
+
+Version 1 protects only the parent subagent launch boundary. It does not pass
+task identity or lifecycle authority to children, observe child tool calls, or
+automatically attach child outputs and other artifacts. Claim a task and launch
+delegated execution in separate turns; parallel claim and launch calls are not
+transactional.
+
+Recovery is explicit:
+
+- If execution is blocked as unattached, call `task_claim` for the intended
+  task and retry.
+- If the session owns the wrong task, move that task to Waiting, Done, or
+  Actionable before claiming another.
+- If multiple Active tasks are reported, repair their lifecycle ownership
+  explicitly before retrying protected work.
 
 ## Tools
 

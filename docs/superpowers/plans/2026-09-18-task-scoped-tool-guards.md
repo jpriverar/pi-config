@@ -76,15 +76,31 @@ import { classifyTaskToolRequirement } from "./tool-guard.js";
 
 test("classifies task-scoped tool requirements", () => {
   const cases: Array<[string, unknown, unknown]> = [
-    ["subagent", { agent: "worker", task: "implement" }, { kind: "active-task" }],
+    [
+      "subagent",
+      { agent: "worker", task: "implement" },
+      { kind: "active-task" },
+    ],
     ["subagent", { workflow: "review", args: {} }, { kind: "active-task" }],
     ["subagent", { action: "list" }, { kind: "none" }],
     ["task_claim", { taskId: "jp-a" }, { kind: "claim-task", taskId: "jp-a" }],
     ["task_wait", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
     ["task_close", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
-    ["task_attach_artifact", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
-    ["task_worktree_acquire", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
-    ["task_worktree_release", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
+    [
+      "task_attach_artifact",
+      { taskId: "jp-a" },
+      { kind: "same-task", taskId: "jp-a" },
+    ],
+    [
+      "task_worktree_acquire",
+      { taskId: "jp-a" },
+      { kind: "same-task", taskId: "jp-a" },
+    ],
+    [
+      "task_worktree_release",
+      { taskId: "jp-a" },
+      { kind: "same-task", taskId: "jp-a" },
+    ],
     ["task_reopen", { taskId: "jp-a" }, { kind: "none" }],
     ["task_reconcile", { taskId: "jp-a" }, { kind: "none" }],
     ["bash", { command: "git status" }, { kind: "none" }],
@@ -97,9 +113,15 @@ test("classifies task-scoped tool requirements", () => {
 });
 
 test("leaves malformed task inputs to their tool schemas", () => {
-  assert.deepEqual(classifyTaskToolRequirement("task_wait", {}), { kind: "none" });
-  assert.deepEqual(classifyTaskToolRequirement("task_claim", { taskId: "" }), { kind: "none" });
-  assert.deepEqual(classifyTaskToolRequirement("task_close", null), { kind: "none" });
+  assert.deepEqual(classifyTaskToolRequirement("task_wait", {}), {
+    kind: "none",
+  });
+  assert.deepEqual(classifyTaskToolRequirement("task_claim", { taskId: "" }), {
+    kind: "none",
+  });
+  assert.deepEqual(classifyTaskToolRequirement("task_close", null), {
+    kind: "none",
+  });
 });
 ```
 
@@ -225,7 +247,10 @@ Assert:
 
 ```ts
 const owned = await sut.activeTasksForSession("session-a");
-assert.deepEqual(owned.map((issue) => issue.id), ["jp-a", "jp-z"]);
+assert.deepEqual(
+  owned.map((issue) => issue.id),
+  ["jp-a", "jp-z"],
+);
 ```
 
 Use two owned tasks inserted in reverse ID order so the test proves deterministic sorting. Also assert:
@@ -304,14 +329,17 @@ git commit -m "resolve active session tasks"
 - Consumes:
 
 ```ts
-classifyTaskToolRequirement(toolName, input)
-TaskLifecycleToolService.activeTasksForSession(sessionId)
+classifyTaskToolRequirement(toolName, input);
+TaskLifecycleToolService.activeTasksForSession(sessionId);
 ```
 
 - Produces Pi `tool_call` hook results of either `undefined` or:
 
 ```ts
-{ block: true; reason: string }
+{
+  block: true;
+  reason: string;
+}
 ```
 
 - [ ] **Step 1: Extend the extension harness for Active-task lookup**
@@ -351,7 +379,10 @@ function activeIssue(id: string, sessionId = "session-1"): LifecycleIssue {
     claimedAt: new Date(NOW).toISOString(),
     lastActivityAt: new Date(NOW).toISOString(),
     expiresAt: new Date(NOW + 60_000).toISOString(),
-    resourceSnapshot: { observedAt: new Date(NOW).toISOString(), resourceIds: [] },
+    resourceSnapshot: {
+      observedAt: new Date(NOW).toISOString(),
+      resourceIds: [],
+    },
   };
   return issue;
 }
@@ -368,7 +399,8 @@ const blocked = await guard(
 );
 assert.deepEqual(blocked, {
   block: true,
-  reason: "subagent execution requires an Active task; claim a task before retrying",
+  reason:
+    "subagent execution requires an Active task; claim a task before retrying",
 });
 ```
 
@@ -389,7 +421,7 @@ Then cover:
 For the store-failure case, reject with a sentinel containing text that must not appear in the returned reason:
 
 ```ts
-new Error("private task content and raw stderr")
+new Error("private task content and raw stderr");
 ```
 
 - [ ] **Step 3: Run the extension test and observe RED**

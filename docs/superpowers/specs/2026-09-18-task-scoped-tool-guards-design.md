@@ -87,11 +87,11 @@ It lists lifecycle-managed `in_progress` issues and selects records whose explic
 
 The extension interprets the result with three outcomes:
 
-| Matching Active tasks | Result |
-|---|---|
-| Zero | Session is unattached |
-| One | Session is attached to that task |
-| More than one | Invariant violation; protected operation is blocked |
+| Matching Active tasks | Result                                              |
+| --------------------- | --------------------------------------------------- |
+| Zero                  | Session is unattached                               |
+| One                   | Session is attached to that task                    |
+| More than one         | Invariant violation; protected operation is blocked |
 
 The resolver ignores legacy `in_progress` records without valid lifecycle metadata and tasks owned by another session.
 
@@ -113,19 +113,19 @@ The `claim-task` case allows an unattached session to establish ownership, allow
 
 ### Initial policies
 
-| Tool | Operation | Requirement |
-|---|---|---|
-| `task_claim` | Valid structured `taskId` | Claim task |
-| `subagent` | Invocation without a management `action` | Active task |
-| `subagent` | Invocation with a management `action` | None |
-| `task_attach_artifact` | Valid structured `taskId` | Same task |
-| `task_wait` | Valid structured `taskId` | Same task |
-| `task_close` | Valid structured `taskId` | Same task |
-| `task_worktree_acquire` | Valid structured `taskId` | Same task |
-| `task_worktree_release` | Valid structured `taskId` | Same task |
-| `task_reopen` | Any | None |
-| `task_reconcile` | Any | None |
-| Unknown tools | Any | None |
+| Tool                    | Operation                                | Requirement |
+| ----------------------- | ---------------------------------------- | ----------- |
+| `task_claim`            | Valid structured `taskId`                | Claim task  |
+| `subagent`              | Invocation without a management `action` | Active task |
+| `subagent`              | Invocation with a management `action`    | None        |
+| `task_attach_artifact`  | Valid structured `taskId`                | Same task   |
+| `task_wait`             | Valid structured `taskId`                | Same task   |
+| `task_close`            | Valid structured `taskId`                | Same task   |
+| `task_worktree_acquire` | Valid structured `taskId`                | Same task   |
+| `task_worktree_release` | Valid structured `taskId`                | Same task   |
+| `task_reopen`           | Any                                      | None        |
+| `task_reconcile`        | Any                                      | None        |
+| Unknown tools           | Any                                      | None        |
 
 The tool's own parameter schema remains responsible for malformed or missing arguments. The classifier only creates a same-task or claim-task requirement when `taskId` is a non-empty string.
 
