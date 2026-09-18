@@ -166,8 +166,6 @@ test("imports and registers every manifest extension without collisions", async 
     "task_reconcile",
     "task_reopen",
     "task_wait",
-    "task_worktree_acquire",
-    "task_worktree_release",
     "update_issue",
     "worktree_pool",
     "write",
