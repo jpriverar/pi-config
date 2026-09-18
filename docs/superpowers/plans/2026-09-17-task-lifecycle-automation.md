@@ -491,7 +491,7 @@ git commit -m "add task lifecycle model"
 - Consumes: `withFileOperationLock()` and lifecycle decoders.
 - Produces: `createLifecycleStore(exec, options): LifecycleStore`.
 
-- [ ] **Step 1: Write failing store tests**
+- [x] **Step 1: Write failing store tests**
 
 Use a fake executor to assert exact commands and ordering:
 
@@ -507,13 +507,13 @@ assert.ok(!Object.hasOwn(JSON.parse(mergedJson), "piLifecycle.phase"));
 
 Also test native dependency decoding, `bd dep add <dependent> <blocker> --type blocks`, malformed JSON, nonzero exits, verification mismatch, and concurrent mutations serialized by one store lock.
 
-- [ ] **Step 2: Run store tests and verify RED**
+- [x] **Step 2: Run store tests and verify RED**
 
 Run: `npm run test:file -- lib/task-lifecycle/beads-store.test.ts`
 
 Expected: FAIL because the store module does not exist.
 
-- [ ] **Step 3: Implement the store adapter**
+- [x] **Step 3: Implement the store adapter**
 
 Every `mutate()` call:
 
@@ -526,7 +526,7 @@ Every `mutate()` call:
 
 Command failures expose operation, issue ID, store, and exit code, but never raw task content from stdout/stderr.
 
-- [ ] **Step 4: Encode the live compatibility probe**
+- [x] **Step 4: Encode the live compatibility probe**
 
 `scripts/check-beads-lifecycle-compat.mjs` creates a temporary Dolt store with `BEADS_DIR` and `BEADS_DB` removed, verifies create/show/update/list round trips, proves dotted `--set-metadata` is unsafe, and removes the exact temporary directory in `finally`.
 
@@ -541,7 +541,7 @@ list_includes_metadata=true
 temporary_store_removed=true
 ```
 
-- [ ] **Step 5: Run unit and compatibility tests**
+- [x] **Step 5: Run unit and compatibility tests**
 
 Run:
 
@@ -552,7 +552,7 @@ node scripts/check-beads-lifecycle-compat.mjs
 
 Expected: PASS with the six compatibility fields above.
 
-- [ ] **Step 6: Commit the store adapter**
+- [x] **Step 6: Commit the store adapter**
 
 ```bash
 git add lib/task-lifecycle/beads-store.ts lib/task-lifecycle/beads-store.test.ts scripts/check-beads-lifecycle-compat.mjs
