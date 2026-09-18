@@ -1064,3 +1064,203 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+export function beginWorktreeAcquire(
+  state: LifecycleMetadataV1,
+  input: import("./types.js").BeginWorktreeAcquireInput,
+): LifecycleMetadataV1 {
+  assertText(input.operationId, "worktree acquire operationId");
+  assertText(input.claimId, "worktree acquire claimId");
+  assertText(input.pathId, "worktree acquire pathId");
+  assertText(input.repository, "worktree acquire repository");
+  assertText(input.branch, "worktree acquire branch");
+  assertTimestamp(input.now, "worktree acquire timestamp");
+  const existing = state.resources.find(
+    (resource) => resource.operationId === input.operationId,
+  );
+  if (existing !== undefined) {
+    requireInvariant(
+      existing.claimId === input.claimId && existing.pathId === input.pathId,
+      `worktree operation ${input.operationId} has contradictory identities`,
+    );
+    return state;
+  }
+  requireInvariant(
+    state.phase === "active",
+    "worktree acquire requires phase active",
+  );
+  const fullBranch = fullBranchRef(input.branch);
+  requireInvariant(
+    !state.resources.some(
+      (resource) =>
+        resource.cleanupState !== "released" &&
+        resource.repository === input.repository &&
+        fullBranchRef(resource.branch) === fullBranch,
+    ),
+    `duplicate unreleased worktree resource ${input.repository} ${fullBranch}`,
+  );
+  const resource: WorktreeResource = {
+    id: `worktree:${input.claimId}`,
+    kind: "worktree",
+    repository: input.repository,
+    claimId: input.claimId,
+    pathId: input.pathId,
+    operationId: input.operationId,
+    path: null,
+    branch: input.branch,
+    branchArtifactId: null,
+    acquiredAt: null,
+    releasedAt: null,
+    cleanupState: "acquiring",
+  };
+  return recordResourceOperation(
+    { ...state, resources: [...state.resources, resource] },
+    `${input.operationId}:acquiring`,
+    "worktree_acquire_pending",
+    input.now,
+  );
+}
+
+export function completeWorktreeAcquire(
+  state: LifecycleMetadataV1,
+  input: import("./types.js").CompleteWorktreeAcquireInput,
+): LifecycleMetadataV1 {
+  assertText(input.operationId, "worktree acquire operationId");
+  assertText(input.claimId, "worktree acquire claimId");
+  assertText(input.path, "worktree acquire path");
+  assertText(input.head, "worktree acquire head");
+  assertTimestamp(input.now, "worktree acquire timestamp");
+  const index = state.resources.findIndex(
+    (resource) => resource.claimId === input.claimId,
+  );
+  requireInvariant(index >= 0, `unknown worktree claim ${input.claimId}`);
+  const current = state.resources[index];
+  requireInvariant(
+    current.operationId === input.operationId,
+    `worktree claim ${input.claimId} belongs to operation ${current.operationId}`,
+  );
+  if (current.cleanupState === "active") return state;
+  requireInvariant(
+    current.cleanupState === "acquiring",
+    `worktree claim ${input.claimId} is not acquiring`,
+  );
+  const artifact = canonicalizeArtifact(
+    {
+      id: `branch:${input.claimId}`,
+      kind: "branch",
+      uri: `git://${current.repository}/${fullBranchRef(current.branch)}`,
+      title: `${current.repository} ${current.branch}`,
+      role: "supporting",
+    },
+    input.now,
+  );
+  const withArtifact = attachArtifact(state, artifact);
+  const resources = [...withArtifact.resources];
+  resources[index] = {
+    ...current,
+    path: input.path,
+    branchArtifactId: artifact.id,
+    acquiredAt: input.now,
+    cleanupState: "active",
+    lastObservation: input.observation,
+  };
+  return recordResourceOperation(
+    { ...withArtifact, resources },
+    `${input.operationId}:active`,
+    "worktree_acquired",
+    input.now,
+  );
+}
+
+export function beginWorktreeRelease(
+  state: LifecycleMetadataV1,
+  input: import("./types.js").WorktreeReleaseInput,
+): LifecycleMetadataV1 {
+  assertText(input.operationId, "worktree release operationId");
+  assertText(input.claimId, "worktree release claimId");
+  assertTimestamp(input.now, "worktree release timestamp");
+  const index = state.resources.findIndex(
+    (resource) => resource.claimId === input.claimId,
+  );
+  requireInvariant(index >= 0, `unknown worktree claim ${input.claimId}`);
+  const current = state.resources[index];
+  if (current.cleanupState === "released") return state;
+  if (
+    current.cleanupState === "release_pending" &&
+    current.operationId === input.operationId
+  ) {
+    return state;
+  }
+  requireInvariant(
+    current.cleanupState === "active" ||
+      current.cleanupState === "needs_attention",
+    `worktree claim ${input.claimId} cannot enter release_pending from ${current.cleanupState}`,
+  );
+  const resources = [...state.resources];
+  resources[index] = {
+    ...current,
+    operationId: input.operationId,
+    cleanupState: "release_pending",
+  };
+  return recordResourceOperation(
+    { ...state, resources },
+    `${input.operationId}:release-pending`,
+    "worktree_release_pending",
+    input.now,
+  );
+}
+
+export function completeWorktreeRelease(
+  state: LifecycleMetadataV1,
+  input: import("./types.js").WorktreeReleaseInput,
+): LifecycleMetadataV1 {
+  assertText(input.operationId, "worktree release operationId");
+  assertText(input.claimId, "worktree release claimId");
+  assertTimestamp(input.now, "worktree release timestamp");
+  const index = state.resources.findIndex(
+    (resource) => resource.claimId === input.claimId,
+  );
+  requireInvariant(index >= 0, `unknown worktree claim ${input.claimId}`);
+  const current = state.resources[index];
+  if (current.cleanupState === "released") return state;
+  requireInvariant(
+    current.cleanupState === "release_pending" &&
+      current.operationId === input.operationId,
+    `worktree claim ${input.claimId} does not have this release pending`,
+  );
+  const resources = [...state.resources];
+  resources[index] = {
+    ...current,
+    cleanupState: "released",
+    releasedAt: input.now,
+  };
+  return recordResourceOperation(
+    { ...state, resources },
+    `${input.operationId}:released`,
+    "worktree_released",
+    input.now,
+  );
+}
+
+function recordResourceOperation(
+  state: LifecycleMetadataV1,
+  operationId: string,
+  type: string,
+  at: string,
+): LifecycleMetadataV1 {
+  if (hasOperation(state, operationId)) return state;
+  return {
+    ...state,
+    lastProgressAt: at,
+    transitionHistory: [
+      ...state.transitionHistory,
+      {
+        operationId,
+        type,
+        at,
+        from: state.phase,
+        to: state.phase,
+      },
+    ],
+  };
+}

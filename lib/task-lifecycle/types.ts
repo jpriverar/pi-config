@@ -210,3 +210,27 @@ export interface InterruptInput {
   now: string;
   expectedSessionId: string;
 }
+
+export interface BeginWorktreeAcquireInput {
+  operationId: string;
+  claimId: string;
+  pathId: string;
+  repository: string;
+  branch: string;
+  now: string;
+}
+
+export interface CompleteWorktreeAcquireInput {
+  operationId: string;
+  claimId: string;
+  path: string;
+  head: string;
+  now: string;
+  observation: Record<string, unknown>;
+}
+
+export interface WorktreeReleaseInput {
+  operationId: string;
+  claimId: string;
+  now: string;
+}

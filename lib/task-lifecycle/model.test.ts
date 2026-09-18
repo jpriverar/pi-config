@@ -4,9 +4,13 @@ import test from "node:test";
 import {
   adoptLegacyLifecycle,
   attachArtifact,
+  beginWorktreeAcquire,
+  beginWorktreeRelease,
   canonicalizeArtifact,
   claimLifecycle,
   closeLifecycle,
+  completeWorktreeAcquire,
+  completeWorktreeRelease,
   decodeLifecycle,
   interruptLifecycle,
   reopenLifecycle,
@@ -526,4 +530,73 @@ test("refuses waiting or done transitions while worktrees remain unreleased", ()
       ),
     /unreleased worktree/,
   );
+});
+
+test("tracks deterministic worktree acquire and release stages", () => {
+  const active = baseLifecycle({
+    phase: "active",
+    execution: {
+      sessionId: "session-a",
+      claimedAt: NOW,
+      lastActivityAt: NOW,
+      expiresAt: LATER,
+      resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+    },
+  });
+  const acquiring = beginWorktreeAcquire(active, {
+    operationId: "acquire-1",
+    claimId: "claim-1",
+    pathId: "path-1",
+    repository: "DataDog/dd-source",
+    branch: "jpriverar/topic",
+    now: NOW,
+  });
+  assert.equal(acquiring.resources[0].cleanupState, "acquiring");
+  assert.equal(acquiring.resources[0].claimId, "claim-1");
+  assert.equal(acquiring.resources[0].pathId, "path-1");
+
+  const acquired = completeWorktreeAcquire(acquiring, {
+    operationId: "acquire-1",
+    claimId: "claim-1",
+    path: "/pool/worktree-path-1",
+    head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    now: LATER,
+    observation: {
+      state: "active",
+      currentBranch: "refs/heads/jpriverar/topic",
+      head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      clean: false,
+      branchProtectsHead: true,
+      evidence: {
+        pathExists: true,
+        registered: true,
+        nativeClaimMatches: true,
+      },
+    },
+  });
+  assert.equal(acquired.resources[0].cleanupState, "active");
+  assert.equal(acquired.resources[0].path, "/pool/worktree-path-1");
+  assert.equal(acquired.artifacts.length, 1);
+  assert.equal(
+    acquired.resources[0].branchArtifactId,
+    acquired.artifacts[0].id,
+  );
+  assert.equal(
+    acquired.artifacts[0].uri,
+    "git://DataDog/dd-source/refs/heads/jpriverar/topic",
+  );
+
+  const releasePending = beginWorktreeRelease(acquired, {
+    operationId: "release-1",
+    claimId: "claim-1",
+    now: LATER,
+  });
+  assert.equal(releasePending.resources[0].cleanupState, "release_pending");
+  const released = completeWorktreeRelease(releasePending, {
+    operationId: "release-1",
+    claimId: "claim-1",
+    now: LATER,
+  });
+  assert.equal(released.resources[0].cleanupState, "released");
+  assert.equal(released.resources[0].releasedAt, LATER);
 });

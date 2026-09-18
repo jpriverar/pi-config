@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import { hostname as readHostname } from "node:os";
 
 import { resolveBeadsDir, type BeadsExec } from "../../lib/beads.js";
+import { loadWorktreePoolRuntime } from "../worktree-pool/runtime.js";
 import { createLifecycleStore } from "../../lib/task-lifecycle/beads-store.js";
 import {
   TaskLifecycleService,
   type CloseDispositionInput,
+  type TaskLifecyclePoolPort,
 } from "../../lib/task-lifecycle/service.js";
 import type {
   ArtifactInput,
@@ -55,6 +57,24 @@ export interface TaskLifecycleToolService {
     taskId: string,
     owner: LockOwner,
   ): Promise<LifecycleIssue>;
+  acquireWorktree(
+    request: {
+      taskId: string;
+      repository: string;
+      branch: string;
+      startPoint?: string;
+    },
+    owner: LockOwner,
+    operationId?: string,
+  ): Promise<LifecycleIssue>;
+  releaseWorktree(
+    taskId: string,
+    claimId: string,
+    owner: LockOwner,
+    operationId?: string,
+  ): Promise<LifecycleIssue>;
+  hasActiveTask(sessionId: string): Promise<boolean>;
+  isClaimAssociated(claimId: string): Promise<boolean>;
 }
 
 interface ExtensionContext {
@@ -385,10 +405,98 @@ export function createTaskLifecycleExtension(
       },
     });
 
+    pi.registerTool({
+      name: "task_worktree_acquire",
+      label: "Acquire task worktree",
+      description:
+        "Acquire a bounded worktree while persisting its exact task association and deterministic pool identities.",
+      parameters: objectSchema(
+        {
+          taskId: taskIdProperty,
+          repository: { type: "string", minLength: 1 },
+          branch: { type: "string", minLength: 1 },
+          startPoint: { type: "string", minLength: 1 },
+          operationId: operationIdProperty,
+        },
+        ["taskId", "repository", "branch"],
+      ),
+      async execute(id, params, _signal, _update, context) {
+        return toolResult(
+          await deps.service.acquireWorktree(
+            {
+              taskId: params.taskId,
+              repository: params.repository,
+              branch: params.branch,
+              ...(params.startPoint === undefined
+                ? {}
+                : { startPoint: params.startPoint }),
+            },
+            ownerFor(context),
+            operationFor(id, params),
+          ),
+        );
+      },
+    });
+
+    pi.registerTool({
+      name: "task_worktree_release",
+      label: "Release task worktree",
+      description:
+        "Release one task-associated worktree by exact claim ID using a persisted two-phase handoff.",
+      parameters: objectSchema(
+        {
+          taskId: taskIdProperty,
+          claimId: { type: "string", minLength: 1 },
+          operationId: operationIdProperty,
+        },
+        ["taskId", "claimId"],
+      ),
+      async execute(id, params, _signal, _update, context) {
+        return toolResult(
+          await deps.service.releaseWorktree(
+            params.taskId,
+            params.claimId,
+            ownerFor(context),
+            operationFor(id, params),
+          ),
+        );
+      },
+    });
+
     pi.on("session_start", () => undefined);
     pi.on("session_shutdown", () => undefined);
     pi.on("turn_start", () => undefined);
-    pi.on("tool_call", () => undefined);
+    pi.on("tool_call", async (event, context) => {
+      if (event?.toolName !== "worktree_pool" || !isRecord(event.input)) {
+        return undefined;
+      }
+      if (event.input.action === "acquire") {
+        if (
+          await deps.service.hasActiveTask(
+            context.sessionManager.getSessionId(),
+          )
+        ) {
+          return {
+            block: true,
+            reason:
+              "An Active lifecycle task must use task_worktree_acquire so task/resource state stays coordinated.",
+          };
+        }
+        return undefined;
+      }
+      if (
+        event.input.action === "release" &&
+        typeof event.input.claimId === "string" &&
+        (await deps.service.isClaimAssociated(event.input.claimId))
+      ) {
+        return {
+          block: true,
+          reason:
+            "This claim is lifecycle-associated; use task_worktree_release so release intent and completion are persisted.",
+        };
+      }
+      return undefined;
+    });
   };
 }
 
@@ -403,6 +511,10 @@ function toolResult(issue: LifecycleIssue) {
     ],
     details: issue,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function loadConfig(): LifecycleConfig {
@@ -449,11 +561,36 @@ export default function taskLifecycle(pi: ExtensionApi): void {
   const store = createLifecycleStore(pi.exec.bind(pi), {
     store: resolveBeadsDir(),
   });
+  const pool = {
+    async list(repository?: string) {
+      const runtime = await loadWorktreePoolRuntime(
+        repository === undefined ? [] : [repository],
+        "identity",
+      );
+      return runtime.pool.list(repository);
+    },
+    async acquire(
+      request: Parameters<TaskLifecyclePoolPort["acquire"]>[0],
+      owner: Parameters<TaskLifecyclePoolPort["acquire"]>[1],
+      identity: Parameters<TaskLifecyclePoolPort["acquire"]>[2],
+    ) {
+      const runtime = await loadWorktreePoolRuntime(
+        [request.repository],
+        "acquire",
+      );
+      return runtime.pool.acquire(request, owner, identity);
+    },
+    async release(repository: string, claimId: string, owner: LockOwner) {
+      const runtime = await loadWorktreePoolRuntime([repository], "identity");
+      return runtime.pool.release(repository, claimId, owner);
+    },
+  };
   const service = new TaskLifecycleService({
     store,
     now: Date.now,
     uuid: randomUUID,
     executionTimeoutMs: config.executionTimeoutMs,
+    pool,
   });
   createTaskLifecycleExtension({
     service,

@@ -1,9 +1,21 @@
+import type { OwnerIdentity } from "../../extensions/worktree-pool/operation-lock.js";
+import type {
+  AcquireRequest,
+  AcquireResult,
+  PoolListing,
+  PoolWorktreeListing,
+  ReleaseResult,
+} from "../../extensions/worktree-pool/pool.js";
 import {
   adoptLegacyLifecycle,
   attachArtifact as attachArtifactToLifecycle,
+  beginWorktreeAcquire,
+  beginWorktreeRelease,
   canonicalizeArtifact,
   claimLifecycle,
   closeLifecycle,
+  completeWorktreeAcquire,
+  completeWorktreeRelease,
   interruptLifecycle,
   reopenLifecycle,
   validateLifecycle,
@@ -24,11 +36,21 @@ import type {
 } from "./types.js";
 
 export interface TaskLifecyclePoolPort {
+  list(repository?: string): Promise<PoolListing>;
+  acquire(
+    request: AcquireRequest,
+    owner: OwnerIdentity,
+    identity: { claimId: string; pathId: string },
+  ): Promise<AcquireResult>;
   release(
     repository: string,
     claimId: string,
-    owner: LockOwner,
-  ): Promise<{ released: boolean }>;
+    owner: OwnerIdentity,
+  ): Promise<ReleaseResult>;
+}
+
+export interface TaskWorktreeAcquireRequest extends AcquireRequest {
+  taskId: string;
 }
 
 export interface TaskLifecycleServiceDependencies {
@@ -119,17 +141,13 @@ export class TaskLifecycleService {
     const lifecycle = requireManaged(current);
     if (hasOperation(lifecycle, operationId)) return current;
     requireCurrentOwner(taskId, lifecycle, owner);
-    const released = await this.releaseResources(lifecycle, owner);
+    await this.releaseResources(taskId, lifecycle, owner, operationId);
     for (const blockerId of blockers) {
       await this.deps.store.addBlocker(taskId, blockerId);
     }
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
-      const latest = applyReleasedResources(
-        requireManaged(issue),
-        released,
-        now,
-      );
+      const latest = requireManaged(issue);
       requireCurrentOwner(taskId, latest, owner);
       const next = waitLifecycle(latest, {
         operationId,
@@ -150,14 +168,10 @@ export class TaskLifecycleService {
     const lifecycle = requireManaged(current);
     if (hasOperation(lifecycle, operationId)) return current;
     requireCurrentOwner(taskId, lifecycle, owner);
-    const released = await this.releaseResources(lifecycle, owner);
+    await this.releaseResources(taskId, lifecycle, owner, operationId);
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
-      const latest = applyReleasedResources(
-        requireManaged(issue),
-        released,
-        now,
-      );
+      const latest = requireManaged(issue);
       requireCurrentOwner(taskId, latest, owner);
       const next = waitLifecycle(latest, {
         operationId,
@@ -180,14 +194,10 @@ export class TaskLifecycleService {
     if (lifecycle.phase === "active") {
       requireCurrentOwner(taskId, lifecycle, owner);
     }
-    const released = await this.releaseResources(lifecycle, owner);
+    await this.releaseResources(taskId, lifecycle, owner, operationId);
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
-      const latest = applyReleasedResources(
-        requireManaged(issue),
-        released,
-        now,
-      );
+      const latest = requireManaged(issue);
       if (latest.phase === "active") {
         requireCurrentOwner(taskId, latest, owner);
       }
@@ -224,6 +234,317 @@ export class TaskLifecycleService {
       });
       return this.mutation(issue, operationId, "open", next);
     });
+  }
+
+  async acquireWorktree(
+    request: TaskWorktreeAcquireRequest,
+    owner: LockOwner,
+    operationId: string = this.deps.uuid(),
+  ): Promise<LifecycleIssue> {
+    const pool = this.requirePool();
+    const current = await this.deps.store.show(request.taskId);
+    const lifecycle = requireManaged(current);
+    requireCurrentOwner(request.taskId, lifecycle, owner);
+
+    const pending = lifecycle.resources.find(
+      (resource) =>
+        resource.operationId === operationId &&
+        resource.cleanupState === "acquiring",
+    );
+    await this.assertHealthyAssociations(lifecycle, pool, pending?.claimId);
+
+    if (pending !== undefined) {
+      const matches = await exactClaimMatches(
+        pool,
+        pending.repository,
+        pending.claimId,
+      );
+      if (matches.length > 1) {
+        throw new Error(
+          `ambiguous worktree association for claim ${pending.claimId}`,
+        );
+      }
+      if (matches.length === 1) {
+        assertValidAssociation(pending, matches[0]);
+        return this.finalizeWorktreeAcquire(
+          request.taskId,
+          owner,
+          operationId,
+          pending.claimId,
+          matches[0].path,
+          matches[0].head!,
+          matches[0],
+        );
+      }
+      const acquired = await pool.acquire(
+        {
+          repository: pending.repository,
+          branch: pending.branch,
+          ...(request.startPoint === undefined
+            ? {}
+            : { startPoint: request.startPoint }),
+        },
+        owner,
+        { claimId: pending.claimId, pathId: pending.pathId },
+      );
+      return this.finalizeAcquireResult(
+        request.taskId,
+        owner,
+        operationId,
+        pending.claimId,
+        acquired,
+      );
+    }
+
+    const identityListing = await pool.list(request.repository);
+    if (identityListing.repositories.length !== 1) {
+      throw new Error(
+        `repository ${request.repository} resolved to ${identityListing.repositories.length} pool identities`,
+      );
+    }
+    const repository = identityListing.repositories[0].name;
+    const claimId = this.deps.uuid();
+    const pathId = this.deps.uuid();
+    const now = this.nowIso();
+    await this.deps.store.mutate(request.taskId, owner, (issue) => {
+      const latest = requireManaged(issue);
+      requireCurrentOwner(request.taskId, latest, owner);
+      const next = beginWorktreeAcquire(latest, {
+        operationId,
+        claimId,
+        pathId,
+        repository,
+        branch: request.branch,
+        now,
+      });
+      return this.mutation(
+        issue,
+        `${operationId}:acquiring`,
+        issue.status,
+        next,
+      );
+    });
+
+    const acquired = await pool.acquire(
+      {
+        repository,
+        branch: request.branch,
+        ...(request.startPoint === undefined
+          ? {}
+          : { startPoint: request.startPoint }),
+      },
+      owner,
+      { claimId, pathId },
+    );
+    if (acquired.claimId !== claimId) {
+      throw new Error(
+        `pool returned claim ${acquired.claimId} instead of persisted claim ${claimId}`,
+      );
+    }
+    return this.finalizeAcquireResult(
+      request.taskId,
+      owner,
+      operationId,
+      claimId,
+      acquired,
+    );
+  }
+
+  async releaseWorktree(
+    taskId: string,
+    claimId: string,
+    owner: LockOwner,
+    operationId: string = this.deps.uuid(),
+  ): Promise<LifecycleIssue> {
+    const pool = this.requirePool();
+    const current = await this.deps.store.show(taskId);
+    const lifecycle = requireManaged(current);
+    requireCurrentOwner(taskId, lifecycle, owner);
+    const resource = lifecycle.resources.find(
+      (candidate) => candidate.claimId === claimId,
+    );
+    if (resource === undefined)
+      throw new Error(`unknown worktree claim ${claimId}`);
+    if (resource.cleanupState === "released") return current;
+    const wasPending =
+      resource.cleanupState === "release_pending" &&
+      resource.operationId === operationId;
+    const now = this.nowIso();
+    if (!wasPending) {
+      await this.deps.store.mutate(taskId, owner, (issue) => {
+        const latest = requireManaged(issue);
+        requireCurrentOwner(taskId, latest, owner);
+        const next = beginWorktreeRelease(latest, {
+          operationId,
+          claimId,
+          now,
+        });
+        return this.mutation(
+          issue,
+          `${operationId}:release-pending`,
+          issue.status,
+          next,
+        );
+      });
+    }
+
+    if (wasPending) {
+      const matches = await exactClaimMatches(
+        pool,
+        resource.repository,
+        claimId,
+      );
+      if (matches.length > 1) {
+        throw new Error(`ambiguous worktree association for claim ${claimId}`);
+      }
+      if (matches.length === 0) {
+        return this.finalizeWorktreeRelease(
+          taskId,
+          owner,
+          operationId,
+          claimId,
+        );
+      }
+    }
+    await pool.release(resource.repository, claimId, owner);
+    return this.finalizeWorktreeRelease(taskId, owner, operationId, claimId);
+  }
+
+  async hasActiveTask(sessionId: string): Promise<boolean> {
+    const issues = await this.deps.store.list(["in_progress"]);
+    return issues.some(
+      (issue) =>
+        issue.lifecycle?.phase === "active" &&
+        issue.lifecycle.execution?.sessionId === sessionId,
+    );
+  }
+
+  async isClaimAssociated(claimId: string): Promise<boolean> {
+    const issues = await this.deps.store.list([
+      "open",
+      "in_progress",
+      "blocked",
+      "deferred",
+      "closed",
+    ]);
+    return issues.some((issue) =>
+      issue.lifecycle?.resources.some(
+        (resource) => resource.claimId === claimId,
+      ),
+    );
+  }
+
+  private async finalizeAcquireResult(
+    taskId: string,
+    owner: LockOwner,
+    operationId: string,
+    claimId: string,
+    acquired: AcquireResult,
+  ): Promise<LifecycleIssue> {
+    const observation: PoolWorktreeListing = {
+      claimId,
+      path: acquired.path,
+      state: "active",
+      branch: acquired.branch,
+      currentBranch: `refs/heads/${acquired.branch}`,
+      head: acquired.head,
+      clean: true,
+      branchProtectsHead: true,
+      evidence: {
+        pathExists: true,
+        registered: true,
+        nativeClaimMatches: true,
+      },
+    };
+    return this.finalizeWorktreeAcquire(
+      taskId,
+      owner,
+      operationId,
+      claimId,
+      acquired.path,
+      acquired.head,
+      observation,
+    );
+  }
+
+  private async finalizeWorktreeAcquire(
+    taskId: string,
+    owner: LockOwner,
+    operationId: string,
+    claimId: string,
+    path: string,
+    head: string,
+    observation: PoolWorktreeListing,
+  ): Promise<LifecycleIssue> {
+    const now = this.nowIso();
+    return this.deps.store.mutate(taskId, owner, (issue) => {
+      const latest = requireManaged(issue);
+      requireCurrentOwner(taskId, latest, owner);
+      const next = completeWorktreeAcquire(latest, {
+        operationId,
+        claimId,
+        path,
+        head,
+        now,
+        observation,
+      });
+      return this.mutation(issue, `${operationId}:active`, issue.status, next);
+    });
+  }
+
+  private async finalizeWorktreeRelease(
+    taskId: string,
+    owner: LockOwner,
+    operationId: string,
+    claimId: string,
+  ): Promise<LifecycleIssue> {
+    const now = this.nowIso();
+    return this.deps.store.mutate(taskId, owner, (issue) => {
+      const latest = requireManaged(issue);
+      requireCurrentOwner(taskId, latest, owner);
+      const next = completeWorktreeRelease(latest, {
+        operationId,
+        claimId,
+        now,
+      });
+      return this.mutation(
+        issue,
+        `${operationId}:released`,
+        issue.status,
+        next,
+      );
+    });
+  }
+
+  private async assertHealthyAssociations(
+    lifecycle: LifecycleMetadataV1,
+    pool: TaskLifecyclePoolPort,
+    ignoredClaimId?: string,
+  ): Promise<void> {
+    for (const resource of lifecycle.resources) {
+      if (
+        resource.cleanupState === "released" ||
+        resource.claimId === ignoredClaimId
+      ) {
+        continue;
+      }
+      if (resource.cleanupState !== "active") {
+        throw new Error(
+          `pending worktree association ${resource.claimId} requires reconciliation`,
+        );
+      }
+      const matches = await exactClaimMatches(
+        pool,
+        resource.repository,
+        resource.claimId,
+      );
+      if (matches.length !== 1) {
+        throw new Error(
+          `${matches.length === 0 ? "missing" : "ambiguous"} worktree association for claim ${resource.claimId}`,
+        );
+      }
+      assertValidAssociation(resource, matches[0]);
+    }
   }
 
   async reconcileExecutionTimeout(
@@ -281,26 +602,27 @@ export class TaskLifecycleService {
   }
 
   private async releaseResources(
+    taskId: string,
     lifecycle: LifecycleMetadataV1,
     owner: LockOwner,
-  ): Promise<ReadonlySet<string>> {
-    const resources = lifecycle.resources.filter(
-      (resource) => resource.cleanupState !== "released",
-    );
-    if (resources.length === 0) return new Set();
-    if (this.deps.pool === undefined) {
-      throw new Error("active worktree resources require a configured pool");
-    }
-    const released = new Set<string>();
-    for (const resource of resources) {
-      await this.deps.pool.release(
-        resource.repository,
+    parentOperationId: string,
+  ): Promise<void> {
+    for (const resource of lifecycle.resources) {
+      if (resource.cleanupState === "released") continue;
+      await this.releaseWorktree(
+        taskId,
         resource.claimId,
         owner,
+        `${parentOperationId}:release:${resource.claimId}`,
       );
-      released.add(resource.id);
     }
-    return released;
+  }
+
+  private requirePool(): TaskLifecyclePoolPort {
+    if (this.deps.pool === undefined) {
+      throw new Error("task worktree operation requires a configured pool");
+    }
+    return this.deps.pool;
   }
 
   private nowIso(): string {
@@ -330,24 +652,43 @@ function requireCurrentOwner(
   }
 }
 
-function applyReleasedResources(
-  lifecycle: LifecycleMetadataV1,
-  releasedIds: ReadonlySet<string>,
-  now: string,
-): LifecycleMetadataV1 {
-  if (releasedIds.size === 0) return lifecycle;
-  return {
-    ...lifecycle,
-    resources: lifecycle.resources.map((resource) =>
-      releasedIds.has(resource.id)
-        ? {
-            ...resource,
-            cleanupState: "released" as const,
-            releasedAt: now,
-          }
-        : resource,
-    ),
-  };
+async function exactClaimMatches(
+  pool: TaskLifecyclePoolPort,
+  repository: string,
+  claimId: string,
+): Promise<PoolWorktreeListing[]> {
+  const listing = await pool.list(repository);
+  return listing.repositories
+    .flatMap((candidate) => candidate.worktrees)
+    .filter((worktree) => worktree.claimId === claimId);
+}
+
+function assertValidAssociation(
+  resource: WorktreeResource,
+  listing: PoolWorktreeListing,
+): void {
+  const fullBranch = resource.branch.startsWith("refs/heads/")
+    ? resource.branch
+    : `refs/heads/${resource.branch}`;
+  const branch = listing.branch?.startsWith("refs/heads/")
+    ? listing.branch
+    : listing.branch === undefined
+      ? undefined
+      : `refs/heads/${listing.branch}`;
+  const valid =
+    branch === fullBranch &&
+    listing.currentBranch === fullBranch &&
+    listing.head !== null &&
+    listing.branchProtectsHead === true &&
+    listing.evidence.pathExists === true &&
+    listing.evidence.registered === true &&
+    listing.evidence.nativeClaimMatches === true &&
+    (resource.path === null || resource.path === listing.path);
+  if (!valid) {
+    throw new Error(
+      `contradictory worktree association for claim ${resource.claimId}`,
+    );
+  }
 }
 
 function recordOperation(

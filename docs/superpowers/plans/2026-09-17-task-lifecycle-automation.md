@@ -686,12 +686,13 @@ git commit -m "add lifecycle operations"
 - Modify: `lib/task-lifecycle/service.test.ts`
 - Modify: `extensions/task-lifecycle/index.ts`
 - Modify: `extensions/task-lifecycle/index.test.ts`
+- Modify: `tests/package-load.test.ts`
 
 **Interfaces:**
 - Produces: `task_worktree_acquire(taskId, repository, branch, startPoint?)`, `task_worktree_release(taskId, claimId)`, resource reconciliation, and raw-pool pre-dispatch guard.
 - Consumes: deterministic pool identity and complete pool observations from Task 2.
 
-- [ ] **Step 1: Write failing pending-acquire tests**
+- [x] **Step 1: Write failing pending-acquire tests**
 
 Test exact sequence:
 
@@ -709,7 +710,7 @@ assert.equal(result.lifecycle.resources[0].branchArtifactId, result.lifecycle.ar
 
 Cover pool-success/finalization-failure, retry without duplicate allocation, reconciliation by exact claim ID, duplicate repository/full-branch rejection, multiple distinct healthy resources, dirty current resources allowing another acquire, and malformed/ambiguous associations blocking acquire.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run:
 
@@ -719,11 +720,11 @@ npm run test:file -- lib/task-lifecycle/model.test.ts lib/task-lifecycle/service
 
 Expected: FAIL because worktree methods and pending resource states are absent.
 
-- [ ] **Step 3: Implement acquire, release, and reconciliation**
+- [x] **Step 3: Implement acquire, release, and reconciliation**
 
 `acquireWorktree()` persists an `acquiring` resource with preselected `claimId` and `pathId`, releases the lifecycle lock, calls the pool, then finalizes the exact resource. `releaseWorktree()` persists `release_pending`, calls the pool, and records `releasedAt` only after success. Reconciliation uses exact claim ID first and never guesses across branch-only matches.
 
-- [ ] **Step 4: Write failing raw-tool guard tests**
+- [x] **Step 4: Write failing raw-tool guard tests**
 
 Assert:
 
@@ -739,11 +740,11 @@ assert.deepEqual(await emit("tool_call", {
 
 Raw `list` and `repair` always pass. Raw acquire passes with no Active lifecycle task. Raw release passes for an unassociated claim and is blocked for any claim linked to lifecycle metadata. The pool tool receives no call when blocked.
 
-- [ ] **Step 5: Register wrapper tools and guard**
+- [x] **Step 5: Register wrapper tools and guard**
 
 Use the `tool_call` handler in `task-lifecycle/index.ts`; do not modify `worktree-pool/index.ts` with Beads checks. Load the pool through `loadWorktreePoolRuntime()` and pass only repository, branch, start point, opaque IDs, and owner identity.
 
-- [ ] **Step 6: Run lifecycle and pool boundary tests**
+- [x] **Step 6: Run lifecycle and pool boundary tests**
 
 Run:
 
@@ -753,7 +754,7 @@ npm run test:file -- extensions/task-lifecycle/*.test.ts lib/task-lifecycle/*.te
 
 Expected: PASS, including a source scan proving the pool contains no task concern.
 
-- [ ] **Step 7: Commit worktree coordination**
+- [x] **Step 7: Commit worktree coordination**
 
 ```bash
 git add lib/task-lifecycle extensions/task-lifecycle extensions/worktree-pool tests/manifest.test.mjs

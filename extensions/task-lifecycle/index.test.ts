@@ -58,6 +58,7 @@ function harness() {
   const handlers = new Map<string, Handler[]>();
   const tools = new Map<string, Tool>();
   const calls: Array<{ name: string; args: unknown[] }> = [];
+  const guardState = { activeTask: false, associatedClaims: new Set<string>() };
   const service: TaskLifecycleToolService = {
     async claim(...args: Parameters<TaskLifecycleToolService["claim"]>) {
       calls.push({ name: "claim", args });
@@ -95,6 +96,30 @@ function harness() {
       calls.push({ name: "reconcileExecutionTimeout", args });
       return normalizedIssue();
     },
+    async acquireWorktree(
+      ...args: Parameters<TaskLifecycleToolService["acquireWorktree"]>
+    ) {
+      calls.push({ name: "acquireWorktree", args });
+      return normalizedIssue();
+    },
+    async releaseWorktree(
+      ...args: Parameters<TaskLifecycleToolService["releaseWorktree"]>
+    ) {
+      calls.push({ name: "releaseWorktree", args });
+      return normalizedIssue();
+    },
+    async hasActiveTask(
+      ...args: Parameters<TaskLifecycleToolService["hasActiveTask"]>
+    ) {
+      calls.push({ name: "hasActiveTask", args });
+      return guardState.activeTask;
+    },
+    async isClaimAssociated(
+      ...args: Parameters<TaskLifecycleToolService["isClaimAssociated"]>
+    ) {
+      calls.push({ name: "isClaimAssociated", args });
+      return guardState.associatedClaims.has(args[0]);
+    },
   };
   const pi = {
     on(name: string, handler: Handler) {
@@ -114,6 +139,7 @@ function harness() {
   })(pi as any);
   return {
     calls,
+    guardState,
     handlers,
     tools,
     context: {
@@ -135,6 +161,8 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
       "task_reconcile",
       "task_close",
       "task_reopen",
+      "task_worktree_acquire",
+      "task_worktree_release",
     ],
   );
   assert.deepEqual(
@@ -230,4 +258,104 @@ test("headless lifecycle hooks never access TUI-only context", async () => {
   }
 
   assert.equal(h.calls.length, 0);
+});
+
+test("task worktree tools route only task and pool coordinates", async () => {
+  const h = harness();
+
+  await h.tools.get("task_worktree_acquire")!.execute(
+    "acquire-call",
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: "jpriverar/topic",
+      startPoint: "origin/main",
+    },
+    null,
+    null,
+    h.context,
+  );
+  await h.tools
+    .get("task_worktree_release")!
+    .execute(
+      "release-call",
+      { taskId: "jp-1", claimId: "claim-1" },
+      null,
+      null,
+      h.context,
+    );
+
+  assert.deepEqual(
+    h.calls.slice(0, 2).map((call) => call.name),
+    ["acquireWorktree", "releaseWorktree"],
+  );
+  assert.deepEqual(h.calls[0].args[0], {
+    taskId: "jp-1",
+    repository: "DataDog/dd-source",
+    branch: "jpriverar/topic",
+    startPoint: "origin/main",
+  });
+  assert.equal(h.calls[0].args[2], "acquire-call");
+  assert.equal(h.calls[1].args[3], "release-call");
+});
+
+test("guards raw pool mutations while preserving inspection and taskless work", async () => {
+  const h = harness();
+  const guard = h.handlers.get("tool_call")![0];
+
+  h.guardState.activeTask = true;
+  const blockedAcquire = await guard(
+    {
+      toolName: "worktree_pool",
+      input: { action: "acquire", repository: "repo", branch: "topic" },
+    },
+    h.context,
+  );
+  assert.ok(blockedAcquire && typeof blockedAcquire === "object");
+  assert.equal((blockedAcquire as any).block, true);
+  assert.match((blockedAcquire as any).reason, /task_worktree_acquire/);
+  assert.equal(
+    await guard(
+      { toolName: "worktree_pool", input: { action: "list" } },
+      h.context,
+    ),
+    undefined,
+  );
+  assert.equal(
+    await guard(
+      { toolName: "worktree_pool", input: { action: "repair" } },
+      h.context,
+    ),
+    undefined,
+  );
+
+  h.guardState.activeTask = false;
+  assert.equal(
+    await guard(
+      { toolName: "worktree_pool", input: { action: "acquire" } },
+      h.context,
+    ),
+    undefined,
+  );
+  h.guardState.associatedClaims.add("claim-1");
+  const blockedRelease = await guard(
+    {
+      toolName: "worktree_pool",
+      input: { action: "release", claimId: "claim-1" },
+    },
+    h.context,
+  );
+  assert.ok(blockedRelease && typeof blockedRelease === "object");
+  assert.equal((blockedRelease as any).block, true);
+  assert.match((blockedRelease as any).reason, /task_worktree_release/);
+  assert.equal(
+    await guard(
+      {
+        toolName: "worktree_pool",
+        input: { action: "release", claimId: "unassociated" },
+      },
+      h.context,
+    ),
+    undefined,
+  );
 });
