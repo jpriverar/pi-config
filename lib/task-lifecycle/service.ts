@@ -663,7 +663,10 @@ export class TaskLifecycleService {
         );
       }
     }
-    await pool.release(resource.repository, claimId, owner);
+    const released = await pool.release(resource.repository, claimId, owner);
+    if (!released.released) {
+      throw new Error(`worktree release refused for claim ${claimId}`);
+    }
     return this.finalizeWorktreeRelease(taskId, owner, operationId, claimId);
   }
 
@@ -985,9 +988,14 @@ function assertValidAssociation(
     : listing.branch === undefined
       ? undefined
       : `refs/heads/${listing.branch}`;
+  const currentBranch = listing.currentBranch?.startsWith("refs/heads/")
+    ? listing.currentBranch
+    : listing.currentBranch === null
+      ? null
+      : `refs/heads/${listing.currentBranch}`;
   const valid =
     branch === fullBranch &&
-    listing.currentBranch === fullBranch &&
+    currentBranch === fullBranch &&
     listing.head !== null &&
     listing.branchProtectsHead === true &&
     listing.evidence.pathExists === true &&

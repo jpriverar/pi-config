@@ -123,11 +123,22 @@ export function createLifecycleStore(
 
   async function readyIds(): Promise<ReadonlySet<string>> {
     const value = await executeJson("list ready issues", ["ready", "--json"]);
-    const issues = decodeEnvelope(value, "list ready issues", store).map(
-      (record) =>
-        decodeIssue(record, undefined, "list ready issues", store).issue,
+    const ids = decodeEnvelope(value, "list ready issues", store).map(
+      (record) => {
+        try {
+          const issue = requireRecord(record, "ready issue");
+          assertIdentifier(issue.id, "ready issue id");
+          return issue.id;
+        } catch (error) {
+          throw lifecycleStoreError(
+            "list ready issues",
+            store,
+            errorMessage(error),
+          );
+        }
+      },
     );
-    return new Set(issues.map((issue) => issue.id));
+    return new Set(ids);
   }
 
   async function mutate(

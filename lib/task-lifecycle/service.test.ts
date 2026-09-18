@@ -401,6 +401,7 @@ test("keeps phase and ownership active when resource release fails", async () =>
 class FakeTaskPool {
   onAcquire?: () => void;
   onRelease?: () => void;
+  refuseRelease = false;
   acquireCalls: Array<{
     request: AcquireRequest;
     owner: OwnerIdentity;
@@ -503,10 +504,10 @@ class FakeTaskPool {
     this.onRelease?.();
     this.releaseCalls.push({ repository, claimId, owner });
     const entry = this.entries.get(claimId);
-    this.entries.delete(claimId);
+    if (!this.refuseRelease) this.entries.delete(claimId);
     return {
       path: entry?.path ?? "/pool/released",
-      released: entry !== undefined,
+      released: entry !== undefined && !this.refuseRelease,
     };
   }
 }
@@ -892,4 +893,31 @@ test("session interruption preserves reload but relinquishes other shutdowns", a
   const interrupted = await sut.interruptSession(session("s1"), "quit");
   assert.equal(interrupted[0].lifecycle?.phase, "actionable");
   assert.equal(interrupted[0].status, "open");
+});
+
+test("preserves release-pending when the pool refuses release", async () => {
+  const { store, pool, sut } = await activeServiceWithPool();
+  const acquired = await sut.acquireWorktree(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: "jpriverar/topic",
+    },
+    session("s1"),
+    "acquire-refused",
+  );
+  const claimId = acquired.lifecycle!.resources[0].claimId;
+  pool.refuseRelease = true;
+
+  await assert.rejects(
+    sut.releaseWorktree("jp-1", claimId, session("s1"), "release-refused"),
+    /worktree release refused/,
+  );
+
+  assert.equal(store.saved.lifecycle?.phase, "active");
+  assert.equal(
+    store.saved.lifecycle?.resources[0].cleanupState,
+    "release_pending",
+  );
+  assert.equal(pool.entries.has(claimId), true);
 });

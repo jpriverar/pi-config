@@ -59,12 +59,17 @@ Task data is read from `BEADS_DIR`. When it is unset, the package uses
 `$HOME/beads/.beads`. Create and manage that store with `bd`; task state is not
 included in this package.
 
-Before model turns, the workflow sends scoped task IDs, titles, readiness, and
-workstream labels from the Beads store to the configured model as hidden
-context. Compaction refreshes the same context for the next turn. The values
-are normalized and explicitly marked as untrusted data rather than
-instructions, but they are still disclosed to the model. Only put task data in
-the configured store that is appropriate to share with that model.
+Before model turns, the workflow sends scoped task IDs, titles, explicit
+Active/Actionable/Waiting state, dependency authority, and compact lifecycle
+warnings from the Beads store to the configured model as hidden context.
+Compaction refreshes the same bounded context for the next turn. The values are
+normalized and explicitly marked as untrusted data rather than instructions,
+but they are still disclosed to the model. Only put task data in the configured
+store that is appropriate to share with that model.
+
+See [Task lifecycle](docs/task-lifecycle.md) for tool schemas, Beads mappings,
+artifact and worktree identity, reconciliation behavior, verification, and the
+read-only migration report.
 
 ## Resources
 
@@ -85,7 +90,8 @@ installation.
 The package includes a bounded, conservative worktree allocator. Its core knows
 only repositories, branches, Git registrations, opaque claims, capacity, and
 clean release. Task ownership and lifecycle policy live in the separate
-`task-lifecycle` extension.
+`task-lifecycle` extension. Operational details and task-aware wrapper examples
+are in [Task lifecycle](docs/task-lifecycle.md).
 
 ## Permission guardrail
 

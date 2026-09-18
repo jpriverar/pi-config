@@ -339,3 +339,18 @@ test("rejects invalid native dependency payloads", async () => {
 
   await assert.rejects(store.show("jp-1"), /invalid native dependency/);
 });
+
+test("ready IDs ignore Beads edge-shaped dependency summaries", async () => {
+  const ready = rawIssue();
+  ready.dependencies = [
+    {
+      issue_id: "jp-1",
+      depends_on_id: "jp-closed",
+      type: "blocks",
+      metadata: "{}",
+    },
+  ];
+  const store = createLifecycleStore(async () => result(ready), options());
+
+  assert.deepEqual([...(await store.readyIds())], ["jp-1"]);
+});

@@ -934,7 +934,7 @@ git commit -m "show explicit task lifecycles"
 - Produces: temporary-store integration evidence, read-only migration report, operator documentation, and final verification.
 - Does not mutate JP's real task store or real worktree pool.
 
-- [ ] **Step 1: Write a failing temporary integration test**
+- [x] **Step 1: Write a failing temporary integration test**
 
 The test creates a temporary Dolt store and temporary Git repositories/pool, then performs:
 
@@ -952,21 +952,21 @@ reconcile again -> no duplicate transition
 
 Also run dependency, time, manual, interruption, dirty retained-resource, and partial-acquire recovery flows. All fixtures are created below one test-owned temporary root and removed in `finally`.
 
-- [ ] **Step 2: Run the integration test and verify RED**
+- [x] **Step 2: Run the integration test and verify RED**
 
 Run: `npm run test:file -- tests/task-lifecycle-integration.test.ts`
 
 Expected: FAIL on the first missing integration contract, not on fixture setup.
 
-- [ ] **Step 3: Complete only missing integration wiring**
+- [x] **Step 3: Complete only missing integration wiring**
 
 Wire real `bd`, Git, and pool adapters through dependency injection. Do not add new lifecycle states, check kinds, or artifact inference. Keep every mutation inside the temporary root.
 
-- [ ] **Step 4: Add the read-only migration reporter**
+- [x] **Step 4: Add the read-only migration reporter**
 
 `scripts/report-lifecycle-migration.mjs` reads current Beads issues and pool listings and prints proposed mappings without calling `bd update`, `bd close`, pool release, Git mutation, or GitHub mutation. Include counts and issue IDs for legacy actionable, dependency-waiting, manually blocked, stale in-progress, deferred, done, and retained-resource candidates.
 
-- [ ] **Step 5: Document operation and rollout boundaries**
+- [x] **Step 5: Document operation and rollout boundaries**
 
 `docs/task-lifecycle.md` covers:
 
@@ -983,7 +983,7 @@ Wire real `bd`, Git, and pool adapters through dependency injection. Do not add 
 
 Update `README.md` resources and task-data sections to link the document.
 
-- [ ] **Step 6: Run focused and full verification**
+- [x] **Step 6: Run focused and full verification**
 
 Run:
 
@@ -999,7 +999,7 @@ git diff --check
 
 Expected: every command exits 0; full tests report zero failures; compatibility reports nested dotted set unsupported and full metadata round-trip supported.
 
-- [ ] **Step 7: Commit integration and docs**
+- [x] **Step 7: Commit integration and docs**
 
 ```bash
 git add README.md docs/task-lifecycle.md scripts/report-lifecycle-migration.mjs tests/task-lifecycle-integration.test.ts
