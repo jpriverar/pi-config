@@ -1007,6 +1007,6 @@ git diff --cached --name-only
 git commit -m "verify task lifecycle integration"
 ```
 
-- [ ] **Step 8: Record implementation evidence**
+- [x] **Step 8: Record implementation evidence**
 
 Record commit range, exact verification commands, pass counts, compatibility output, and the read-only migration-report path in Beads task `jp-mkt4`. Do not install, push, merge, migrate tasks, or release production worktrees without JP's next explicit decision.
