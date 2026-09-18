@@ -36,13 +36,15 @@ The lifecycle extension enforces these initial pre-dispatch rules:
 - `subagent` child and workflow execution requires an attached Active task;
 - `subagent` management actions such as list, status, guidance, and control
   remain available while unattached;
-- `task_attach_artifact`, `task_wait`, `task_close`,
-  `task_worktree_acquire`, and `task_worktree_release` must name the session's
+- `task_attach_artifact`, `task_wait`, and `task_close` must name the session's
   attached task in their structured `taskId` argument;
+- ordinary `worktree_pool acquire` requires exactly one attached Active task;
+- `worktree_pool release` requires matching ownership when its claim is
+  lifecycle-associated, while unassociated legacy release remains available;
 - `task_claim` may establish attachment or retry the attached task, but it
   cannot switch the session directly to another task while ownership remains
   Active;
-- unknown tools, reads, Bash, raw recovery operations, `task_reopen`, and
+- unknown tools, reads, Bash, pool `list` and `repair`, `task_reopen`, and
   `task_reconcile` remain unprotected.
 
 The guard never searches prompts, shell commands, or arbitrary text for task
@@ -51,9 +53,10 @@ cannot be read, without exposing raw task content or command output.
 
 Version 1 protects only the parent subagent launch boundary. It does not pass
 task identity or lifecycle authority to children, observe child tool calls, or
-automatically attach child outputs and other artifacts. Claim a task and launch
-delegated execution in separate turns; parallel claim and launch calls are not
-transactional.
+automatically attach child outputs. Ordinary parent-session worktree operations
+are the narrow exception: lifecycle hooks associate and finalize their temporary
+resources automatically. Claim a task and launch delegated execution in
+separate turns; parallel claim and launch calls are not transactional.
 
 Recovery is explicit:
 
@@ -69,6 +72,12 @@ Recovery is explicit:
 All lifecycle mutations are idempotent. `operationId` is optional and defaults
 to the Pi tool-call ID. Reuse the same operation ID when retrying an operation
 whose response was lost.
+
+The normal resource flow is:
+
+```text
+task_claim -> worktree_pool acquire -> worktree_pool release -> task_wait/task_close
+```
 
 ### `task_claim`
 
@@ -161,8 +170,12 @@ Required: `taskId`. Optional: `manualOutcome`, either `satisfied` or
 { "taskId": "jp-abc", "manualOutcome": "satisfied" }
 ```
 
-Reconciliation resolves native dependencies, due checks, and expired ownership.
-Manual checks never infer success; they require an explicit terminal outcome.
+Reconciliation resolves pending worktree operations before native dependencies,
+due checks, and expired ownership. One exact valid acquisition is finalized;
+a release whose exact claim disappeared is finalized. Missing acquisitions,
+still-present releases, and ambiguous or contradictory evidence remain
+explicit. Manual checks never
+infer success; they require an explicit terminal outcome.
 
 ### `task_close`
 
@@ -179,7 +192,8 @@ requires `supersedingTaskId`. Optional: `operationId`.
 }
 ```
 
-Close refuses unreleased resources and records a durable disposition.
+Close releases associated worktrees first. A refused or unsafe release keeps
+the task Active; successful cleanup is recorded before the durable disposition.
 
 ### `task_reopen`
 
@@ -192,35 +206,25 @@ Required: `taskId` and `reason`. Optional: `operationId`.
 Reopen returns the task to Waiting when native blockers remain, otherwise to
 Actionable.
 
-### `task_worktree_acquire`
+### `worktree_pool acquire` and `release`
 
-Required: `taskId`, `repository`, and `branch`. Optional: `startPoint` and
-`operationId`.
+Use the ordinary pool tool after `task_claim`:
 
-```json
-{
-  "taskId": "jp-abc",
-  "repository": "api",
-  "branch": "jpriverar/task-lifecycle",
-  "startPoint": "origin/main"
-}
+```text
+worktree_pool acquire(repository, branch, startPoint?)
+worktree_pool release(repository, claimId)
 ```
 
-The wrapper persists an `acquiring` resource with deterministic claim and path
-IDs before invoking the pool. A retry reconciles by exact claim and cannot
-allocate a second worktree for the same operation.
+Before acquisition, the lifecycle hook persists an `acquiring` resource with
+deterministic claim and path IDs, then privately passes those identities to the
+task-agnostic pool adapter. A retry of the same repository and branch reuses
+the pending identities instead of allocating twice. A successful pool receipt
+finalizes the resource and durable branch artifact.
 
-### `task_worktree_release`
-
-Required: `taskId` and `claimId`. Optional: `operationId`.
-
-```json
-{ "taskId": "jp-abc", "claimId": "00000000-0000-4000-8000-000000000001" }
-```
-
-The wrapper persists `release_pending` before invoking the pool. Dirty,
-missing, contradictory, ambiguous, or refused releases remain visible for
-explicit resolution.
+For an associated release, the hook verifies the session owns the same Active
+task, persists `release_pending`, and finalizes after a successful pool receipt.
+Unassociated legacy claims may still be released without task ownership.
+Failures remain pending for explicit `task_reconcile`, pool repair, or retry.
 
 ## Artifact and resource identity
 
@@ -262,16 +266,18 @@ A `reload` shutdown preserves current ownership. Quit, new, resume, fork-style,
 and other shutdowns interrupt ownership: the task returns to Actionable once,
 records `execution_interrupted`, and retains resource evidence for handoff.
 
-## Raw pool guard
+## Pool boundary and recovery
 
-The worktree-pool core remains task-agnostic. Raw `list` and `repair` remain
-available, as do taskless acquisitions and unassociated releases. The lifecycle
-extension's pre-dispatch guard blocks raw mutation of a lifecycle-associated
-claim and requires the task-aware wrappers instead. The raw pool schema does
-not expose deterministic internal `claimId` or `pathId` inputs.
+The worktree-pool core remains task-agnostic, and its public schema still does
+not expose deterministic `claimId` or `pathId` inputs. Lifecycle hooks inject a
+strict private context only after public validation. Pool `list`, `repair`, and
+unassociated legacy release remain available without attachment; ordinary
+acquisition does not.
 
-No automated path deletes dirty, occupied, malformed, contradictory, or
-ambiguous worktrees.
+Preparation is persisted before pool mutation and finalization happens from the
+validated `tool_result`. If Pi stops between phases, `task_reconcile` recovers
+only exact safe evidence. No automated path deletes dirty, occupied, malformed,
+contradictory, missing, or ambiguous worktrees.
 
 ## Verification and migration
 

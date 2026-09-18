@@ -1,6 +1,6 @@
 # Ordinary Worktree Lifecycle Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make ordinary `worktree_pool` acquire and release operations task-scoped and lifecycle-coordinated, then remove the public `task_worktree_*` tools.
 
@@ -28,7 +28,6 @@
 **Files:**
 
 - Create: `lib/task-lifecycle/worktree-tool-context.ts`
-- Create: `lib/task-lifecycle/worktree-tool-context.test.ts`
 - Modify: `extensions/worktree-pool/index.ts`
 - Test: `extensions/worktree-pool/index.test.ts`
 
@@ -37,7 +36,7 @@
 - Produces `WORKTREE_LIFECYCLE_CONTEXT_KEY`, `WorktreeLifecycleContext`, and `readWorktreeLifecycleContext(input)`.
 - The pool adapter consumes injected acquire identities but the public schema remains unchanged.
 
-- [ ] **Step 1: Write failing parser and adapter tests**
+- [x] **Step 1: Write failing parser and adapter tests**
 
 Add tests proving that an absent context returns `null`, malformed contexts throw a curated validation error, and a valid acquire context reaches the third `pool.acquire` argument:
 
@@ -66,17 +65,17 @@ expect(h.pool.calls[0].args[2]).toEqual({
 
 Keep the existing assertion that `pathId`, `claimId`, and the private key are absent from `tool.parameters.properties`.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
 ```bash
-npm run test:file -- lib/task-lifecycle/worktree-tool-context.test.ts extensions/worktree-pool/index.test.ts
+npm run test:file -- extensions/worktree-pool/index.test.ts
 ```
 
 Expected: FAIL because the context module does not exist and the pool adapter does not forward injected identities.
 
-- [ ] **Step 3: Implement the private context parser and pool forwarding**
+- [x] **Step 3: Implement the private context parser and pool forwarding**
 
 Define the bounded discriminated type:
 
@@ -103,18 +102,18 @@ export type WorktreeLifecycleContext =
     };
 ```
 
-`readWorktreeLifecycleContext` must return `null` when the key is absent and reject unknown keys, empty identifiers, invalid versions, action/mode mismatches, or a missing acquire `pathId`.
+`readWorktreeLifecycleContext` must return `null` when the key is absent and reject unknown keys, empty identifiers, invalid versions, or a missing acquire `pathId`.
 
-Update only the worktree-pool extension adapter to ignore the validated private key during action-field validation and pass `{ claimId, pathId }` to `runtime.pool.acquire`. Do not change `pool.ts` or the public tool schema.
+Update only the worktree-pool extension adapter to ignore the validated private key during action-field validation, reject a context whose mode does not match the requested action, and pass `{ claimId, pathId }` to `runtime.pool.acquire`. Do not change `pool.ts` or the public tool schema.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run the Step 2 command. Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
-git add lib/task-lifecycle/worktree-tool-context.ts lib/task-lifecycle/worktree-tool-context.test.ts extensions/worktree-pool/index.ts extensions/worktree-pool/index.test.ts
+git add lib/task-lifecycle/worktree-tool-context.ts extensions/worktree-pool/index.ts extensions/worktree-pool/index.test.ts
 git diff --cached --name-only
 git commit -m "support lifecycle pool identities"
 ```
@@ -162,7 +161,7 @@ finalizeWorktreeRelease(
 
 - Existing `task_wait` and `task_close` continue using an internal combined release helper.
 
-- [ ] **Step 1: Rewrite service tests around prepare/finalize boundaries**
+- [x] **Step 1: Rewrite service tests around prepare/finalize boundaries**
 
 Replace direct public-wrapper expectations with tests that assert:
 
@@ -189,7 +188,7 @@ assert.equal(saved.lifecycle?.resources[0].cleanupState, "active");
 
 Also cover same-repository/branch retry reuse, exact receipt validation, deterministic sorting from `associatedTasksForClaim`, release preparation, release-pending retry reuse, and release finalization.
 
-- [ ] **Step 2: Run the service tests and verify RED**
+- [x] **Step 2: Run the service tests and verify RED**
 
 ```bash
 npm run test:file -- lib/task-lifecycle/service.test.ts
@@ -197,7 +196,7 @@ npm run test:file -- lib/task-lifecycle/service.test.ts
 
 Expected: FAIL because the split methods do not exist.
 
-- [ ] **Step 3: Refactor the service without changing lifecycle metadata schema**
+- [x] **Step 3: Refactor the service without changing lifecycle metadata schema**
 
 Extract the existing phases of `acquireWorktree` and `releaseWorktree` into the interfaces above. Preparation owns authoritative task mutation; finalization rechecks task ownership and exact operation/claim identity before calling the existing model transitions.
 
@@ -207,7 +206,7 @@ When preparation finds an existing pending operation for the same repository and
 
 Keep a private combined release helper for `releaseResources`; it must call prepare, pool release, and finalize in that order.
 
-- [ ] **Step 4: Run service and model tests and verify GREEN**
+- [x] **Step 4: Run service and model tests and verify GREEN**
 
 ```bash
 npm run test:file -- lib/task-lifecycle/service.test.ts lib/task-lifecycle/model.test.ts
@@ -215,7 +214,7 @@ npm run test:file -- lib/task-lifecycle/service.test.ts lib/task-lifecycle/model
 
 Expected: all tests pass without changes to the model schema.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/task-lifecycle/service.ts lib/task-lifecycle/service.test.ts
@@ -240,7 +239,7 @@ git commit -m "split worktree lifecycle phases"
 - Removes `task_worktree_acquire` and `task_worktree_release` registrations.
 - Registers one lifecycle `tool_result` handler.
 
-- [ ] **Step 1: Write failing classifier and hook tests**
+- [x] **Step 1: Write failing classifier and hook tests**
 
 Update the pure classifier expectation:
 
@@ -266,7 +265,7 @@ Replace the old task-specific tool tests with hook tests proving:
 - failed pool results leave pending state untouched;
 - malformed receipts and finalization failures return `isError: true` with curated identifiers only.
 
-- [ ] **Step 2: Run focused hook tests and verify RED**
+- [x] **Step 2: Run focused hook tests and verify RED**
 
 ```bash
 npm run test:file -- lib/task-lifecycle/tool-guard.test.ts extensions/task-lifecycle/index.test.ts
@@ -274,7 +273,7 @@ npm run test:file -- lib/task-lifecycle/tool-guard.test.ts extensions/task-lifec
 
 Expected: FAIL because acquire has the old inverse guard, task-specific tools remain registered, and no result hook exists.
 
-- [ ] **Step 3: Implement pre-call coordination and remove public wrappers**
+- [x] **Step 3: Implement pre-call coordination and remove public wrappers**
 
 Delete both `pi.registerTool` blocks for `task_worktree_*` and remove them from `sameTaskTools`.
 
@@ -297,7 +296,7 @@ event.input[WORKTREE_LIFECYCLE_CONTEXT_KEY] = prepared;
 
 Catch store failures and return curated block reasons without raw errors.
 
-- [ ] **Step 4: Implement result finalization**
+- [x] **Step 4: Implement result finalization**
 
 Register `tool_result`. Ignore non-pool, uncoordinated, and `isError` results. Validate `event.details` against the injected mode and claim before invoking the corresponding finalize method.
 
@@ -309,7 +308,7 @@ worktree_pool acquire completed for claim <claimId>, but task <taskId> lifecycle
 
 Do not claim that the pool mutation rolled back.
 
-- [ ] **Step 5: Run focused tests and verify GREEN**
+- [x] **Step 5: Run focused tests and verify GREEN**
 
 Run the Step 2 command plus:
 
@@ -319,7 +318,7 @@ npm run test:file -- extensions/worktree-pool/index.test.ts lib/task-lifecycle/s
 
 Expected: all focused tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add lib/task-lifecycle/tool-guard.ts lib/task-lifecycle/tool-guard.test.ts extensions/task-lifecycle/index.ts extensions/task-lifecycle/index.test.ts
@@ -341,7 +340,7 @@ git commit -m "coordinate ordinary worktree tools"
 - Extends `reconcileTask` to reconcile worktree resource states before execution timeout handling.
 - Keeps `task_wait` and `task_close` automatic cleanup behavior.
 
-- [ ] **Step 1: Write failing recovery and transition tests**
+- [x] **Step 1: Write failing recovery and transition tests**
 
 Add tests for:
 
@@ -361,7 +360,7 @@ Also prove that zero/multiple/contradictory acquisition evidence remains explici
 task jp-1 still owns worktree <claim>; make it releasable or release it before waiting
 ```
 
-- [ ] **Step 2: Run service tests and verify RED**
+- [x] **Step 2: Run service tests and verify RED**
 
 ```bash
 npm run test:file -- lib/task-lifecycle/service.test.ts
@@ -369,7 +368,7 @@ npm run test:file -- lib/task-lifecycle/service.test.ts
 
 Expected: FAIL because Active reconciliation currently checks only execution timeout and release errors are not actionable.
 
-- [ ] **Step 3: Implement bounded resource reconciliation**
+- [x] **Step 3: Implement bounded resource reconciliation**
 
 Before timeout reconciliation, inspect each non-released resource using exact repository and claim identity:
 
@@ -382,7 +381,7 @@ Process resources deterministically and synchronously. Do not add polling or tim
 
 Wrap automatic cleanup refusal with the task ID and claim while preserving the pending resource state and Active phase.
 
-- [ ] **Step 4: Run lifecycle tests and verify GREEN**
+- [x] **Step 4: Run lifecycle tests and verify GREEN**
 
 ```bash
 npm run test:file -- lib/task-lifecycle/service.test.ts lib/task-lifecycle/model.test.ts tests/task-lifecycle-integration.test.ts
@@ -390,7 +389,7 @@ npm run test:file -- lib/task-lifecycle/service.test.ts lib/task-lifecycle/model
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/task-lifecycle/service.ts lib/task-lifecycle/service.test.ts
@@ -411,7 +410,7 @@ git commit -m "reconcile worktree resource operations"
 
 - Documents only `task_claim` plus ordinary `worktree_pool` operations as the public workflow.
 
-- [ ] **Step 1: Update lifecycle operations documentation**
+- [x] **Step 1: Update lifecycle operations documentation**
 
 Replace every normal-use reference to `task_worktree_acquire` or `task_worktree_release` with:
 
@@ -421,7 +420,7 @@ task_claim -> worktree_pool acquire -> worktree_pool release -> task_wait/task_c
 
 Document automatic association, automatic cleanup before Waiting/Done, legacy unassociated release, and partial-operation reconciliation.
 
-- [ ] **Step 2: Run the full verification suite**
+- [x] **Step 2: Run the full verification suite**
 
 Run each gate separately and record actual results:
 
@@ -436,7 +435,7 @@ git diff --check
 
 Expected: every command exits 0. Do not claim completion from focused tests alone.
 
-- [ ] **Step 3: Mark this plan complete and commit documentation**
+- [x] **Step 3: Mark this plan complete and commit documentation**
 
 Check completed steps in this file, then:
 
@@ -446,7 +445,7 @@ git diff --cached --name-only
 git commit -m "document ordinary worktree lifecycle"
 ```
 
-- [ ] **Step 4: Verify final branch state**
+- [x] **Step 4: Verify final branch state**
 
 ```bash
 git status --short --branch
