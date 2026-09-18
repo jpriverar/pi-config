@@ -122,7 +122,7 @@ async function createHarness(
     operationLock: {
       now: Date.now,
       sleep: async () => {},
-      isPidAlive: () => "dead",
+      isPidAlive: () => "live",
       hostname: "test-host",
       timeoutMs: 1_000,
     },
