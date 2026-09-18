@@ -440,7 +440,7 @@ test("keeps phase and ownership active when resource release fails", async () =>
       session("s1"),
       "close-1",
     ),
-    /worktree is dirty/,
+    /task jp-1 still owns worktree claim-1; make it releasable or release it before waiting/,
   );
 
   assert.equal(store.saved.lifecycle?.phase, "active");
@@ -451,6 +451,7 @@ class FakeTaskPool {
   onAcquire?: () => void;
   onRelease?: () => void;
   refuseRelease = false;
+  duplicateClaims = false;
   acquireCalls: Array<{
     request: AcquireRequest;
     owner: OwnerIdentity;
@@ -488,27 +489,31 @@ class FakeTaskPool {
         const entries = [...this.entries.values()].filter(
           (entry) => entry.repository === name,
         );
+        const worktrees = entries.map((entry) => ({
+          claimId: entry.claimId,
+          path: entry.path,
+          state: entry.valid && entry.clean ? "active" : "needs-attention",
+          branch: entry.branch,
+          currentBranch: entry.valid
+            ? `refs/heads/${entry.branch}`
+            : "refs/heads/contradiction",
+          head: entry.head,
+          clean: entry.clean,
+          branchProtectsHead: entry.valid,
+          evidence: {
+            pathExists: true,
+            registered: entry.valid,
+            nativeClaimMatches: entry.valid,
+          },
+        }));
         return {
           name,
           capacity: 3,
-          used: entries.length,
-          worktrees: entries.map((entry) => ({
-            claimId: entry.claimId,
-            path: entry.path,
-            state: entry.valid && entry.clean ? "active" : "needs-attention",
-            branch: entry.branch,
-            currentBranch: entry.valid
-              ? `refs/heads/${entry.branch}`
-              : "refs/heads/contradiction",
-            head: entry.head,
-            clean: entry.clean,
-            branchProtectsHead: entry.valid,
-            evidence: {
-              pathExists: true,
-              registered: entry.valid,
-              nativeClaimMatches: entry.valid,
-            },
-          })),
+          used: worktrees.length,
+          worktrees:
+            this.duplicateClaims && worktrees.length > 0
+              ? [...worktrees, { ...worktrees[0] }]
+              : worktrees,
         };
       }),
     };
@@ -710,6 +715,160 @@ test("finds every lifecycle task associated with a claim deterministically", asy
     associated.map((candidate) => candidate.id),
     ["jp-a", "jp-z"],
   );
+});
+
+test("reconciles an exact pending acquisition from pool evidence", async () => {
+  const { store, pool, sut } = await activeServiceWithPool();
+  const prepared = await sut.prepareWorktreeAcquire(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: "jpriverar/topic",
+    },
+    session("s1"),
+    "acquire-pending",
+  );
+  await pool.acquire(
+    { repository: prepared.repository, branch: "jpriverar/topic" },
+    session("s1"),
+    { claimId: prepared.claimId, pathId: prepared.pathId },
+  );
+
+  const saved = await sut.reconcileTask("jp-1", session("reconciler"));
+
+  assert.equal(saved.lifecycle?.resources[0].cleanupState, "active");
+  assert.equal(
+    saved.lifecycle?.resources[0].path,
+    `/pool/worktree-${prepared.pathId}`,
+  );
+  assert.equal(store.saved.lifecycle?.artifacts[0].kind, "branch");
+});
+
+test("reconciles a pending release after the pool claim disappeared", async () => {
+  const { pool, sut } = await activeServiceWithPool();
+  const acquired = await sut.acquireWorktree(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: "jpriverar/topic",
+    },
+    session("s1"),
+    "acquire-1",
+  );
+  const claimId = acquired.lifecycle!.resources[0].claimId;
+  await sut.prepareWorktreeRelease(
+    "jp-1",
+    claimId,
+    session("s1"),
+    "release-pending",
+  );
+  pool.entries.delete(claimId);
+
+  const saved = await sut.reconcileTask("jp-1", session("reconciler"));
+
+  assert.equal(saved.lifecycle?.resources[0].cleanupState, "released");
+});
+
+test("leaves missing, ambiguous, and contradictory acquisitions pending", async () => {
+  for (const evidence of ["missing", "ambiguous", "contradictory"] as const) {
+    const { store, pool, sut } = await activeServiceWithPool();
+    const prepared = await sut.prepareWorktreeAcquire(
+      {
+        taskId: "jp-1",
+        repository: "DataDog/dd-source",
+        branch: "jpriverar/topic",
+      },
+      session("s1"),
+      `acquire-${evidence}`,
+    );
+    if (evidence !== "missing") {
+      await pool.acquire(
+        { repository: prepared.repository, branch: "jpriverar/topic" },
+        session("s1"),
+        { claimId: prepared.claimId, pathId: prepared.pathId },
+      );
+    }
+    if (evidence === "ambiguous") pool.duplicateClaims = true;
+    if (evidence === "contradictory") {
+      pool.entries.get(prepared.claimId)!.valid = false;
+    }
+
+    await assert.rejects(
+      sut.reconcileTask("jp-1", session("reconciler")),
+      new RegExp(`${evidence} worktree association.*${prepared.claimId}`),
+    );
+    assert.equal(store.saved.lifecycle?.resources[0].cleanupState, "acquiring");
+  }
+});
+
+test("pending acquisition prevents waiting or closing", async () => {
+  const { store, sut } = await activeServiceWithPool();
+  const prepared = await sut.prepareWorktreeAcquire(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: "jpriverar/topic",
+    },
+    session("s1"),
+    "acquire-pending",
+  );
+  const reason = new RegExp(
+    `task jp-1 still owns worktree ${prepared.claimId}; make it releasable or release it before waiting`,
+  );
+
+  await assert.rejects(
+    sut.waitForDependencies("jp-1", ["jp-blocker"], session("s1"), "wait-1"),
+    reason,
+  );
+  await assert.rejects(
+    sut.close(
+      "jp-1",
+      { kind: "cancelled", reason: "stop", evidenceArtifactIds: [] },
+      session("s1"),
+      "close-1",
+    ),
+    reason,
+  );
+  assert.equal(store.saved.lifecycle?.phase, "active");
+  assert.equal(store.saved.lifecycle?.resources[0].cleanupState, "acquiring");
+});
+
+test("releases active worktrees before waiting or closing", async () => {
+  for (const transition of ["wait", "close"] as const) {
+    const { pool, sut } = await activeServiceWithPool();
+    const acquired = await sut.acquireWorktree(
+      {
+        taskId: "jp-1",
+        repository: "DataDog/dd-source",
+        branch: `jpriverar/${transition}`,
+      },
+      session("s1"),
+      `acquire-${transition}`,
+    );
+    const claimId = acquired.lifecycle!.resources[0].claimId;
+
+    const saved =
+      transition === "wait"
+        ? await sut.waitForDependencies(
+            "jp-1",
+            ["jp-blocker"],
+            session("s1"),
+            "wait-1",
+          )
+        : await sut.close(
+            "jp-1",
+            { kind: "cancelled", reason: "stop", evidenceArtifactIds: [] },
+            session("s1"),
+            "close-1",
+          );
+
+    assert.equal(
+      saved.lifecycle?.phase,
+      transition === "wait" ? "waiting" : "done",
+    );
+    assert.equal(saved.lifecycle?.resources[0].cleanupState, "released");
+    assert.equal(pool.entries.has(claimId), false);
+  }
 });
 
 test("acquires with persisted deterministic identities and attaches the branch", async () => {

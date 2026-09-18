@@ -260,6 +260,7 @@ export class TaskLifecycleService {
     const lifecycle = current.lifecycle;
     if (lifecycle === null) return current;
     if (lifecycle.phase === "active") {
+      await this.reconcileWorktreeResources(taskId, current, lifecycle, owner);
       return this.reconcileExecutionTimeout(taskId, owner);
     }
     if (lifecycle.phase !== "waiting" || lifecycle.waiting === null) {
@@ -818,11 +819,12 @@ export class TaskLifecycleService {
     path: string,
     head: string,
     observation: PoolWorktreeListing,
+    expectedSessionId: string = owner.sessionId,
   ): Promise<LifecycleIssue> {
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
       const latest = requireManaged(issue);
-      requireCurrentOwner(taskId, latest, owner);
+      requireCurrentOwnerSession(taskId, latest, expectedSessionId);
       const next = completeWorktreeAcquire(latest, {
         operationId,
         claimId,
@@ -840,11 +842,12 @@ export class TaskLifecycleService {
     owner: LockOwner,
     operationId: string,
     claimId: string,
+    expectedSessionId: string = owner.sessionId,
   ): Promise<LifecycleIssue> {
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
       const latest = requireManaged(issue);
-      requireCurrentOwner(taskId, latest, owner);
+      requireCurrentOwnerSession(taskId, latest, expectedSessionId);
       const next = completeWorktreeRelease(latest, {
         operationId,
         claimId,
@@ -857,6 +860,70 @@ export class TaskLifecycleService {
         next,
       );
     });
+  }
+
+  private async reconcileWorktreeResources(
+    taskId: string,
+    issue: LifecycleIssue,
+    lifecycle: LifecycleMetadataV1,
+    owner: LockOwner,
+  ): Promise<LifecycleIssue> {
+    const pending = lifecycle.resources.filter(
+      (resource) =>
+        resource.cleanupState === "acquiring" ||
+        resource.cleanupState === "release_pending",
+    );
+    if (pending.length === 0) return issue;
+
+    const pool = this.requirePool();
+    const expectedSessionId = lifecycle.execution?.sessionId;
+    if (expectedSessionId === undefined) {
+      throw new Error(`task ${taskId} is not actively owned`);
+    }
+    let current = issue;
+    for (const resource of pending) {
+      const matches = await exactClaimMatches(
+        pool,
+        resource.repository,
+        resource.claimId,
+      );
+      if (matches.length !== 1) {
+        if (
+          resource.cleanupState === "release_pending" &&
+          matches.length === 0
+        ) {
+          current = await this.finishWorktreeRelease(
+            taskId,
+            owner,
+            resource.operationId,
+            resource.claimId,
+            expectedSessionId,
+          );
+          continue;
+        }
+        throw new Error(
+          `${matches.length === 0 ? "missing" : "ambiguous"} worktree association for claim ${resource.claimId}`,
+        );
+      }
+
+      assertValidAssociation(resource, matches[0]);
+      if (resource.cleanupState === "release_pending") {
+        throw new Error(
+          `worktree release remains pending for claim ${resource.claimId}`,
+        );
+      }
+      current = await this.finishWorktreeAcquire(
+        taskId,
+        owner,
+        resource.operationId,
+        resource.claimId,
+        matches[0].path,
+        matches[0].head!,
+        matches[0],
+        expectedSessionId,
+      );
+    }
+    return current;
   }
 
   private async assertHealthyAssociations(
@@ -952,12 +1019,18 @@ export class TaskLifecycleService {
   ): Promise<void> {
     for (const resource of lifecycle.resources) {
       if (resource.cleanupState === "released") continue;
-      await this.releaseWorktree(
-        taskId,
-        resource.claimId,
-        owner,
-        `${parentOperationId}:release:${resource.claimId}`,
-      );
+      try {
+        await this.releaseWorktree(
+          taskId,
+          resource.claimId,
+          owner,
+          `${parentOperationId}:release:${resource.claimId}`,
+        );
+      } catch {
+        throw new Error(
+          `task ${safeIdentifier(taskId)} still owns worktree ${safeIdentifier(resource.claimId)}; make it releasable or release it before waiting`,
+        );
+      }
     }
   }
 
@@ -985,10 +1058,18 @@ function requireCurrentOwner(
   lifecycle: LifecycleMetadataV1,
   owner: LockOwner,
 ): void {
+  requireCurrentOwnerSession(taskId, lifecycle, owner.sessionId);
+}
+
+function requireCurrentOwnerSession(
+  taskId: string,
+  lifecycle: LifecycleMetadataV1,
+  expectedSessionId: string,
+): void {
   if (lifecycle.phase !== "active" || lifecycle.execution === null) {
     throw new Error(`task ${taskId} is not actively owned`);
   }
-  if (lifecycle.execution.sessionId !== owner.sessionId) {
+  if (lifecycle.execution.sessionId !== expectedSessionId) {
     throw new Error(
       `task ${taskId} is owned by active session ${lifecycle.execution.sessionId}`,
     );
@@ -1090,6 +1171,10 @@ function assertValidAssociation(
       `contradictory worktree association for claim ${resource.claimId}`,
     );
   }
+}
+
+function safeIdentifier(value: string): string {
+  return value.slice(0, 128).replace(/[^A-Za-z0-9._:-]/g, "?");
 }
 
 function sameBranch(left: string, right: string): boolean {
