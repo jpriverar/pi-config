@@ -154,6 +154,42 @@ test("lists explicitly requested issue statuses", async () => {
   assert.deepEqual(result, { ok: true, value: [] });
 });
 
+test("ignores edge-shaped dependency summaries in issue lists", async () => {
+  const fake = fakeExec(
+    success([
+      issue({
+        status: "closed",
+        dependencies: [
+          {
+            issue_id: "jp-1",
+            depends_on_id: "jp-blocker",
+            type: "blocks",
+            created_at: "2026-09-18T00:00:00Z",
+            created_by: "fixture",
+            metadata: "{}",
+          },
+        ],
+      }),
+    ]),
+  );
+
+  const result = await createBeadsClient(fake.exec, {
+    env: { BEADS_DIR: store },
+  }).listIssues(["closed"]);
+
+  assert.deepEqual(result, {
+    ok: true,
+    value: [
+      {
+        id: "jp-1",
+        title: "First issue",
+        status: "closed",
+        labels: ["workstream:core"],
+      },
+    ],
+  });
+});
+
 test("lists ready issue IDs in source order", async () => {
   const fake = fakeExec(
     success([

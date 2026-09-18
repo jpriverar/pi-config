@@ -200,13 +200,32 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
       }
     }
   }
-  if (record.dependencies !== undefined) {
+  if (
+    record.dependencies !== undefined &&
+    !isDependencyEdgeSummaryList(record.dependencies)
+  ) {
     decoded.blockingDependencies = decodeBlockingDependencies(
       record.dependencies,
       `issue at index ${index}`,
     );
   }
   return decoded;
+}
+
+function isDependencyEdgeSummaryList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        !Array.isArray(item) &&
+        typeof (item as Record<string, unknown>).issue_id === "string" &&
+        typeof (item as Record<string, unknown>).depends_on_id === "string" &&
+        typeof (item as Record<string, unknown>).type === "string",
+    )
+  );
 }
 
 function decodeBlockingDependencies(
