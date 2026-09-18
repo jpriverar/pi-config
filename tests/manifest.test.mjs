@@ -13,6 +13,7 @@ const expectedExtensions = [
   "./extensions/styled-editor/index.ts",
   "./extensions/herdr-ask-user-bridge/index.ts",
   "./extensions/worktree-pool/index.ts",
+  "./extensions/task-lifecycle/index.ts",
   "./extensions/jp-workflow/index.ts",
   "./extensions/project-status/index.ts",
   "./extensions/tasks-overlay/index.ts",
@@ -82,4 +83,20 @@ test("personal core owns a task-agnostic worktree pool", () => {
       `pool source contains task concern ${forbidden}`,
     );
   }
+});
+
+test("task lifecycle ships the reviewed runtime configuration", () => {
+  const config = JSON.parse(
+    readFileSync(join(root, "extensions/task-lifecycle/config.json"), "utf8"),
+  );
+  assert.deepEqual(config, {
+    version: 1,
+    executionTimeoutMs: 21600000,
+    activityWriteIntervalMs: 300000,
+    sessionReconcileLimit: 10,
+    sessionPrCheckLimit: 5,
+    prPollIntervalMs: 900000,
+    maxBackoffMs: 21600000,
+    warningErrorCount: 3,
+  });
 });

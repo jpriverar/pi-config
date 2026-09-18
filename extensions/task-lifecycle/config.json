@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "executionTimeoutMs": 21600000,
+  "activityWriteIntervalMs": 300000,
+  "sessionReconcileLimit": 10,
+  "sessionPrCheckLimit": 5,
+  "prPollIntervalMs": 900000,
+  "maxBackoffMs": 21600000,
+  "warningErrorCount": 3
+}

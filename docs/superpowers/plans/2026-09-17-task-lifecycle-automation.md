@@ -573,12 +573,13 @@ git commit -m "add locked lifecycle store"
 - Create: `extensions/task-lifecycle/README.md`
 - Modify: `package.json`
 - Modify: `tests/manifest.test.mjs`
+- Modify: `tests/package-load.test.ts`
 
 **Interfaces:**
 - Produces: `TaskLifecycleService` and tools `task_claim`, `task_attach_artifact`, `task_wait`, `task_reconcile`, `task_close`, and `task_reopen`.
 - Worktree methods exist on the service interface but are implemented in Task 6.
 
-- [ ] **Step 1: Write failing service tests for core operations**
+- [x] **Step 1: Write failing service tests for core operations**
 
 Cover:
 
@@ -601,13 +602,13 @@ assert.equal(saved.lifecycle.activeCheck, null);
 
 Also test check wait, close dispositions, reopen, artifact deduplication, execution timeout, idempotent operation IDs, release failure leaving phase active, and blocker IDs absent from metadata.
 
-- [ ] **Step 2: Run service tests and verify RED**
+- [x] **Step 2: Run service tests and verify RED**
 
 Run: `npm run test:file -- lib/task-lifecycle/service.test.ts`
 
 Expected: FAIL because the service does not exist.
 
-- [ ] **Step 3: Implement the service core**
+- [x] **Step 3: Implement the service core**
 
 Constructor:
 
@@ -626,17 +627,17 @@ export class TaskLifecycleService {
 
 Methods require current execution ownership for active mutations. `claim()` reconciles retained resource observations first, records the complete resource snapshot, and permits claim for resource repair even when an association is unresolved. `wait()` and `close()` release every active resource before changing phase; any refusal leaves phase and lease active.
 
-- [ ] **Step 4: Write failing extension registration tests**
+- [x] **Step 4: Write failing extension registration tests**
 
 The harness records tools and handlers. Assert exact strict schemas, tool descriptions, `session_start`, `session_shutdown`, `turn_start`, and `tool_call` registration. Assert headless contexts never call TUI-only methods.
 
-- [ ] **Step 5: Run extension tests and verify RED**
+- [x] **Step 5: Run extension tests and verify RED**
 
 Run: `npm run test:file -- extensions/task-lifecycle/index.test.ts`
 
 Expected: FAIL because the extension does not exist.
 
-- [ ] **Step 6: Register the extension and core tools**
+- [x] **Step 6: Register the extension and core tools**
 
 Add `./extensions/task-lifecycle/index.ts` to `package.json#pi.extensions` after `worktree-pool` and before `jp-workflow`. Load this exact config:
 
@@ -655,7 +656,7 @@ Add `./extensions/task-lifecycle/index.ts` to `package.json#pi.extensions` after
 
 Tool schemas reject unknown fields and empty IDs/reasons. Tool results return a compact task summary in `content` and the full normalized lifecycle issue in `details`.
 
-- [ ] **Step 7: Run extension, service, and manifest tests**
+- [x] **Step 7: Run extension, service, and manifest tests**
 
 Run:
 
@@ -665,7 +666,7 @@ npm run test:file -- lib/task-lifecycle/service.test.ts extensions/task-lifecycl
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit lifecycle operations**
+- [x] **Step 8: Commit lifecycle operations**
 
 ```bash
 git add package.json tests/manifest.test.mjs lib/task-lifecycle/service.ts lib/task-lifecycle/service.test.ts extensions/task-lifecycle
