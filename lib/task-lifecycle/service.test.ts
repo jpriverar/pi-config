@@ -569,6 +569,149 @@ async function activeServiceWithPool() {
   return { store, pool, sut };
 }
 
+test("prepares worktree acquisition before pool mutation and finalizes its receipt", async () => {
+  const { store, pool, sut } = await activeServiceWithPool();
+  const prepared = await sut.prepareWorktreeAcquire(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: "jpriverar/topic",
+    },
+    session("s1"),
+    "tool-call-1",
+  );
+
+  assert.equal(pool.acquireCalls.length, 0);
+  assert.deepEqual(prepared, {
+    version: 1,
+    mode: "acquire",
+    taskId: "jp-1",
+    operationId: "tool-call-1",
+    claimId: "generated-1",
+    pathId: "generated-2",
+    repository: "DataDog/dd-source",
+  });
+  assert.equal(store.saved.lifecycle?.resources[0].cleanupState, "acquiring");
+
+  const saved = await sut.finalizeWorktreeAcquire(
+    prepared,
+    {
+      claimId: "generated-1",
+      path: "/pool/worktree-generated-2",
+      branch: "jpriverar/topic",
+      reused: false,
+      head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      startPoint: "origin/main",
+      startPointHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      startPointFetched: true,
+      relationship: "equal",
+    },
+    session("s1"),
+  );
+
+  assert.equal(saved.lifecycle?.resources[0].cleanupState, "active");
+  assert.equal(
+    saved.lifecycle?.resources[0].path,
+    "/pool/worktree-generated-2",
+  );
+});
+
+test("reuses pending acquisition identity across ordinary tool retries", async () => {
+  const { store, sut } = await activeServiceWithPool();
+  const request = {
+    taskId: "jp-1",
+    repository: "DataDog/dd-source",
+    branch: "jpriverar/topic",
+  };
+
+  const first = await sut.prepareWorktreeAcquire(
+    request,
+    session("s1"),
+    "tool-call-1",
+  );
+  const retry = await sut.prepareWorktreeAcquire(
+    request,
+    session("s1"),
+    "tool-call-2",
+  );
+
+  assert.deepEqual(retry, first);
+  assert.equal(store.saved.lifecycle?.resources.length, 1);
+});
+
+test("prepares and finalizes release separately from the pool mutation", async () => {
+  const { store, pool, sut } = await activeServiceWithPool();
+  const acquired = await sut.acquireWorktree(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: "jpriverar/topic",
+    },
+    session("s1"),
+    "acquire-1",
+  );
+  const claimId = acquired.lifecycle!.resources[0].claimId;
+
+  const prepared = await sut.prepareWorktreeRelease(
+    "jp-1",
+    claimId,
+    session("s1"),
+    "release-1",
+  );
+  assert.equal(pool.releaseCalls.length, 0);
+  assert.equal(
+    store.saved.lifecycle?.resources[0].cleanupState,
+    "release_pending",
+  );
+
+  const retry = await sut.prepareWorktreeRelease(
+    "jp-1",
+    claimId,
+    session("s1"),
+    "release-2",
+  );
+  assert.deepEqual(retry, prepared);
+
+  pool.entries.delete(claimId);
+  const released = await sut.finalizeWorktreeRelease(prepared, session("s1"));
+  assert.equal(released.lifecycle?.resources[0].cleanupState, "released");
+});
+
+test("finds every lifecycle task associated with a claim deterministically", async () => {
+  const store = new FakeStore();
+  const resource = {
+    id: "worktree:claim-1",
+    kind: "worktree" as const,
+    repository: "repo",
+    claimId: "claim-1",
+    pathId: "path-1",
+    operationId: "acquire-1",
+    path: "/pool/path-1",
+    branch: "topic",
+    branchArtifactId: null,
+    acquiredAt: NOW,
+    releasedAt: null,
+    cleanupState: "active" as const,
+  };
+  store.listed = [
+    {
+      ...activeIssue("jp-z", "s2"),
+      lifecycle: lifecycle({ resources: [resource] }),
+    },
+    {
+      ...activeIssue("jp-a", "s1"),
+      lifecycle: lifecycle({ resources: [resource] }),
+    },
+  ];
+
+  const associated = await service(store).associatedTasksForClaim("claim-1");
+
+  assert.deepEqual(
+    associated.map((candidate) => candidate.id),
+    ["jp-a", "jp-z"],
+  );
+});
+
 test("acquires with persisted deterministic identities and attaches the branch", async () => {
   const { store, pool, sut } = await activeServiceWithPool();
   pool.onAcquire = () => {
