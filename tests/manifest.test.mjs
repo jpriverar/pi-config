@@ -50,6 +50,11 @@ test("package manifest exposes the public Pi package contract", async () => {
     "@earendil-works/pi-tui": "*",
     typebox: "*",
   });
+  assert.match(
+    pkg.scripts.test,
+    /find tests extensions lib /,
+    "the full test command must include tests colocated under lib",
+  );
 });
 
 test("personal core owns a task-agnostic worktree pool", () => {

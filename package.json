@@ -11,7 +11,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "test": "tsx --test $(find tests extensions -type f -name '*.test.ts' -print 2>/dev/null) && node --test tests/manifest.test.mjs",
+    "test": "tsx --test $(find tests extensions lib -type f -name '*.test.ts' -print 2>/dev/null) && node --test tests/manifest.test.mjs",
     "test:file": "tsx --test",
     "test:bootstrap": "tsx --test tests/reconcile-personal-profile.test.ts tests/bootstrap-macos.test.ts",
     "typecheck": "tsc --noEmit",

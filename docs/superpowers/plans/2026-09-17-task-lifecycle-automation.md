@@ -393,6 +393,8 @@ git commit -m "add task-agnostic pool seams"
 ### Task 3: Implement and validate the lifecycle model
 
 **Files:**
+- Modify: `package.json`
+- Modify: `tests/manifest.test.mjs`
 - Create: `lib/task-lifecycle/types.ts`
 - Create: `lib/task-lifecycle/model.ts`
 - Create: `lib/task-lifecycle/model.test.ts`
@@ -401,7 +403,7 @@ git commit -m "add task-agnostic pool seams"
 - Produces: all shared lifecycle types, `decodeLifecycle()`, `adoptLegacyLifecycle()`, `validateLifecycle()`, `canonicalizeArtifact()`, `attachArtifact()`, and pure transition helpers.
 - Consumes: no filesystem, CLI, network, or Pi API.
 
-- [ ] **Step 1: Write failing decoder and invariant tests**
+- [x] **Step 1: Write failing decoder and invariant tests**
 
 Cover exact behaviors:
 
@@ -423,13 +425,13 @@ assert.throws(
 
 Include every phase/status projection, waiting subtype, disposition, duplicate resource pair, unknown enum, and malformed timestamp.
 
-- [ ] **Step 2: Run model tests and verify RED**
+- [x] **Step 2: Run model tests and verify RED**
 
 Run: `npm run test:file -- lib/task-lifecycle/model.test.ts`
 
 Expected: FAIL because the model modules do not exist.
 
-- [ ] **Step 3: Implement strict decoding and legacy adoption**
+- [x] **Step 3: Implement strict decoding and legacy adoption**
 
 Implement discriminated decoders without coercing unknown data. `decodeLifecycle()` preserves the caller's raw metadata outside `piLifecycle` and returns a warning rather than throwing for unsupported lifecycle data.
 
@@ -446,7 +448,7 @@ status === "open" && readyIds.has(id) -> phase "actionable"
 
 A lifecycle mutation writes a full version-1 object; read-only legacy classification does not mutate Beads.
 
-- [ ] **Step 4: Implement artifacts and pure transitions**
+- [x] **Step 4: Implement artifacts and pure transitions**
 
 Export:
 
@@ -462,16 +464,16 @@ export function interruptLifecycle(state: LifecycleMetadataV1, input: InterruptI
 
 Deduplicate artifacts by canonical `(kind, uri)`, transitions by `operationId`, and resources by ID plus canonical repository/full-branch pair. Poll observations change `lastCheckedAt` but not `stateEnteredAt` or `lastProgressAt` unless the outcome changes.
 
-- [ ] **Step 5: Run model tests and verify GREEN**
+- [x] **Step 5: Run model tests and verify GREEN**
 
 Run: `npm run test:file -- lib/task-lifecycle/model.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the model**
+- [x] **Step 6: Commit the model**
 
 ```bash
-git add lib/task-lifecycle/types.ts lib/task-lifecycle/model.ts lib/task-lifecycle/model.test.ts
+git add package.json tests/manifest.test.mjs lib/task-lifecycle/types.ts lib/task-lifecycle/model.ts lib/task-lifecycle/model.test.ts docs/superpowers/plans/2026-09-17-task-lifecycle-automation.md
 git diff --cached --name-only
 git commit -m "add task lifecycle model"
 ```
