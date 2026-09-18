@@ -59,8 +59,27 @@ function issue(
   };
 }
 
+function activeIssue(id: string, sessionId: string): LifecycleIssue {
+  return {
+    ...issue(
+      lifecycle({
+        phase: "active",
+        execution: {
+          sessionId,
+          claimedAt: NOW,
+          lastActivityAt: NOW,
+          expiresAt: new Date(NOW_MS + 60_000).toISOString(),
+          resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+        },
+      }),
+    ),
+    id,
+  };
+}
+
 class FakeStore implements LifecycleStore {
   saved: LifecycleIssue;
+  listed: LifecycleIssue[] | null = null;
   blockers: Array<[string, string]> = [];
   mutations = 0;
 
@@ -73,7 +92,7 @@ class FakeStore implements LifecycleStore {
   }
 
   async list(_statuses: readonly LifecycleStatus[]): Promise<LifecycleIssue[]> {
-    return [this.saved];
+    return this.listed ?? [this.saved];
   }
 
   async readyIds(): Promise<ReadonlySet<string>> {
@@ -156,6 +175,36 @@ test("claims a legacy task into active ownership", async () => {
     saved.lifecycle?.execution?.expiresAt,
     "2026-09-17T16:00:00.000Z",
   );
+});
+
+test("resolves explicit Active tasks owned by one session", async () => {
+  const store = new FakeStore();
+  const waiting = {
+    ...issue(lifecycle({ phase: "waiting", waiting: { kind: "dependency" } })),
+    id: "jp-waiting",
+  };
+  const legacy = {
+    ...issue(null),
+    id: "jp-legacy",
+    status: "in_progress" as const,
+  };
+  store.listed = [
+    activeIssue("jp-z", "session-a"),
+    activeIssue("jp-foreign", "session-b"),
+    waiting,
+    legacy,
+    activeIssue("jp-a", "session-a"),
+  ];
+  const sut = service(store);
+
+  const owned = await sut.activeTasksForSession("session-a");
+
+  assert.deepEqual(
+    owned.map((candidate) => candidate.id),
+    ["jp-a", "jp-z"],
+  );
+  assert.equal(await sut.hasActiveTask("session-a"), true);
+  assert.deepEqual(await sut.activeTasksForSession("missing"), []);
 });
 
 test("rejects a claim owned by another live session", async () => {

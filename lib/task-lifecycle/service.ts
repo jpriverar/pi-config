@@ -670,13 +670,19 @@ export class TaskLifecycleService {
     return this.finalizeWorktreeRelease(taskId, owner, operationId, claimId);
   }
 
-  async hasActiveTask(sessionId: string): Promise<boolean> {
+  async activeTasksForSession(sessionId: string): Promise<LifecycleIssue[]> {
     const issues = await this.deps.store.list(["in_progress"]);
-    return issues.some(
-      (issue) =>
-        issue.lifecycle?.phase === "active" &&
-        issue.lifecycle.execution?.sessionId === sessionId,
-    );
+    return issues
+      .filter(
+        (issue) =>
+          issue.lifecycle?.phase === "active" &&
+          issue.lifecycle.execution?.sessionId === sessionId,
+      )
+      .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  async hasActiveTask(sessionId: string): Promise<boolean> {
+    return (await this.activeTasksForSession(sessionId)).length > 0;
   }
 
   async isClaimAssociated(claimId: string): Promise<boolean> {
