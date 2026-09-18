@@ -96,6 +96,30 @@ function harness() {
       calls.push({ name: "reconcileExecutionTimeout", args });
       return normalizedIssue();
     },
+    async reconcileTask(
+      ...args: Parameters<TaskLifecycleToolService["reconcileTask"]>
+    ) {
+      calls.push({ name: "reconcileTask", args });
+      return normalizedIssue();
+    },
+    async reconcileDue(
+      ...args: Parameters<TaskLifecycleToolService["reconcileDue"]>
+    ) {
+      calls.push({ name: "reconcileDue", args });
+      return [];
+    },
+    async refreshSessionActivity(
+      ...args: Parameters<TaskLifecycleToolService["refreshSessionActivity"]>
+    ) {
+      calls.push({ name: "refreshSessionActivity", args });
+      return [];
+    },
+    async interruptSession(
+      ...args: Parameters<TaskLifecycleToolService["interruptSession"]>
+    ) {
+      calls.push({ name: "interruptSession", args });
+      return [];
+    },
     async acquireWorktree(
       ...args: Parameters<TaskLifecycleToolService["acquireWorktree"]>
     ) {
@@ -136,6 +160,9 @@ function harness() {
     now: () => NOW,
     pid: 4242,
     hostname: "host",
+    activityWriteIntervalMs: 300_000,
+    sessionReconcileLimit: 10,
+    sessionPrCheckLimit: 5,
   })(pi as any);
   return {
     calls,
@@ -167,7 +194,15 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
   );
   assert.deepEqual(
     [...h.handlers.keys()],
-    ["session_start", "session_shutdown", "turn_start", "tool_call"],
+    [
+      "session_start",
+      "session_shutdown",
+      "turn_start",
+      "tool_execution_start",
+      "tool_execution_end",
+      "before_agent_start",
+      "tool_call",
+    ],
   );
   for (const tool of h.tools.values()) {
     assert.equal(tool.parameters.type, "object");
@@ -253,9 +288,8 @@ test("headless lifecycle hooks never access TUI-only context", async () => {
     sessionManager: h.context.sessionManager,
   };
 
-  for (const handlers of h.handlers.values()) {
-    for (const handler of handlers) await handler({}, headless);
-  }
+  await h.handlers.get("before_agent_start")?.[0]({}, headless);
+  await h.handlers.get("tool_call")?.[0]({}, headless);
 
   assert.equal(h.calls.length, 0);
 });
@@ -358,4 +392,78 @@ test("guards raw pool mutations while preserving inspection and taskless work", 
     ),
     undefined,
   );
+});
+
+test("session and activity hooks reconcile synchronously without timers", async () => {
+  const h = harness();
+  const handler = (name: string) => h.handlers.get(name)![0];
+
+  await handler("session_start")({ reason: "startup" }, h.context);
+  assert.deepEqual(h.calls.at(-1), {
+    name: "reconcileDue",
+    args: [
+      {
+        pid: 4242,
+        sessionId: "session-1",
+        host: "host",
+        started: NOW,
+      },
+      { taskLimit: 10, checkLimit: 5 },
+    ],
+  });
+
+  await handler("turn_start")({}, h.context);
+  await handler("tool_execution_start")({}, h.context);
+  await handler("tool_execution_end")({}, h.context);
+  assert.equal(
+    h.calls.filter((call) => call.name === "refreshSessionActivity").length,
+    3,
+  );
+
+  await handler("session_shutdown")({ reason: "reload" }, h.context);
+  assert.equal(
+    h.calls.filter((call) => call.name === "interruptSession").length,
+    0,
+  );
+  await handler("session_shutdown")({ reason: "quit" }, h.context);
+  assert.deepEqual(h.calls.at(-1), {
+    name: "interruptSession",
+    args: [
+      {
+        pid: 4242,
+        sessionId: "session-1",
+        host: "host",
+        started: NOW,
+      },
+      "quit",
+    ],
+  });
+});
+
+test("task_reconcile passes explicit manual outcomes", async () => {
+  const h = harness();
+
+  await h.tools
+    .get("task_reconcile")!
+    .execute(
+      "reconcile-call",
+      { taskId: "jp-1", manualOutcome: "action_required" },
+      null,
+      null,
+      h.context,
+    );
+
+  assert.deepEqual(h.calls.at(-1), {
+    name: "reconcileTask",
+    args: [
+      "jp-1",
+      {
+        pid: 4242,
+        sessionId: "session-1",
+        host: "host",
+        started: NOW,
+      },
+      { manualOutcome: "action_required" },
+    ],
+  });
 });

@@ -5,6 +5,7 @@ import { hostname as readHostname } from "node:os";
 import { resolveBeadsDir, type BeadsExec } from "../../lib/beads.js";
 import { loadWorktreePoolRuntime } from "../worktree-pool/runtime.js";
 import { createLifecycleStore } from "../../lib/task-lifecycle/beads-store.js";
+import { createCheckAdapterRegistry } from "../../lib/task-lifecycle/checks.js";
 import {
   TaskLifecycleService,
   type CloseDispositionInput,
@@ -57,6 +58,17 @@ export interface TaskLifecycleToolService {
     taskId: string,
     owner: LockOwner,
   ): Promise<LifecycleIssue>;
+  reconcileTask(
+    taskId: string,
+    owner: LockOwner,
+    input?: { manualOutcome?: "satisfied" | "action_required" },
+  ): Promise<LifecycleIssue>;
+  reconcileDue(
+    owner: LockOwner,
+    limits: { taskLimit: number; checkLimit: number },
+  ): Promise<LifecycleIssue[]>;
+  refreshSessionActivity(owner: LockOwner): Promise<LifecycleIssue[]>;
+  interruptSession(owner: LockOwner, reason: string): Promise<LifecycleIssue[]>;
   acquireWorktree(
     request: {
       taskId: string;
@@ -110,6 +122,9 @@ export interface TaskLifecycleExtensionDependencies {
   now(): number;
   pid: number;
   hostname: string;
+  activityWriteIntervalMs: number;
+  sessionReconcileLimit: number;
+  sessionPrCheckLimit: number;
 }
 
 interface LifecycleConfig {
@@ -328,12 +343,24 @@ export function createTaskLifecycleExtension(
       label: "Reconcile task",
       description:
         "Reconcile deterministic lifecycle state such as an expired active execution lease.",
-      parameters: objectSchema({ taskId: taskIdProperty }, ["taskId"]),
+      parameters: objectSchema(
+        {
+          taskId: taskIdProperty,
+          manualOutcome: {
+            type: "string",
+            enum: ["satisfied", "action_required"],
+          },
+        },
+        ["taskId"],
+      ),
       async execute(_id, params, _signal, _update, context) {
         return toolResult(
-          await deps.service.reconcileExecutionTimeout(
+          await deps.service.reconcileTask(
             params.taskId,
             ownerFor(context),
+            params.manualOutcome === undefined
+              ? {}
+              : { manualOutcome: params.manualOutcome },
           ),
         );
       },
@@ -463,9 +490,28 @@ export function createTaskLifecycleExtension(
       },
     });
 
-    pi.on("session_start", () => undefined);
-    pi.on("session_shutdown", () => undefined);
-    pi.on("turn_start", () => undefined);
+    pi.on("session_start", async (_event, context) => {
+      await deps.service.reconcileDue(ownerFor(context), {
+        taskLimit: deps.sessionReconcileLimit,
+        checkLimit: deps.sessionPrCheckLimit,
+      });
+    });
+    pi.on("session_shutdown", async (event, context) => {
+      if (event?.reason === "reload" || typeof event?.reason !== "string") {
+        return;
+      }
+      await deps.service.interruptSession(ownerFor(context), event.reason);
+    });
+    const refreshActivity = async (
+      _event: unknown,
+      context: ExtensionContext,
+    ) => {
+      await deps.service.refreshSessionActivity(ownerFor(context));
+    };
+    pi.on("turn_start", refreshActivity);
+    pi.on("tool_execution_start", refreshActivity);
+    pi.on("tool_execution_end", refreshActivity);
+    pi.on("before_agent_start", () => undefined);
     pi.on("tool_call", async (event, context) => {
       if (event?.toolName !== "worktree_pool" || !isRecord(event.input)) {
         return undefined;
@@ -585,17 +631,29 @@ export default function taskLifecycle(pi: ExtensionApi): void {
       return runtime.pool.release(repository, claimId, owner);
     },
   };
+  const checkAdapters = createCheckAdapterRegistry({
+    execGh: async (args) => pi.exec!("gh", [...args]),
+    now: Date.now,
+    prPollIntervalMs: config.prPollIntervalMs,
+  });
   const service = new TaskLifecycleService({
     store,
     now: Date.now,
     uuid: randomUUID,
     executionTimeoutMs: config.executionTimeoutMs,
+    activityWriteIntervalMs: config.activityWriteIntervalMs,
+    prPollIntervalMs: config.prPollIntervalMs,
+    maxBackoffMs: config.maxBackoffMs,
     pool,
+    checkAdapters,
   });
   createTaskLifecycleExtension({
     service,
     now: Date.now,
     pid: process.pid,
     hostname: readHostname(),
+    activityWriteIntervalMs: config.activityWriteIntervalMs,
+    sessionReconcileLimit: config.sessionReconcileLimit,
+    sessionPrCheckLimit: config.sessionPrCheckLimit,
   })(pi);
 }

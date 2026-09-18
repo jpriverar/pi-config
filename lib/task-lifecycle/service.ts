@@ -1,4 +1,9 @@
 import type { OwnerIdentity } from "../../extensions/worktree-pool/operation-lock.js";
+import {
+  nextCheckBackoffMs,
+  type CheckAdapterRegistry,
+  type ObserveCheckInput,
+} from "./checks.js";
 import type {
   AcquireRequest,
   AcquireResult,
@@ -58,7 +63,16 @@ export interface TaskLifecycleServiceDependencies {
   now: () => number;
   uuid: () => string;
   executionTimeoutMs: number;
+  activityWriteIntervalMs?: number;
+  prPollIntervalMs?: number;
+  maxBackoffMs?: number;
   pool?: TaskLifecyclePoolPort;
+  checkAdapters?: CheckAdapterRegistry;
+}
+
+export interface ReconcileLimits {
+  taskLimit: number;
+  checkLimit: number;
 }
 
 export type CloseDispositionInput = Omit<Disposition, "at">;
@@ -234,6 +248,249 @@ export class TaskLifecycleService {
       });
       return this.mutation(issue, operationId, "open", next);
     });
+  }
+
+  async reconcileTask(
+    taskId: string,
+    owner: LockOwner,
+    input: ObserveCheckInput = {},
+  ): Promise<LifecycleIssue> {
+    const current = await this.deps.store.show(taskId);
+    const lifecycle = current.lifecycle;
+    if (lifecycle === null) return current;
+    if (lifecycle.phase === "active") {
+      return this.reconcileExecutionTimeout(taskId, owner);
+    }
+    if (lifecycle.phase !== "waiting" || lifecycle.waiting === null) {
+      return current;
+    }
+    const now = this.nowIso();
+    if (lifecycle.waiting.kind === "dependency") {
+      const unresolved = current.dependencies.some(
+        (dependency) =>
+          dependency.dependencyType === "blocks" &&
+          dependency.status !== "closed",
+      );
+      if (unresolved) return current;
+      const operationId = `dependencies-satisfied:${lifecycle.stateEnteredAt}`;
+      return this.deps.store.mutate(taskId, owner, (issue) => {
+        const latest = requireManaged(issue);
+        if (
+          latest.phase !== "waiting" ||
+          latest.waiting?.kind !== "dependency"
+        ) {
+          return unchangedMutation(issue, operationId);
+        }
+        const next = finishWaiting(
+          latest,
+          operationId,
+          "dependencies_satisfied",
+          now,
+          null,
+        );
+        return this.mutation(issue, operationId, "open", next);
+      });
+    }
+
+    const activeCheck = lifecycle.activeCheck;
+    if (activeCheck === null) return current;
+    const explicitlyReconciled = input.manualOutcome !== undefined;
+    if (
+      !explicitlyReconciled &&
+      activeCheck.nextCheckAt !== null &&
+      Date.parse(activeCheck.nextCheckAt) > this.deps.now()
+    ) {
+      return current;
+    }
+    if (this.deps.checkAdapters === undefined) {
+      throw new Error("check reconciliation requires configured adapters");
+    }
+    const observation = await this.deps.checkAdapters.observe(
+      activeCheck,
+      lifecycle.artifacts,
+      input,
+    );
+    const operationId = `check-observation:${activeCheck.id}:${now}`;
+    return this.deps.store.mutate(taskId, owner, (issue) => {
+      const latest = requireManaged(issue);
+      if (
+        latest.phase !== "waiting" ||
+        latest.waiting?.kind !== "check" ||
+        latest.activeCheck?.id !== activeCheck.id
+      ) {
+        return unchangedMutation(issue, operationId);
+      }
+      const check = {
+        ...latest.activeCheck,
+        state: observation.outcome,
+        lastCheckedAt: now,
+        lastObservation: observation.observation,
+      };
+      if (observation.outcome === "pending") {
+        check.errorCount = 0;
+        check.nextCheckAt = new Date(
+          this.deps.now() + (this.deps.prPollIntervalMs ?? 900_000),
+        ).toISOString();
+        const next = recordCheckObservation(
+          { ...latest, activeCheck: check },
+          operationId,
+          now,
+        );
+        return this.mutation(issue, operationId, "blocked", next);
+      }
+      if (observation.outcome === "error") {
+        check.errorCount = latest.activeCheck.errorCount + 1;
+        check.nextCheckAt = new Date(
+          this.deps.now() +
+            nextCheckBackoffMs(
+              check.errorCount,
+              this.deps.prPollIntervalMs ?? 900_000,
+              this.deps.maxBackoffMs ?? 21_600_000,
+            ),
+        ).toISOString();
+        const next = recordCheckObservation(
+          { ...latest, activeCheck: check },
+          operationId,
+          now,
+        );
+        return this.mutation(issue, operationId, "blocked", next);
+      }
+      check.nextCheckAt = null;
+      if (
+        observation.outcome === "satisfied" &&
+        check.onSatisfied === "close"
+      ) {
+        const next = closeLifecycle(
+          { ...latest, activeCheck: check },
+          {
+            operationId,
+            now,
+            disposition: {
+              kind: "completed",
+              reason: `check ${check.id} satisfied: ${observation.observation}`,
+              at: now,
+              evidenceArtifactIds: check.targetArtifactIds,
+            },
+          },
+        );
+        return this.mutation(issue, operationId, "closed", next);
+      }
+      const type =
+        observation.outcome === "satisfied"
+          ? "check_satisfied"
+          : "check_action_required";
+      const next = finishWaiting(latest, operationId, type, now, check);
+      return this.mutation(issue, operationId, "open", next);
+    });
+  }
+
+  async reconcileDue(
+    owner: LockOwner,
+    limits: ReconcileLimits,
+  ): Promise<LifecycleIssue[]> {
+    const issues = await this.deps.store.list([
+      "open",
+      "in_progress",
+      "blocked",
+    ]);
+    const results: LifecycleIssue[] = [];
+    let checks = 0;
+    for (const issue of issues) {
+      if (results.length >= limits.taskLimit) break;
+      if (
+        issue.lifecycle?.phase === "waiting" &&
+        issue.lifecycle.waiting?.kind === "check"
+      ) {
+        if (checks >= limits.checkLimit) continue;
+        checks += 1;
+      }
+      results.push(await this.reconcileTask(issue.id, owner));
+    }
+    return results;
+  }
+
+  async refreshSessionActivity(owner: LockOwner): Promise<LifecycleIssue[]> {
+    const issues = await this.deps.store.list(["in_progress"]);
+    const nowMs = this.deps.now();
+    const now = new Date(nowMs).toISOString();
+    const interval = this.deps.activityWriteIntervalMs ?? 300_000;
+    const results: LifecycleIssue[] = [];
+    for (const issue of issues) {
+      const execution = issue.lifecycle?.execution;
+      if (
+        issue.lifecycle?.phase !== "active" ||
+        execution?.sessionId !== owner.sessionId ||
+        nowMs - Date.parse(execution.lastActivityAt) < interval
+      ) {
+        continue;
+      }
+      const operationId = `activity:${owner.sessionId}:${now}`;
+      results.push(
+        await this.deps.store.mutate(issue.id, owner, (latestIssue) => {
+          const lifecycle = requireManaged(latestIssue);
+          requireCurrentOwner(issue.id, lifecycle, owner);
+          const currentExecution = lifecycle.execution!;
+          const next = recordCheckObservation(
+            {
+              ...lifecycle,
+              execution: {
+                ...currentExecution,
+                lastActivityAt: now,
+                expiresAt: new Date(
+                  nowMs + this.deps.executionTimeoutMs,
+                ).toISOString(),
+              },
+            },
+            operationId,
+            now,
+            "execution_activity",
+          );
+          return this.mutation(latestIssue, operationId, "in_progress", next);
+        }),
+      );
+    }
+    return results;
+  }
+
+  async interruptSession(
+    owner: LockOwner,
+    reason: string,
+  ): Promise<LifecycleIssue[]> {
+    if (reason === "reload") return [];
+    const issues = await this.deps.store.list(["in_progress"]);
+    const now = this.nowIso();
+    const results: LifecycleIssue[] = [];
+    for (const issue of issues) {
+      const execution = issue.lifecycle?.execution;
+      if (
+        issue.lifecycle?.phase !== "active" ||
+        execution?.sessionId !== owner.sessionId
+      ) {
+        continue;
+      }
+      const operationId = `execution-interrupted:${owner.sessionId}:${execution.expiresAt}`;
+      results.push(
+        await this.deps.store.mutate(issue.id, owner, (latestIssue) => {
+          const lifecycle = requireManaged(latestIssue);
+          if (hasOperation(lifecycle, operationId)) {
+            return this.mutation(
+              latestIssue,
+              operationId,
+              latestIssue.status,
+              lifecycle,
+            );
+          }
+          requireCurrentOwner(issue.id, lifecycle, owner);
+          const next = interruptLifecycle(lifecycle, {
+            operationId,
+            now,
+            expectedSessionId: owner.sessionId,
+          });
+          return this.mutation(latestIssue, operationId, "open", next);
+        }),
+      );
+    }
+    return results;
   }
 
   async acquireWorktree(
@@ -650,6 +907,59 @@ function requireCurrentOwner(
       `task ${taskId} is owned by active session ${lifecycle.execution.sessionId}`,
     );
   }
+}
+
+function finishWaiting(
+  lifecycle: LifecycleMetadataV1,
+  operationId: string,
+  type: string,
+  now: string,
+  check: LifecycleCheck | null,
+): LifecycleMetadataV1 {
+  return {
+    ...lifecycle,
+    phase: "actionable",
+    waiting: null,
+    activeCheck: null,
+    checkHistory:
+      check === null
+        ? lifecycle.checkHistory
+        : [...lifecycle.checkHistory, check],
+    stateEnteredAt: now,
+    lastProgressAt: now,
+    transitionHistory: [
+      ...lifecycle.transitionHistory,
+      {
+        operationId,
+        type,
+        at: now,
+        from: lifecycle.phase,
+        to: "actionable",
+      },
+    ],
+  };
+}
+
+function recordCheckObservation(
+  lifecycle: LifecycleMetadataV1,
+  operationId: string,
+  now: string,
+  type = "check_observed",
+): LifecycleMetadataV1 {
+  if (hasOperation(lifecycle, operationId)) return lifecycle;
+  return {
+    ...lifecycle,
+    transitionHistory: [
+      ...lifecycle.transitionHistory,
+      {
+        operationId,
+        type,
+        at: now,
+        from: lifecycle.phase,
+        to: lifecycle.phase,
+      },
+    ],
+  };
 }
 
 async function exactClaimMatches(

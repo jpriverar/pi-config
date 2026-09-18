@@ -121,7 +121,14 @@ class FakeStore implements LifecycleStore {
 
 function service(
   store: FakeStore,
-  options: { pool?: TaskLifecyclePoolPort; now?: () => number } = {},
+  options: {
+    pool?: TaskLifecyclePoolPort;
+    now?: () => number;
+    checkAdapters?: any;
+    activityWriteIntervalMs?: number;
+    prPollIntervalMs?: number;
+    maxBackoffMs?: number;
+  } = {},
 ) {
   let uuid = 0;
   return new TaskLifecycleService({
@@ -130,6 +137,10 @@ function service(
     uuid: () => `generated-${++uuid}`,
     executionTimeoutMs: 6 * 60 * 60 * 1_000,
     pool: options.pool,
+    checkAdapters: options.checkAdapters,
+    activityWriteIntervalMs: options.activityWriteIntervalMs ?? 300_000,
+    prPollIntervalMs: options.prPollIntervalMs ?? 900_000,
+    maxBackoffMs: options.maxBackoffMs ?? 21_600_000,
   });
 }
 
@@ -653,4 +664,232 @@ test("persists release intent before the pool call and finalizes afterward", asy
   assert.equal(pool.releaseCalls.length, 1);
   assert.equal(released.lifecycle?.resources[0].cleanupState, "released");
   assert.equal(released.lifecycle?.resources[0].releasedAt, NOW);
+});
+
+function waitingLifecycle(
+  kind: "dependency" | "check",
+  activeCheck: LifecycleCheck | null = null,
+): LifecycleMetadataV1 {
+  return lifecycle({
+    phase: "waiting",
+    waiting: { kind },
+    activeCheck,
+  });
+}
+
+function adapter(outcome: string, observation: string) {
+  return {
+    calls: 0,
+    async observe() {
+      this.calls += 1;
+      return { outcome, observation };
+    },
+  };
+}
+
+test("reconciles the final native blocker to actionable exactly once", async () => {
+  const state = waitingLifecycle("dependency");
+  const store = new FakeStore({
+    ...issue(state),
+    status: "open",
+    dependencies: [
+      { id: "jp-blocker", status: "closed", dependencyType: "blocks" },
+    ],
+  });
+  const sut = service(store);
+
+  const first = await sut.reconcileTask("jp-1", session("reconciler"));
+  const second = await sut.reconcileTask("jp-1", session("reconciler"));
+
+  assert.equal(first.lifecycle?.phase, "actionable");
+  assert.equal(second.lifecycle?.transitionHistory.length, 1);
+  assert.equal(
+    second.lifecycle?.transitionHistory[0].type,
+    "dependencies_satisfied",
+  );
+});
+
+test("closes a due satisfied check and wakes action-required work exactly once", async () => {
+  const pull = {
+    id: "pr-1",
+    kind: "pull_request" as const,
+    uri: "https://github.com/DataDog/dd-source/pull/1",
+    title: "PR",
+    role: "deliverable" as const,
+    sourceArtifactIds: [],
+    producedAt: NOW,
+    supersededAt: null,
+  };
+  const baseCheck: LifecycleCheck = {
+    id: "check-1",
+    kind: "github_pull_request",
+    targetArtifactIds: [pull.id],
+    predicate: {},
+    onSatisfied: "close",
+    wakeOn: [],
+    state: "pending",
+    createdAt: NOW,
+    lastCheckedAt: null,
+    nextCheckAt: NOW,
+    lastObservation: null,
+    errorCount: 0,
+  };
+  const satisfied = adapter("satisfied", "1/1 merged");
+  const closedStore = new FakeStore({
+    ...issue(waitingLifecycle("check", baseCheck)),
+    status: "blocked",
+    lifecycle: waitingLifecycle("check", baseCheck),
+  });
+  closedStore.saved.lifecycle!.artifacts = [pull];
+  const closedService = service(closedStore, { checkAdapters: satisfied });
+
+  const closed = await closedService.reconcileTask(
+    "jp-1",
+    session("reconciler"),
+  );
+  await closedService.reconcileTask("jp-1", session("reconciler"));
+  assert.equal(closed.status, "closed");
+  assert.equal(closed.lifecycle?.phase, "done");
+  assert.equal(satisfied.calls, 1);
+
+  const action = adapter("action_required", "changes_requested");
+  const actionCheck = { ...baseCheck, onSatisfied: "actionable" as const };
+  const actionState = waitingLifecycle("check", actionCheck);
+  actionState.artifacts = [pull];
+  const actionStore = new FakeStore({
+    ...issue(actionState),
+    status: "blocked",
+  });
+  const actionable = await service(actionStore, {
+    checkAdapters: action,
+  }).reconcileTask("jp-1", session("reconciler"));
+  assert.equal(actionable.status, "open");
+  assert.equal(actionable.lifecycle?.phase, "actionable");
+  assert.equal(actionable.lifecycle?.checkHistory[0].state, "action_required");
+});
+
+test("pending polls update check observation without changing phase timestamps", async () => {
+  const pending = adapter("pending", "0/1 merged");
+  const activeCheck: LifecycleCheck = {
+    id: "check-1",
+    kind: "manual",
+    targetArtifactIds: [],
+    predicate: { reviewAt: NOW },
+    onSatisfied: "actionable",
+    wakeOn: [],
+    state: "pending",
+    createdAt: NOW,
+    lastCheckedAt: null,
+    nextCheckAt: NOW,
+    lastObservation: null,
+    errorCount: 0,
+  };
+  const state = waitingLifecycle("check", activeCheck);
+  const store = new FakeStore({ ...issue(state), status: "blocked" });
+
+  const saved = await service(store, {
+    checkAdapters: pending,
+  }).reconcileTask("jp-1", session("reconciler"));
+
+  assert.equal(saved.lifecycle?.stateEnteredAt, NOW);
+  assert.equal(saved.lifecycle?.lastProgressAt, NOW);
+  assert.equal(saved.lifecycle?.activeCheck?.lastCheckedAt, NOW);
+  assert.equal(saved.lifecycle?.activeCheck?.lastObservation, "0/1 merged");
+  assert.equal(
+    saved.lifecycle?.activeCheck?.nextCheckAt,
+    "2026-09-17T10:15:00.000Z",
+  );
+});
+
+test("adapter errors remain waiting with bounded backoff", async () => {
+  const errors = adapter("error", "gh exited with code 1");
+  const activeCheck: LifecycleCheck = {
+    id: "check-1",
+    kind: "github_pull_request",
+    targetArtifactIds: [],
+    predicate: {},
+    onSatisfied: "actionable",
+    wakeOn: [],
+    state: "pending",
+    createdAt: NOW,
+    lastCheckedAt: null,
+    nextCheckAt: NOW,
+    lastObservation: null,
+    errorCount: 2,
+  };
+  const state = waitingLifecycle("check", activeCheck);
+  const store = new FakeStore({ ...issue(state), status: "blocked" });
+
+  const saved = await service(store, {
+    checkAdapters: errors,
+    prPollIntervalMs: 1_000,
+    maxBackoffMs: 8_000,
+  }).reconcileTask("jp-1", session("reconciler"));
+
+  assert.equal(saved.lifecycle?.phase, "waiting");
+  assert.equal(saved.lifecycle?.activeCheck?.state, "error");
+  assert.equal(saved.lifecycle?.activeCheck?.errorCount, 3);
+  assert.equal(
+    saved.lifecycle?.activeCheck?.nextCheckAt,
+    "2026-09-17T10:00:04.000Z",
+  );
+});
+
+test("reconcileDue honors task and check limits", async () => {
+  const store = new FakeStore();
+  const sut = service(store);
+  const reconciled: string[] = [];
+  (sut as any).reconcileTask = async (id: string) => {
+    reconciled.push(id);
+    return store.saved;
+  };
+  store.list = async () =>
+    ["jp-1", "jp-2", "jp-3"].map((id) => ({ ...store.saved, id }));
+
+  await sut.reconcileDue(session("reconciler"), {
+    taskLimit: 2,
+    checkLimit: 1,
+  });
+
+  assert.deepEqual(reconciled, ["jp-1", "jp-2"]);
+});
+
+test("activity refresh is rate-limited and extends a long-running execution", async () => {
+  let now = NOW_MS;
+  const store = new FakeStore();
+  const sut = service(store, {
+    now: () => now,
+    activityWriteIntervalMs: 300_000,
+  });
+  await sut.claim("jp-1", session("s1"), "claim-1");
+  const afterClaimMutations = store.mutations;
+
+  await sut.refreshSessionActivity(session("s1"));
+  assert.equal(store.mutations, afterClaimMutations);
+  now += 300_001;
+  const refreshed = await sut.refreshSessionActivity(session("s1"));
+
+  assert.equal(store.mutations, afterClaimMutations + 1);
+  assert.equal(
+    refreshed[0].lifecycle?.execution?.lastActivityAt,
+    new Date(now).toISOString(),
+  );
+  assert.equal(
+    refreshed[0].lifecycle?.execution?.expiresAt,
+    new Date(now + 6 * 60 * 60 * 1_000).toISOString(),
+  );
+});
+
+test("session interruption preserves reload but relinquishes other shutdowns", async () => {
+  const store = new FakeStore();
+  const sut = service(store);
+  await sut.claim("jp-1", session("s1"), "claim-1");
+
+  const preserved = await sut.interruptSession(session("s1"), "reload");
+  assert.equal(preserved.length, 0);
+  assert.equal(store.saved.lifecycle?.phase, "active");
+
+  const interrupted = await sut.interruptSession(session("s1"), "quit");
+  assert.equal(interrupted[0].lifecycle?.phase, "actionable");
+  assert.equal(interrupted[0].status, "open");
 });

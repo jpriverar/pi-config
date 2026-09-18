@@ -777,7 +777,7 @@ git commit -m "coordinate task worktrees"
 **Interfaces:**
 - Produces: `CheckAdapter`, `createCheckAdapterRegistry()`, GitHub PR/time/manual adapters, bounded `reconcileDue()`, and lifecycle session/activity hooks.
 
-- [ ] **Step 1: Write failing adapter tests**
+- [x] **Step 1: Write failing adapter tests**
 
 Use fake `gh` results to cover `open`, `merged`, `changes_requested`, `merge_conflict`, and `closed_unmerged`. Cover two-PR `all merged`, `any`, time due/not-due, manual overdue, and bounded exponential backoff:
 
@@ -792,13 +792,13 @@ assert.deepEqual(await registry.observe(changesRequested), {
 });
 ```
 
-- [ ] **Step 2: Run adapter tests and verify RED**
+- [x] **Step 2: Run adapter tests and verify RED**
 
 Run: `npm run test:file -- lib/task-lifecycle/checks.test.ts`
 
 Expected: FAIL because check adapters do not exist.
 
-- [ ] **Step 3: Implement the adapters**
+- [x] **Step 3: Implement the adapters**
 
 GitHub PR checks call:
 
@@ -808,7 +808,7 @@ gh pr view <canonical-url> --json state,reviewDecision,mergeStateStatus,mergedAt
 
 `mergedAt != null` is satisfied; `CHANGES_REQUESTED`, `DIRTY`, and closed without merge are action required; all other open states are pending. Time checks compare one RFC3339 `at` timestamp. Manual checks do not invent an observation; after `reviewAt` they remain waiting with an overdue warning until explicit `task_reconcile` input records `satisfied` or `action_required`.
 
-- [ ] **Step 4: Write failing reconciliation and hook tests**
+- [x] **Step 4: Write failing reconciliation and hook tests**
 
 Cover:
 
@@ -823,11 +823,11 @@ Cover:
 - `session_shutdown` interrupts on quit/new/resume/fork but preserves on reload;
 - activity refresh is rate-limited and a long-running tool remains live.
 
-- [ ] **Step 5: Implement reconciliation and hooks**
+- [x] **Step 5: Implement reconciliation and hooks**
 
 `session_start` invokes bounded reconciliation and returns; it creates no timer, watcher, or background process. `turn_start` and `tool_execution_start/end` refresh ownership no more often than `activityWriteIntervalMs`. `session_shutdown` awaits interruption persistence before returning.
 
-- [ ] **Step 6: Run all lifecycle tests**
+- [x] **Step 6: Run all lifecycle tests**
 
 Run:
 
@@ -837,7 +837,7 @@ npm run test:file -- lib/task-lifecycle/*.test.ts extensions/task-lifecycle/*.te
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit checks and reconciliation**
+- [x] **Step 7: Commit checks and reconciliation**
 
 ```bash
 git add lib/task-lifecycle extensions/task-lifecycle
