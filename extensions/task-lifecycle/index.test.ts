@@ -36,6 +36,22 @@ function normalizedIssue(phase = "active"): LifecycleIssue {
   };
 }
 
+function activeIssue(id: string): LifecycleIssue {
+  const result = normalizedIssue();
+  result.id = id;
+  result.lifecycle!.execution = {
+    sessionId: "session-1",
+    claimedAt: new Date(NOW).toISOString(),
+    lastActivityAt: new Date(NOW).toISOString(),
+    expiresAt: new Date(NOW + 60_000).toISOString(),
+    resourceSnapshot: {
+      observedAt: new Date(NOW).toISOString(),
+      resourceIds: [],
+    },
+  };
+  return result;
+}
+
 type Handler = (event: any, ctx: Context) => Promise<unknown> | unknown;
 type Context = {
   cwd: string;
@@ -58,7 +74,11 @@ function harness() {
   const handlers = new Map<string, Handler[]>();
   const tools = new Map<string, Tool>();
   const calls: Array<{ name: string; args: unknown[] }> = [];
-  const guardState = { activeTask: false, associatedClaims: new Set<string>() };
+  const guardState = {
+    activeTasks: [] as LifecycleIssue[],
+    activeTaskLookupError: null as Error | null,
+    associatedClaims: new Set<string>(),
+  };
   const service: TaskLifecycleToolService = {
     async claim(...args: Parameters<TaskLifecycleToolService["claim"]>) {
       calls.push({ name: "claim", args });
@@ -132,11 +152,20 @@ function harness() {
       calls.push({ name: "releaseWorktree", args });
       return normalizedIssue();
     },
+    async activeTasksForSession(
+      ...args: Parameters<TaskLifecycleToolService["activeTasksForSession"]>
+    ) {
+      calls.push({ name: "activeTasksForSession", args });
+      if (guardState.activeTaskLookupError !== null) {
+        throw guardState.activeTaskLookupError;
+      }
+      return guardState.activeTasks;
+    },
     async hasActiveTask(
       ...args: Parameters<TaskLifecycleToolService["hasActiveTask"]>
     ) {
       calls.push({ name: "hasActiveTask", args });
-      return guardState.activeTask;
+      return guardState.activeTasks.length > 0;
     },
     async isClaimAssociated(
       ...args: Parameters<TaskLifecycleToolService["isClaimAssociated"]>
@@ -294,6 +323,145 @@ test("headless lifecycle hooks never access TUI-only context", async () => {
   assert.equal(h.calls.length, 0);
 });
 
+test("guards task-scoped execution and lifecycle targets", async () => {
+  const h = harness();
+  const guard = h.handlers.get("tool_call")![0];
+
+  assert.deepEqual(
+    await guard(
+      {
+        toolName: "subagent",
+        input: { agent: "worker", task: "implement" },
+      },
+      h.context,
+    ),
+    {
+      block: true,
+      reason:
+        "subagent execution requires an Active task; claim a task before retrying",
+    },
+  );
+  assert.deepEqual(
+    await guard(
+      { toolName: "task_wait", input: { taskId: "jp-a" } },
+      h.context,
+    ),
+    {
+      block: true,
+      reason: "task_wait requires active task jp-a; claim it before retrying",
+    },
+  );
+  assert.equal(
+    await guard(
+      { toolName: "task_claim", input: { taskId: "jp-a" } },
+      h.context,
+    ),
+    undefined,
+  );
+
+  h.guardState.activeTasks = [activeIssue("jp-a")];
+  assert.equal(
+    await guard(
+      {
+        toolName: "subagent",
+        input: { workflow: "review", args: {} },
+      },
+      h.context,
+    ),
+    undefined,
+  );
+  assert.equal(
+    await guard(
+      { toolName: "task_wait", input: { taskId: "jp-a" } },
+      h.context,
+    ),
+    undefined,
+  );
+  assert.deepEqual(
+    await guard(
+      { toolName: "task_wait", input: { taskId: "jp-b" } },
+      h.context,
+    ),
+    {
+      block: true,
+      reason: "session owns active task jp-a, not jp-b",
+    },
+  );
+  assert.equal(
+    await guard(
+      { toolName: "task_claim", input: { taskId: "jp-a" } },
+      h.context,
+    ),
+    undefined,
+  );
+  assert.deepEqual(
+    await guard(
+      { toolName: "task_claim", input: { taskId: "jp-b" } },
+      h.context,
+    ),
+    {
+      block: true,
+      reason:
+        "session already owns active task jp-a; wait, close, or relinquish it before claiming jp-b",
+    },
+  );
+});
+
+test("leaves management and unknown tools available without ownership lookup", async () => {
+  const h = harness();
+  const guard = h.handlers.get("tool_call")![0];
+
+  assert.equal(
+    await guard({ toolName: "subagent", input: { action: "list" } }, h.context),
+    undefined,
+  );
+  assert.equal(
+    await guard(
+      { toolName: "bash", input: { command: "git status" } },
+      h.context,
+    ),
+    undefined,
+  );
+  assert.equal(
+    h.calls.filter((call) => call.name === "activeTasksForSession").length,
+    0,
+  );
+});
+
+test("fails protected calls closed for ambiguous ownership and store errors", async () => {
+  const h = harness();
+  const guard = h.handlers.get("tool_call")![0];
+
+  h.guardState.activeTasks = [activeIssue("jp-z"), activeIssue("jp-a")];
+  assert.deepEqual(
+    await guard(
+      { toolName: "subagent", input: { agent: "worker", task: "run" } },
+      h.context,
+    ),
+    {
+      block: true,
+      reason:
+        "session owns multiple Active tasks: jp-a, jp-z; repair lifecycle state before retrying",
+    },
+  );
+
+  h.guardState.activeTaskLookupError = new Error(
+    "private task content and raw stderr",
+  );
+  const failed = await guard(
+    { toolName: "subagent", input: { agent: "worker", task: "run" } },
+    h.context,
+  );
+  assert.deepEqual(failed, {
+    block: true,
+    reason: "unable to verify Active task ownership for subagent",
+  });
+  assert.doesNotMatch(
+    JSON.stringify(failed),
+    /private task content|raw stderr/,
+  );
+});
+
 test("task worktree tools route only task and pool coordinates", async () => {
   const h = harness();
 
@@ -337,7 +505,7 @@ test("guards raw pool mutations while preserving inspection and taskless work", 
   const h = harness();
   const guard = h.handlers.get("tool_call")![0];
 
-  h.guardState.activeTask = true;
+  h.guardState.activeTasks = [activeIssue("jp-a")];
   const blockedAcquire = await guard(
     {
       toolName: "worktree_pool",
@@ -363,7 +531,7 @@ test("guards raw pool mutations while preserving inspection and taskless work", 
     undefined,
   );
 
-  h.guardState.activeTask = false;
+  h.guardState.activeTasks = [];
   assert.equal(
     await guard(
       { toolName: "worktree_pool", input: { action: "acquire" } },

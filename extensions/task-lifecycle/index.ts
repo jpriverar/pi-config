@@ -6,6 +6,7 @@ import { resolveBeadsDir, type BeadsExec } from "../../lib/beads.js";
 import { loadWorktreePoolRuntime } from "../worktree-pool/runtime.js";
 import { createLifecycleStore } from "../../lib/task-lifecycle/beads-store.js";
 import { createCheckAdapterRegistry } from "../../lib/task-lifecycle/checks.js";
+import { classifyTaskToolRequirement } from "../../lib/task-lifecycle/tool-guard.js";
 import {
   TaskLifecycleService,
   type CloseDispositionInput,
@@ -85,6 +86,7 @@ export interface TaskLifecycleToolService {
     owner: LockOwner,
     operationId?: string,
   ): Promise<LifecycleIssue>;
+  activeTasksForSession(sessionId: string): Promise<LifecycleIssue[]>;
   hasActiveTask(sessionId: string): Promise<boolean>;
   isClaimAssociated(claimId: string): Promise<boolean>;
 }
@@ -222,6 +224,7 @@ export function createTaskLifecycleExtension(
     });
     const operationFor = (id: string, params: { operationId?: string }) =>
       params.operationId ?? id;
+    const block = (reason: string) => ({ block: true, reason });
 
     pi.registerTool({
       name: "task_claim",
@@ -513,35 +516,79 @@ export function createTaskLifecycleExtension(
     pi.on("tool_execution_end", refreshActivity);
     pi.on("before_agent_start", () => undefined);
     pi.on("tool_call", async (event, context) => {
-      if (event?.toolName !== "worktree_pool" || !isRecord(event.input)) {
-        return undefined;
-      }
-      if (event.input.action === "acquire") {
-        if (
-          await deps.service.hasActiveTask(
-            context.sessionManager.getSessionId(),
-          )
-        ) {
-          return {
-            block: true,
-            reason:
+      if (event?.toolName === "worktree_pool" && isRecord(event.input)) {
+        if (event.input.action === "acquire") {
+          if (
+            await deps.service.hasActiveTask(
+              context.sessionManager.getSessionId(),
+            )
+          ) {
+            return block(
               "An Active lifecycle task must use task_worktree_acquire so task/resource state stays coordinated.",
-          };
+            );
+          }
+          return undefined;
         }
+        if (
+          event.input.action === "release" &&
+          typeof event.input.claimId === "string" &&
+          (await deps.service.isClaimAssociated(event.input.claimId))
+        ) {
+          return block(
+            "This claim is lifecycle-associated; use task_worktree_release so release intent and completion are persisted.",
+          );
+        }
+      }
+
+      const toolName =
+        typeof event?.toolName === "string" ? event.toolName : "";
+      const requirement = classifyTaskToolRequirement(toolName, event?.input);
+      if (requirement.kind === "none") return undefined;
+
+      let activeTasks: LifecycleIssue[];
+      try {
+        activeTasks = await deps.service.activeTasksForSession(
+          context.sessionManager.getSessionId(),
+        );
+      } catch {
+        return block(`unable to verify Active task ownership for ${toolName}`);
+      }
+
+      if (activeTasks.length > 1) {
+        const taskIds = activeTasks
+          .map((issue) => issue.id)
+          .sort((left, right) => left.localeCompare(right));
+        return block(
+          `session owns multiple Active tasks: ${taskIds.join(", ")}; repair lifecycle state before retrying`,
+        );
+      }
+
+      const activeTask = activeTasks[0] ?? null;
+      if (requirement.kind === "active-task") {
+        return activeTask === null
+          ? block(
+              `${toolName} execution requires an Active task; claim a task before retrying`,
+            )
+          : undefined;
+      }
+      if (requirement.kind === "same-task") {
+        if (activeTask === null) {
+          return block(
+            `${toolName} requires active task ${requirement.taskId}; claim it before retrying`,
+          );
+        }
+        return activeTask.id === requirement.taskId
+          ? undefined
+          : block(
+              `session owns active task ${activeTask.id}, not ${requirement.taskId}`,
+            );
+      }
+      if (activeTask === null || activeTask.id === requirement.taskId) {
         return undefined;
       }
-      if (
-        event.input.action === "release" &&
-        typeof event.input.claimId === "string" &&
-        (await deps.service.isClaimAssociated(event.input.claimId))
-      ) {
-        return {
-          block: true,
-          reason:
-            "This claim is lifecycle-associated; use task_worktree_release so release intent and completion are persisted.",
-        };
-      }
-      return undefined;
+      return block(
+        `session already owns active task ${activeTask.id}; wait, close, or relinquish it before claiming ${requirement.taskId}`,
+      );
     });
   };
 }
