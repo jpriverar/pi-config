@@ -1441,7 +1441,8 @@ function expiryCleanupReservation(
   return (
     lifecycle.resources.find(
       (resource) =>
-        resource.cleanupState === "release_pending" &&
+        (resource.cleanupState === "release_pending" ||
+          resource.cleanupState === "released") &&
         resource.operationId.startsWith(prefix),
     ) ?? null
   );
