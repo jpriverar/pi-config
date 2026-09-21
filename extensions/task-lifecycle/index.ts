@@ -16,13 +16,37 @@ import {
 } from "../../lib/task-lifecycle/service.js";
 import type {
   ArtifactInput,
+  CreateTaskInput,
   LifecycleCheck,
   LifecycleIssue,
   LockOwner,
   PreparedWorktreeOperation,
+  UpdateTaskLabelsInput,
 } from "../../lib/task-lifecycle/types.js";
 
 export interface TaskLifecycleToolService {
+  create(input: CreateTaskInput, owner: LockOwner): Promise<LifecycleIssue>;
+  updateLabels(
+    taskId: string,
+    input: UpdateTaskLabelsInput,
+    owner: LockOwner,
+  ): Promise<LifecycleIssue>;
+  log(
+    taskId: string,
+    message: string,
+    owner: LockOwner,
+  ): Promise<LifecycleIssue>;
+  defer(
+    taskId: string,
+    reason: string,
+    owner: LockOwner,
+    operationId?: string,
+  ): Promise<LifecycleIssue>;
+  waitOnExistingCondition(
+    taskId: string,
+    owner: LockOwner,
+    operationId?: string,
+  ): Promise<LifecycleIssue>;
   claim(
     taskId: string,
     owner: LockOwner,
@@ -239,6 +263,93 @@ export function createTaskLifecycleExtension(
     const pendingPoolOperations = new Map<string, PendingPoolOperation>();
 
     pi.registerTool({
+      name: "task_create",
+      label: "Create task",
+      description:
+        "Create an explicitly approved lifecycle-managed work item in the Beads store.",
+      parameters: objectSchema(
+        {
+          title: { type: "string", minLength: 1 },
+          why: { type: "string", minLength: 1 },
+          workstream: { type: "string", minLength: 1 },
+          needs_jp: { type: "boolean" },
+        },
+        ["title", "why", "needs_jp"],
+      ),
+      async execute(_id, params, _signal, _update, context) {
+        return toolResult(
+          await deps.service.create(
+            {
+              title: params.title,
+              why: params.why,
+              ...(params.workstream === undefined
+                ? {}
+                : { workstream: params.workstream }),
+              needsJp: params.needs_jp,
+            },
+            ownerFor(context),
+          ),
+        );
+      },
+    });
+
+    pi.registerTool({
+      name: "task_update",
+      label: "Update task labels",
+      description:
+        "Add or remove task labels without changing lifecycle state or ownership.",
+      parameters: objectSchema(
+        {
+          taskId: taskIdProperty,
+          add_labels: {
+            type: "array",
+            items: { type: "string", minLength: 1 },
+          },
+          remove_labels: {
+            type: "array",
+            items: { type: "string", minLength: 1 },
+          },
+        },
+        ["taskId"],
+      ),
+      async execute(_id, params, _signal, _update, context) {
+        return toolResult(
+          await deps.service.updateLabels(
+            params.taskId,
+            {
+              addLabels: params.add_labels ?? [],
+              removeLabels: params.remove_labels ?? [],
+            },
+            ownerFor(context),
+          ),
+        );
+      },
+    });
+
+    pi.registerTool({
+      name: "task_log",
+      label: "Log task progress",
+      description:
+        "Append one plain-text progress entry to the active task's native comment journal.",
+      parameters: objectSchema(
+        {
+          taskId: taskIdProperty,
+          message: { type: "string", minLength: 1 },
+        },
+        ["taskId", "message"],
+      ),
+      async execute(_id, params, _signal, _update, context) {
+        return toolResult(
+          await deps.service.log(
+            params.taskId,
+            params.message,
+            ownerFor(context),
+          ),
+        );
+      },
+    });
+
+    pi.registerTool({
       name: "task_claim",
       label: "Claim task",
       description:
@@ -317,11 +428,25 @@ export function createTaskLifecycleExtension(
           },
           check: checkSchema,
         },
-        ["taskId", "kind"],
+        ["taskId"],
       ),
       async execute(id, params, _signal, _update, context) {
         const owner = ownerFor(context);
         const operationId = operationFor(id, params);
+        if (params.kind === undefined) {
+          if (params.blockerIds !== undefined || params.check !== undefined) {
+            throw new Error(
+              "task_wait kind is required when providing blockerIds or check",
+            );
+          }
+          return toolResult(
+            await deps.service.waitOnExistingCondition(
+              params.taskId,
+              owner,
+              operationId,
+            ),
+          );
+        }
         if (params.kind === "dependency") {
           if (!Array.isArray(params.blockerIds) || params.check !== undefined) {
             throw new Error(
@@ -348,6 +473,31 @@ export function createTaskLifecycleExtension(
             params.check,
             owner,
             operationId,
+          ),
+        );
+      },
+    });
+
+    pi.registerTool({
+      name: "task_defer",
+      label: "Defer task",
+      description:
+        "Release associated worktrees and move the current session's active task to Deferred.",
+      parameters: objectSchema(
+        {
+          taskId: taskIdProperty,
+          operationId: operationIdProperty,
+          reason: { type: "string", minLength: 1 },
+        },
+        ["taskId", "reason"],
+      ),
+      async execute(id, params, _signal, _update, context) {
+        return toolResult(
+          await deps.service.defer(
+            params.taskId,
+            params.reason,
+            ownerFor(context),
+            operationFor(id, params),
           ),
         );
       },

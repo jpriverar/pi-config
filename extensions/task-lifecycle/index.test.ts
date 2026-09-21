@@ -82,6 +82,26 @@ function harness() {
     finalizationError: null as Error | null,
   };
   const service = {
+    async create(...args: any[]) {
+      calls.push({ name: "create", args });
+      return normalizedIssue("actionable");
+    },
+    async updateLabels(...args: any[]) {
+      calls.push({ name: "updateLabels", args });
+      return normalizedIssue("actionable");
+    },
+    async log(...args: any[]) {
+      calls.push({ name: "log", args });
+      return normalizedIssue();
+    },
+    async defer(...args: any[]) {
+      calls.push({ name: "defer", args });
+      return normalizedIssue("deferred");
+    },
+    async waitOnExistingCondition(...args: any[]) {
+      calls.push({ name: "waitOnExistingCondition", args });
+      return normalizedIssue("waiting");
+    },
     async claim(...args: Parameters<TaskLifecycleToolService["claim"]>) {
       calls.push({ name: "claim", args });
       return normalizedIssue();
@@ -221,9 +241,13 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
   assert.deepEqual(
     [...h.tools.keys()],
     [
+      "task_create",
+      "task_update",
+      "task_log",
       "task_claim",
       "task_attach_artifact",
       "task_wait",
+      "task_defer",
       "task_reconcile",
       "task_close",
       "task_reopen",
@@ -245,13 +269,104 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
   for (const tool of h.tools.values()) {
     assert.equal(tool.parameters.type, "object");
     assert.equal(tool.parameters.additionalProperties, false);
-    assert.equal(tool.parameters.properties.taskId.minLength, 1);
-    assert.ok(tool.parameters.required.includes("taskId"));
   }
+  for (const name of [...h.tools.keys()].filter(
+    (name) => name !== "task_create",
+  )) {
+    const parameters = h.tools.get(name)!.parameters;
+    assert.equal(parameters.properties.taskId.minLength, 1);
+    assert.ok(parameters.required.includes("taskId"));
+  }
+  assert.equal(
+    h.tools.get("task_update")?.parameters.properties.status,
+    undefined,
+  );
+  assert.equal(
+    h.tools.get("task_log")?.parameters.properties.message.minLength,
+    1,
+  );
+  assert.deepEqual(h.tools.get("task_wait")?.parameters.required, ["taskId"]);
   assert.equal(
     h.tools.get("task_close")?.parameters.properties.reason.minLength,
     1,
   );
+});
+
+test("routes safe task mutations with strict field mappings", async () => {
+  const h = harness();
+  const owner = {
+    pid: 4242,
+    sessionId: "session-1",
+    host: "host",
+    started: NOW,
+  } satisfies LockOwner;
+
+  await h.tools.get("task_create")!.execute(
+    "create-call",
+    {
+      title: "Do the work",
+      why: "It matters",
+      workstream: "lifecycle",
+      needs_jp: true,
+    },
+    null,
+    null,
+    h.context,
+  );
+  await h.tools
+    .get("task_update")!
+    .execute(
+      "update-call",
+      { taskId: "jp-1", add_labels: ["one"], remove_labels: ["two"] },
+      null,
+      null,
+      h.context,
+    );
+  await h.tools
+    .get("task_log")!
+    .execute(
+      "log-call",
+      { taskId: "jp-1", message: "Implemented the service." },
+      null,
+      null,
+      h.context,
+    );
+  await h.tools
+    .get("task_defer")!
+    .execute(
+      "defer-call",
+      { taskId: "jp-1", reason: "Pause this." },
+      null,
+      null,
+      h.context,
+    );
+
+  assert.deepEqual(h.calls, [
+    {
+      name: "create",
+      args: [
+        {
+          title: "Do the work",
+          why: "It matters",
+          workstream: "lifecycle",
+          needsJp: true,
+        },
+        owner,
+      ],
+    },
+    {
+      name: "updateLabels",
+      args: ["jp-1", { addLabels: ["one"], removeLabels: ["two"] }, owner],
+    },
+    {
+      name: "log",
+      args: ["jp-1", "Implemented the service.", owner],
+    },
+    {
+      name: "defer",
+      args: ["jp-1", "Pause this.", owner, "defer-call"],
+    },
+  ]);
 });
 
 test("claim uses the tool call ID and current session ownership", async () => {
@@ -277,10 +392,17 @@ test("claim uses the tool call ID and current session ownership", async () => {
   assert.equal(result.details.id, "jp-1");
 });
 
-test("wait routes dependency and check authorities explicitly", async () => {
+test("wait routes retained, dependency, and check authorities explicitly", async () => {
   const h = harness();
   const wait = h.tools.get("task_wait")!;
 
+  await wait.execute(
+    "wait-existing",
+    { taskId: "jp-1" },
+    null,
+    null,
+    h.context,
+  );
   await wait.execute(
     "wait-dependency",
     { taskId: "jp-1", kind: "dependency", blockerIds: ["jp-2"] },
@@ -315,7 +437,28 @@ test("wait routes dependency and check authorities explicitly", async () => {
 
   assert.deepEqual(
     h.calls.map((call) => call.name),
-    ["waitForDependencies", "waitForCheck"],
+    ["waitOnExistingCondition", "waitForDependencies", "waitForCheck"],
+  );
+  assert.deepEqual(h.calls[0].args.slice(0, 2), [
+    "jp-1",
+    {
+      pid: 4242,
+      sessionId: "session-1",
+      host: "host",
+      started: NOW,
+    },
+  ]);
+  assert.equal(h.calls[0].args[2], "wait-existing");
+
+  await assert.rejects(
+    wait.execute(
+      "wait-invalid",
+      { taskId: "jp-1", blockerIds: ["jp-2"] },
+      null,
+      null,
+      h.context,
+    ),
+    /kind is required/,
   );
 });
 

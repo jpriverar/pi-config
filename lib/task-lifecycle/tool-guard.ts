@@ -7,6 +7,8 @@ export type TaskToolRequirement =
 const sameTaskTools = new Set([
   "task_attach_artifact",
   "task_wait",
+  "task_log",
+  "task_defer",
   "task_close",
 ]);
 

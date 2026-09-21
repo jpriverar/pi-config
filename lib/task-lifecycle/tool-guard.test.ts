@@ -14,6 +14,10 @@ test("classifies task-scoped tool requirements", () => {
     ["subagent", { action: "list" }, { kind: "none" }],
     ["task_claim", { taskId: "jp-a" }, { kind: "claim-task", taskId: "jp-a" }],
     ["task_wait", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
+    ["task_log", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
+    ["task_defer", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
+    ["task_update", { taskId: "jp-a" }, { kind: "none" }],
+    ["task_create", { title: "work" }, { kind: "none" }],
     ["task_close", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
     [
       "task_attach_artifact",
