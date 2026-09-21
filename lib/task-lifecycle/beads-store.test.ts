@@ -129,6 +129,31 @@ test("reads lifecycle metadata and native dependency edges", async () => {
   assert.deepEqual(read.metadata.unrelated, { keep: true });
 });
 
+test("list ignores Beads edge-shaped dependency summaries", async () => {
+  const calls: Array<[string, readonly string[]]> = [];
+  const raw = rawIssue();
+  raw.dependencies = [
+    {
+      issue_id: "jp-1",
+      depends_on_id: "jp-blocker",
+      type: "blocks",
+      metadata: "{}",
+    },
+  ];
+  const exec: BeadsExec = async (command, args) => {
+    calls.push([command, args]);
+    return result(raw);
+  };
+  const store = createLifecycleStore(exec, options());
+
+  const [listed] = await store.list(["open"]);
+
+  assert.deepEqual(listed.dependencies, []);
+  assert.deepEqual(calls, [
+    ["bd", ["list", "-s", "open", "-n", "0", "--json", "--db", STORE]],
+  ]);
+});
+
 test("serializes a full metadata merge, removes dotted lifecycle keys, and verifies", async () => {
   const calls: Array<[string, readonly string[]]> = [];
   let current = rawIssue();

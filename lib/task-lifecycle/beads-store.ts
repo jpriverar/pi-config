@@ -260,7 +260,7 @@ function decodeIssue(
 }
 
 function decodeDependencies(value: unknown): NativeDependency[] {
-  if (value === undefined) return [];
+  if (value === undefined || isDependencyEdgeSummaryList(value)) return [];
   if (!Array.isArray(value)) {
     throw new Error("invalid native dependencies: expected an array");
   }
@@ -286,6 +286,22 @@ function decodeDependencies(value: unknown): NativeDependency[] {
       );
     }
   });
+}
+
+function isDependencyEdgeSummaryList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        !Array.isArray(item) &&
+        typeof (item as Record<string, unknown>).issue_id === "string" &&
+        typeof (item as Record<string, unknown>).depends_on_id === "string" &&
+        typeof (item as Record<string, unknown>).type === "string",
+    )
+  );
 }
 
 function validateMutation(
