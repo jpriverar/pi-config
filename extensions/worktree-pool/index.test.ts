@@ -33,6 +33,7 @@ type Context = { cwd: string; sessionManager: { getSessionId(): string } };
 type Handler = (event: any, ctx: Context) => unknown;
 type Tool = {
   parameters: unknown;
+  prepareArguments?(args: unknown): unknown;
   execute(
     id: string,
     params: any,
@@ -218,9 +219,15 @@ function harness(options: { runtimeError?: Error } = {}) {
       return result;
     },
     async call(params: any) {
-      return await tools
-        .get("worktree_pool")!
-        .execute("pool-call", params, undefined, undefined, ctx);
+      const tool = tools.get("worktree_pool")!;
+      const prepared = tool.prepareArguments?.(params) ?? params;
+      return await tool.execute(
+        "pool-call",
+        prepared,
+        undefined,
+        undefined,
+        ctx,
+      );
     },
   };
 }
@@ -249,6 +256,25 @@ describe("worktree_pool tool", () => {
     expect(h.runtimeLoads).toBe(0);
   });
 
+  test("drops empty provider placeholders before action validation", async () => {
+    const h = harness();
+
+    await h.call({
+      action: "acquire",
+      repository: "demo",
+      branch: "topic",
+      startPoint: "",
+      claimId: "",
+      slot: "",
+    });
+
+    expect(h.pool.calls).toHaveLength(1);
+    expect(h.pool.calls[0]).toMatchObject({
+      name: "acquire",
+      args: [{ repository: "demo", branch: "topic" }],
+    });
+  });
+
   test("does not expose stable identity inputs through raw acquire", async () => {
     const h = harness();
     const parameters = h.tools.get("worktree_pool")!.parameters as {
@@ -266,58 +292,12 @@ describe("worktree_pool tool", () => {
     ).rejects.toThrow("acquire.claimId");
   });
 
-  test("forwards validated private acquire identities to the pool", async () => {
+  test("uses pool-generated acquire identities", async () => {
     const h = harness();
-    await h.call({
-      action: "acquire",
-      repository: "demo",
-      branch: "topic",
-      __piTaskLifecycle: {
-        version: 1,
-        mode: "acquire",
-        taskId: "jp-1",
-        operationId: "tool-call-1",
-        claimId: CLAIM_ID,
-        pathId: "22222222-2222-4222-8222-222222222222",
-        repository: "demo",
-      },
-    });
 
-    expect(h.pool.calls[0].args[2]).toEqual({
-      claimId: CLAIM_ID,
-      pathId: "22222222-2222-4222-8222-222222222222",
-    });
-  });
+    await acquire(h);
 
-  test("rejects malformed or action-mismatched private identities", async () => {
-    const h = harness();
-    await expect(
-      h.call({
-        action: "acquire",
-        repository: "demo",
-        branch: "topic",
-        __piTaskLifecycle: {
-          version: 1,
-          mode: "acquire",
-          taskId: "jp-1",
-        },
-      }),
-    ).rejects.toThrow("invalid worktree lifecycle context");
-    await expect(
-      h.call({
-        action: "acquire",
-        repository: "demo",
-        branch: "topic",
-        __piTaskLifecycle: {
-          version: 1,
-          mode: "release",
-          taskId: "jp-1",
-          operationId: "release-call",
-          claimId: CLAIM_ID,
-          repository: "demo",
-        },
-      }),
-    ).rejects.toThrow("does not match acquire action");
+    expect(h.pool.calls[0].args).toHaveLength(2);
   });
 
   test("allows pool actions from child depth", async () => {

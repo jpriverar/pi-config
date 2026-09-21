@@ -104,6 +104,25 @@ export interface WorktreeResource {
   lastObservation?: Record<string, unknown>;
 }
 
+export type PreparedWorktreeOperation =
+  | {
+      version: 1;
+      mode: "acquire";
+      taskId: string;
+      operationId: string;
+      claimId: string;
+      pathId: string;
+      repository: string;
+    }
+  | {
+      version: 1;
+      mode: "release";
+      taskId: string;
+      operationId: string;
+      claimId: string;
+      repository: string;
+    };
+
 export interface Disposition {
   kind: DispositionKind;
   reason: string;

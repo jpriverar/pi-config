@@ -574,6 +574,129 @@ async function activeServiceWithPool() {
   return { store, pool, sut };
 }
 
+test("records a pool-generated acquisition after the tool succeeds", async () => {
+  const { pool, sut } = await activeServiceWithPool();
+  const pathId = "22222222-2222-4222-8222-222222222222";
+  const acquired: AcquireResult = {
+    claimId: "11111111-1111-4111-8111-111111111111",
+    path: `/pool/worktree-${pathId}`,
+    branch: "jpriverar/topic",
+    reused: false,
+    head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    startPoint: "origin/main",
+    startPointHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    startPointFetched: true,
+    relationship: "equal",
+  };
+  pool.entries.set(acquired.claimId, {
+    repository: "DataDog/dd-source",
+    claimId: acquired.claimId,
+    path: acquired.path,
+    branch: acquired.branch,
+    head: acquired.head,
+    clean: true,
+    valid: true,
+  });
+
+  const saved = await sut.recordWorktreeAcquire(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: acquired.branch,
+    },
+    acquired,
+    session("s1"),
+    "tool-call-1",
+  );
+
+  const resource = saved.lifecycle?.resources[0];
+  assert.deepEqual(
+    {
+      repository: resource?.repository,
+      claimId: resource?.claimId,
+      pathId: resource?.pathId,
+      operationId: resource?.operationId,
+      path: resource?.path,
+      branch: resource?.branch,
+      cleanupState: resource?.cleanupState,
+    },
+    {
+      repository: "DataDog/dd-source",
+      claimId: acquired.claimId,
+      pathId,
+      operationId: "tool-call-1",
+      path: acquired.path,
+      branch: acquired.branch,
+      cleanupState: "active",
+    },
+  );
+  assert.deepEqual(resource?.lastObservation, {
+    claimId: acquired.claimId,
+    path: acquired.path,
+    state: "active",
+    branch: acquired.branch,
+    currentBranch: `refs/heads/${acquired.branch}`,
+    head: acquired.head,
+    clean: true,
+    branchProtectsHead: true,
+    evidence: {
+      pathExists: true,
+      registered: true,
+      nativeClaimMatches: true,
+    },
+  });
+
+  const retried = await sut.recordWorktreeAcquire(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: acquired.branch,
+    },
+    acquired,
+    session("s1"),
+    "tool-call-1",
+  );
+  assert.equal(retried.lifecycle?.resources.length, 1);
+});
+
+test("rejects contradictory pool evidence for a generated acquisition", async () => {
+  const { pool, sut } = await activeServiceWithPool();
+  const acquired: AcquireResult = {
+    claimId: "11111111-1111-4111-8111-111111111111",
+    path: "/pool/worktree-22222222-2222-4222-8222-222222222222",
+    branch: "jpriverar/topic",
+    reused: false,
+    head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    startPoint: "origin/main",
+    startPointHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    startPointFetched: true,
+    relationship: "equal",
+  };
+  pool.entries.set(acquired.claimId, {
+    repository: "DataDog/dd-source",
+    claimId: acquired.claimId,
+    path: "/pool/worktree-33333333-3333-4333-8333-333333333333",
+    branch: acquired.branch,
+    head: acquired.head,
+    clean: true,
+    valid: true,
+  });
+
+  await assert.rejects(
+    sut.recordWorktreeAcquire(
+      {
+        taskId: "jp-1",
+        repository: "DataDog/dd-source",
+        branch: acquired.branch,
+      },
+      acquired,
+      session("s1"),
+      "tool-call-1",
+    ),
+    /contradictory worktree association/,
+  );
+});
+
 test("prepares worktree acquisition before pool mutation and finalizes its receipt", async () => {
   const { store, pool, sut } = await activeServiceWithPool();
   const prepared = await sut.prepareWorktreeAcquire(

@@ -1,9 +1,5 @@
 import { hostname as readHostname } from "node:os";
 
-import {
-  readWorktreeLifecycleContext,
-  WORKTREE_LIFECYCLE_CONTEXT_KEY,
-} from "../../lib/task-lifecycle/worktree-tool-context.js";
 import { evaluatePoolCommand } from "./command-policy.js";
 import {
   currentOwner,
@@ -23,7 +19,13 @@ type PoolParameters = {
   startPoint?: string;
   claimId?: string;
   slot?: string;
-  [WORKTREE_LIFECYCLE_CONTEXT_KEY]?: unknown;
+};
+
+const ACTION_FIELDS: Record<PoolAction, ReadonlySet<string>> = {
+  list: new Set(["action", "repository"]),
+  acquire: new Set(["action", "repository", "branch", "startPoint"]),
+  release: new Set(["action", "repository", "claimId"]),
+  repair: new Set(["action", "repository", "slot"]),
 };
 
 type ExtensionContext = {
@@ -41,6 +43,7 @@ type ExtensionAPI = {
     label: string;
     description: string;
     parameters: unknown;
+    prepareArguments?(args: unknown): unknown;
     execute(
       id: string,
       params: PoolParameters,
@@ -105,17 +108,9 @@ export function createWorktreePoolExtension(
       description:
         "List, acquire, release, or non-destructively repair machine-wide bounded ephemeral worktrees.",
       parameters: toolParameters,
+      prepareArguments: normalizeActionParameters,
       async execute(_id, params, _signal, _update, ctx) {
-        const lifecycleContext = readWorktreeLifecycleContext(params);
         validateActionParameters(params);
-        if (
-          lifecycleContext !== null &&
-          lifecycleContext.mode !== params.action
-        ) {
-          throw new Error(
-            `worktree lifecycle context mode ${lifecycleContext.mode} does not match ${params.action} action`,
-          );
-        }
         const purpose = params.action === "acquire" ? "acquire" : "identity";
         const repositories =
           params.repository === undefined ? [] : [params.repository];
@@ -139,12 +134,6 @@ export function createWorktreePoolExtension(
                 : { startPoint: params.startPoint }),
             },
             owner,
-            lifecycleContext?.mode === "acquire"
-              ? {
-                  claimId: lifecycleContext.claimId,
-                  pathId: lifecycleContext.pathId,
-                }
-              : undefined,
           );
           return result(
             `${acquired.reused ? "Reused" : "Acquired"} ${acquired.path} on ${acquired.branch} ` +
@@ -197,30 +186,25 @@ export function createWorktreePoolExtension(
   };
 }
 
+function normalizeActionParameters(value: unknown): unknown {
+  if (!isRecord(value) || !ACTIONS.includes(value.action)) return value;
+  const action = value.action as PoolAction;
+  const normalized = { ...value };
+  for (const [field, fieldValue] of Object.entries(normalized)) {
+    if (!ACTION_FIELDS[action].has(field) && fieldValue === "") {
+      delete normalized[field];
+    }
+  }
+  return normalized;
+}
+
 function validateActionParameters(params: PoolParameters): void {
   if (!ACTIONS.includes(params.action))
     throw new Error(
       `unknown worktree_pool action ${JSON.stringify(params.action)}`,
     );
-  const allowedFields: Record<PoolAction, ReadonlySet<string>> = {
-    list: new Set(["action", "repository"]),
-    acquire: new Set([
-      "action",
-      "repository",
-      "branch",
-      "startPoint",
-      WORKTREE_LIFECYCLE_CONTEXT_KEY,
-    ]),
-    release: new Set([
-      "action",
-      "repository",
-      "claimId",
-      WORKTREE_LIFECYCLE_CONTEXT_KEY,
-    ]),
-    repair: new Set(["action", "repository", "slot"]),
-  };
   for (const field of Object.keys(params)) {
-    if (!allowedFields[params.action].has(field)) {
+    if (!ACTION_FIELDS[params.action].has(field)) {
       throw new Error(`worktree_pool ${params.action}.${field} is not allowed`);
     }
   }

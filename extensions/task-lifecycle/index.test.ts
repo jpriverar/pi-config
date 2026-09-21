@@ -5,7 +5,6 @@ import type {
   LifecycleIssue,
   LockOwner,
 } from "../../lib/task-lifecycle/types.js";
-import { WORKTREE_LIFECYCLE_CONTEXT_KEY } from "../../lib/task-lifecycle/worktree-tool-context.js";
 import {
   createTaskLifecycleExtension,
   type TaskLifecycleToolService,
@@ -82,7 +81,7 @@ function harness() {
     associationLookupError: null as Error | null,
     finalizationError: null as Error | null,
   };
-  const service: TaskLifecycleToolService = {
+  const service = {
     async claim(...args: Parameters<TaskLifecycleToolService["claim"]>) {
       calls.push({ name: "claim", args });
       return normalizedIssue();
@@ -143,21 +142,8 @@ function harness() {
       calls.push({ name: "interruptSession", args });
       return [];
     },
-    async prepareWorktreeAcquire(...args: any[]) {
-      calls.push({ name: "prepareWorktreeAcquire", args });
-      const request = args[0];
-      return {
-        version: 1,
-        mode: "acquire",
-        taskId: request.taskId,
-        operationId: args[2],
-        claimId: "claim-1",
-        pathId: "path-1",
-        repository: request.repository,
-      } as const;
-    },
-    async finalizeWorktreeAcquire(...args: any[]) {
-      calls.push({ name: "finalizeWorktreeAcquire", args });
+    async recordWorktreeAcquire(...args: any[]) {
+      calls.push({ name: "recordWorktreeAcquire", args });
       if (guardState.finalizationError !== null) {
         throw guardState.finalizationError;
       }
@@ -514,24 +500,104 @@ test("requires an Active task and prepares ordinary pool acquisition", async () 
     ),
     undefined,
   );
-  assert.deepEqual(input[WORKTREE_LIFECYCLE_CONTEXT_KEY], {
-    version: 1,
-    mode: "acquire",
-    taskId: "jp-a",
-    operationId: "acquire-call",
-    claimId: "claim-1",
-    pathId: "path-1",
-    repository: "repo",
-  });
-  const prepare = h.calls.find(
-    (call) => call.name === "prepareWorktreeAcquire",
-  )!;
-  assert.deepEqual(prepare.args[0], {
-    taskId: "jp-a",
+  assert.deepEqual(input, {
+    action: "acquire",
     repository: "repo",
     branch: "topic",
   });
-  assert.equal(prepare.args[2], "acquire-call");
+  assert.equal(
+    h.calls.some((call) => call.name === "prepareWorktreeAcquire"),
+    false,
+  );
+});
+
+test("records successful acquisition against the task captured at tool_call", async () => {
+  const h = harness();
+  const acquire = {
+    toolCallId: "acquire-call",
+    toolName: "worktree_pool",
+    input: {
+      action: "acquire",
+      repository: "repo",
+      branch: "topic",
+      startPoint: "origin/main",
+    },
+  };
+  h.guardState.activeTasks = [activeIssue("jp-a")];
+  await h.handlers.get("tool_call")![0](acquire, h.context);
+  h.guardState.activeTasks = [activeIssue("jp-b")];
+
+  const receipt = {
+    claimId: "claim-1",
+    path: "/tmp/worktree",
+    branch: "topic",
+    reused: false,
+    head: "abc123",
+    startPoint: "origin/main",
+    startPointHead: "abc123",
+    startPointFetched: true,
+    relationship: "equal",
+  };
+  assert.equal(
+    await h.handlers.get("tool_result")![0](
+      { ...acquire, details: receipt, isError: false },
+      h.context,
+    ),
+    undefined,
+  );
+
+  const recorded = h.calls.find(
+    (call) => call.name === "recordWorktreeAcquire",
+  )!;
+  assert.deepEqual(recorded.args[0], {
+    taskId: "jp-a",
+    repository: "repo",
+    branch: "topic",
+    startPoint: "origin/main",
+  });
+  assert.deepEqual(recorded.args[1], receipt);
+  assert.equal(recorded.args[3], "acquire-call");
+
+  const count = h.calls.length;
+  await h.handlers.get("tool_result")![0](
+    { ...acquire, details: receipt, isError: false },
+    h.context,
+  );
+  assert.equal(h.calls.length, count);
+});
+
+test("rejects a malformed successful acquire receipt without mutation", async () => {
+  const h = harness();
+  const acquire = {
+    toolCallId: "acquire-call",
+    toolName: "worktree_pool",
+    input: { action: "acquire", repository: "repo", branch: "topic" },
+  };
+  h.guardState.activeTasks = [activeIssue("jp-a")];
+  await h.handlers.get("tool_call")![0](acquire, h.context);
+  const count = h.calls.length;
+
+  assert.deepEqual(
+    await h.handlers.get("tool_result")![0](
+      {
+        ...acquire,
+        details: { claimId: "claim-1", path: "/tmp/worktree" },
+        isError: false,
+      },
+      h.context,
+    ),
+    {
+      content: [
+        {
+          type: "text",
+          text: "unable to finalize worktree_pool acquire lifecycle state",
+        },
+      ],
+      details: { action: "acquire" },
+      isError: true,
+    },
+  );
+  assert.equal(h.calls.length, count);
 });
 
 test("prepares associated release and preserves recovery operations", async () => {
@@ -552,13 +618,10 @@ test("prepares associated release and preserves recovery operations", async () =
     ),
     undefined,
   );
-  assert.deepEqual(input[WORKTREE_LIFECYCLE_CONTEXT_KEY], {
-    version: 1,
-    mode: "release",
-    taskId: "jp-a",
-    operationId: "release-call",
-    claimId: "claim-1",
+  assert.deepEqual(input, {
+    action: "release",
     repository: "repo",
+    claimId: "claim-1",
   });
   assert.equal(
     await guard(
@@ -632,60 +695,21 @@ test("fails associated release closed for foreign, ambiguous, or unknown ownersh
   assert.doesNotMatch(JSON.stringify(result), /private task data|raw stderr/);
 });
 
-test("finalizes successful ordinary pool results and skips failures", async () => {
+test("finalizes correlated release results and skips failures", async () => {
   const h = harness();
+  const guard = h.handlers.get("tool_call")![0];
   const finalize = h.handlers.get("tool_result")![0];
-  const acquireContext = {
-    version: 1,
-    mode: "acquire",
-    taskId: "jp-a",
-    operationId: "acquire-call",
-    claimId: "claim-1",
-    pathId: "path-1",
-    repository: "repo",
-  } as const;
-
-  assert.equal(
-    await finalize(
-      {
-        toolName: "worktree_pool",
-        input: {
-          action: "acquire",
-          [WORKTREE_LIFECYCLE_CONTEXT_KEY]: acquireContext,
-        },
-        details: {
-          claimId: "claim-1",
-          path: "/tmp/worktree",
-          branch: "topic",
-          reused: false,
-          head: "abc123",
-          startPoint: "origin/main",
-          startPointHead: "abc123",
-          startPointFetched: true,
-          relationship: "equal",
-        },
-        isError: false,
-      },
-      h.context,
-    ),
-    undefined,
-  );
-  assert.equal(h.calls.at(-1)?.name, "finalizeWorktreeAcquire");
-
+  h.guardState.activeTasks = [activeIssue("jp-a")];
+  h.guardState.associatedTasks = [activeIssue("jp-a")];
+  const release = {
+    toolCallId: "release-call",
+    toolName: "worktree_pool",
+    input: { action: "release", repository: "repo", claimId: "claim-1" },
+  };
+  await guard(release, h.context);
   await finalize(
     {
-      toolName: "worktree_pool",
-      input: {
-        action: "release",
-        [WORKTREE_LIFECYCLE_CONTEXT_KEY]: {
-          version: 1,
-          mode: "release",
-          taskId: "jp-a",
-          operationId: "release-call",
-          claimId: "claim-1",
-          repository: "repo",
-        },
-      },
+      ...release,
       details: { released: true, path: "/tmp/worktree" },
       isError: false,
     },
@@ -693,91 +717,46 @@ test("finalizes successful ordinary pool results and skips failures", async () =
   );
   assert.equal(h.calls.at(-1)?.name, "finalizeWorktreeRelease");
 
+  const acquire = {
+    toolCallId: "failed-acquire",
+    toolName: "worktree_pool",
+    input: { action: "acquire", repository: "repo", branch: "topic" },
+  };
+  await guard(acquire, h.context);
   const count = h.calls.length;
+  await finalize({ ...acquire, details: null, isError: true }, h.context);
+  assert.equal(h.calls.length, count);
+
+  const refused = { ...release, toolCallId: "refused-release" };
+  await guard(refused, h.context);
+  const preparedCount = h.calls.length;
   await finalize(
     {
-      toolName: "worktree_pool",
-      input: {
-        action: "acquire",
-        [WORKTREE_LIFECYCLE_CONTEXT_KEY]: acquireContext,
-      },
-      details: null,
-      isError: true,
-    },
-    h.context,
-  );
-  assert.equal(h.calls.length, count);
-  assert.deepEqual(
-    await finalize(
-      {
-        toolName: "worktree_pool",
-        input: {
-          action: "acquire",
-          [WORKTREE_LIFECYCLE_CONTEXT_KEY]: acquireContext,
-        },
-        details: {
-          claimId: "claim-1",
-          path: "/tmp/worktree",
-          branch: "topic",
-          head: "abc123",
-        },
-        isError: false,
-      },
-      h.context,
-    ),
-    {
-      content: [
-        {
-          type: "text",
-          text: "worktree_pool acquire completed for claim claim-1, but task jp-a lifecycle finalization failed; reconcile the task before continuing",
-        },
-      ],
-      details: { action: "acquire", claimId: "claim-1", taskId: "jp-a" },
-      isError: true,
-    },
-  );
-  assert.equal(h.calls.length, count);
-  await finalize(
-    {
-      toolName: "worktree_pool",
-      input: {
-        action: "release",
-        [WORKTREE_LIFECYCLE_CONTEXT_KEY]: {
-          version: 1,
-          mode: "release",
-          taskId: "jp-a",
-          operationId: "release-call",
-          claimId: "claim-1",
-          repository: "repo",
-        },
-      },
+      ...refused,
       details: { released: false, path: "/tmp/worktree" },
       isError: false,
     },
     h.context,
   );
-  assert.equal(h.calls.length, count);
+  assert.equal(h.calls.length, preparedCount);
 });
 
 test("returns a curated error when pool result finalization fails", async () => {
   const h = harness();
+  h.guardState.activeTasks = [activeIssue("jp-a")];
+  h.guardState.associatedTasks = [activeIssue("jp-a")];
+  const release = {
+    toolCallId: "release-call",
+    toolName: "worktree_pool",
+    input: { action: "release", repository: "repo", claimId: "claim-1" },
+  };
+  await h.handlers.get("tool_call")![0](release, h.context);
   h.guardState.finalizationError = new Error(
     "private task data and raw stderr",
   );
   const result = await h.handlers.get("tool_result")![0](
     {
-      toolName: "worktree_pool",
-      input: {
-        action: "release",
-        [WORKTREE_LIFECYCLE_CONTEXT_KEY]: {
-          version: 1,
-          mode: "release",
-          taskId: "jp-a",
-          operationId: "release-call",
-          claimId: "claim-1",
-          repository: "repo",
-        },
-      },
+      ...release,
       details: { released: true, path: "/tmp/worktree" },
       isError: false,
     },

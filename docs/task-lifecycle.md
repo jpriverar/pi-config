@@ -215,11 +215,12 @@ worktree_pool acquire(repository, branch, startPoint?)
 worktree_pool release(repository, claimId)
 ```
 
-Before acquisition, the lifecycle hook persists an `acquiring` resource with
-deterministic claim and path IDs, then privately passes those identities to the
-task-agnostic pool adapter. A retry of the same repository and branch reuses
-the pending identities instead of allocating twice. A successful pool receipt
-finalizes the resource and durable branch artifact.
+Before acquisition, the lifecycle hook verifies that the session owns exactly
+one Active task and remembers the task and request in process by `toolCallId`.
+It does not alter the tool input. The task-agnostic pool generates its ordinary
+claim and path identities. A successful validated `tool_result` records the
+Active resource and durable branch artifact on the remembered task. A failed
+tool call records no resource.
 
 For an associated release, the hook verifies the session owns the same Active
 task, persists `release_pending`, and finalizes after a successful pool receipt.
@@ -236,7 +237,7 @@ A worktree is a temporary resource correlated by all of:
 - task lifecycle resource ID;
 - repository and full branch;
 - opaque pool claim ID;
-- deterministic pool path ID;
+- pool path ID derived from the managed path;
 - acquisition operation ID.
 
 Multiple distinct healthy or currently dirty worktrees may support one Active
@@ -268,16 +269,18 @@ records `execution_interrupted`, and retains resource evidence for handoff.
 
 ## Pool boundary and recovery
 
-The worktree-pool core remains task-agnostic, and its public schema still does
-not expose deterministic `claimId` or `pathId` inputs. Lifecycle hooks inject a
-strict private context only after public validation. Pool `list`, `repair`, and
-unassociated legacy release remain available without attachment; ordinary
-acquisition does not.
+The worktree-pool core and extension remain task-agnostic. Their public schema
+does not expose `claimId` or `pathId` inputs for acquisition, and lifecycle hooks
+do not inject private arguments. Pool `list`, `repair`, and unassociated legacy
+release remain available without attachment; ordinary acquisition does not.
 
-Preparation is persisted before pool mutation and finalization happens from the
-validated `tool_result`. If Pi stops between phases, `task_reconcile` recovers
-only exact safe evidence. No automated path deletes dirty, occupied, malformed,
-contradictory, missing, or ambiguous worktrees.
+Acquire correlation is process-local until a validated successful result records
+the generated claim. If Pi stops after pool allocation but before that result is
+finalized, use pool `list` or `repair` and explicit lifecycle reconciliation;
+automatic interrupted-acquire inference is deferred. Associated release still
+persists `release_pending` before pool mutation and reconciles exact safe
+evidence. No automated path deletes dirty, occupied, malformed, contradictory,
+missing, or ambiguous worktrees.
 
 ## Verification and migration
 
