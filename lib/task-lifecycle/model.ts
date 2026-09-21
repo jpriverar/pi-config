@@ -18,6 +18,7 @@ import type {
   LifecycleMetadataV1,
   LifecyclePhase,
   LifecycleTransition,
+  NativeDependency,
   ReopenInput,
   WaitingKind,
   WaitInput,
@@ -114,14 +115,7 @@ export function validateLifecycle(
       lifecycle.execution !== null,
       "phase active requires one execution lease",
     );
-    requireInvariant(
-      lifecycle.waiting === null,
-      "phase active must not retain waiting state",
-    );
-    requireInvariant(
-      lifecycle.activeCheck === null,
-      "phase active must not retain an active check",
-    );
+    validateActiveCondition(lifecycle, unresolvedBlockers);
   } else {
     requireInvariant(
       lifecycle.execution === null,
@@ -181,7 +175,7 @@ export function validateLifecycle(
         "check wait must not have unresolved blockers",
       );
     }
-  } else {
+  } else if (lifecycle.phase !== "active") {
     requireInvariant(
       lifecycle.waiting === null,
       `phase ${lifecycle.phase} must not retain waiting state`,
@@ -223,6 +217,38 @@ export function validateLifecycle(
   validateUniqueArtifacts(lifecycle.artifacts);
   validateUniqueResources(lifecycle.resources);
   validateCheckTargets(lifecycle);
+}
+
+function validateActiveCondition(
+  lifecycle: LifecycleMetadataV1,
+  unresolvedBlockers: readonly NativeDependency[],
+): void {
+  if (lifecycle.waiting === null) {
+    requireInvariant(
+      lifecycle.activeCheck === null,
+      "active work without a waiting condition must not retain an active check",
+    );
+    return;
+  }
+  if (lifecycle.waiting.kind === "dependency") {
+    requireInvariant(
+      unresolvedBlockers.length > 0,
+      "active dependency condition requires an unresolved blocker",
+    );
+    requireInvariant(
+      lifecycle.activeCheck === null,
+      "active dependency condition must not have an active check",
+    );
+    return;
+  }
+  requireInvariant(
+    lifecycle.activeCheck !== null,
+    "active check condition requires one active check",
+  );
+  requireInvariant(
+    unresolvedBlockers.length === 0,
+    "active check condition must not have unresolved blockers",
+  );
 }
 
 export function createActionableLifecycle(now: string): LifecycleMetadataV1 {
@@ -383,8 +409,8 @@ export function claimLifecycle(
 ): LifecycleMetadataV1 {
   if (hasOperation(state, input.operationId)) return state;
   requireInvariant(
-    state.phase === "actionable",
-    "claim requires phase actionable",
+    state.phase === "actionable" || state.phase === "waiting",
+    "claim requires phase actionable or waiting",
   );
   requireInvariant(
     state.execution === null,
@@ -418,7 +444,7 @@ export function claimLifecycle(
     },
   };
   return transition(
-    { ...state, execution, waiting: null, activeCheck: null },
+    { ...state, execution },
     input.operationId,
     "claim",
     input.now,

@@ -50,6 +50,26 @@ function lifecycle(
   };
 }
 
+function lifecycleCheck(
+  overrides: Partial<LifecycleCheck> = {},
+): LifecycleCheck {
+  return {
+    id: "check-1",
+    kind: "manual",
+    targetArtifactIds: [],
+    predicate: { reviewAt: NOW },
+    onSatisfied: "actionable",
+    wakeOn: [],
+    state: "pending",
+    createdAt: NOW,
+    lastCheckedAt: null,
+    nextCheckAt: NOW,
+    lastObservation: null,
+    errorCount: 0,
+    ...overrides,
+  };
+}
+
 function issue(
   state: LifecycleMetadataV1 | null = lifecycle(),
 ): LifecycleIssue {
@@ -282,6 +302,62 @@ test("claims a legacy task into active ownership", async () => {
   );
 });
 
+test("claims dependency-waiting work without dropping blockers", async () => {
+  const waiting = lifecycle({
+    phase: "waiting",
+    waiting: { kind: "dependency" },
+  });
+  const store = new FakeStore({
+    ...issue(waiting),
+    dependencies: [
+      { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+    ],
+  });
+
+  const saved = await service(store).claim("jp-1", session("s1"), "claim-1");
+
+  assert.equal(saved.lifecycle?.phase, "active");
+  assert.deepEqual(saved.lifecycle?.waiting, { kind: "dependency" });
+  assert.equal(saved.dependencies[0]?.status, "open");
+});
+
+test("claims check-waiting work without dropping its check", async () => {
+  const waiting = lifecycle({
+    phase: "waiting",
+    waiting: { kind: "check" },
+    activeCheck: lifecycleCheck(),
+  });
+  const store = new FakeStore({ ...issue(waiting), status: "blocked" });
+
+  const saved = await service(store).claim("jp-1", session("s1"), "claim-1");
+
+  assert.equal(saved.lifecycle?.phase, "active");
+  assert.deepEqual(saved.lifecycle?.waiting, { kind: "check" });
+  assert.equal(saved.lifecycle?.activeCheck?.id, "check-1");
+});
+
+test("returns active work to its retained condition", async () => {
+  const active = activeIssue("jp-1", "s1");
+  active.lifecycle = {
+    ...active.lifecycle!,
+    waiting: { kind: "check" },
+    activeCheck: lifecycleCheck(),
+  };
+  active.metadata = { piLifecycle: active.lifecycle };
+  const store = new FakeStore(active);
+
+  const saved = await service(store).waitOnExistingCondition(
+    "jp-1",
+    session("s1"),
+    "wait-1",
+  );
+
+  assert.equal(saved.lifecycle?.phase, "waiting");
+  assert.equal(saved.lifecycle?.execution, null);
+  assert.equal(saved.lifecycle?.activeCheck?.id, "check-1");
+  assert.equal(saved.status, "blocked");
+});
+
 test("resolves explicit Active tasks owned by one session", async () => {
   const store = new FakeStore();
   const waiting = {
@@ -436,6 +512,52 @@ test("closes with a disposition and reopens according to native blockers", async
   assert.equal(reopened.status, "open");
   assert.equal(reopened.lifecycle?.phase, "waiting");
   assert.deepEqual(reopened.lifecycle?.waiting, { kind: "dependency" });
+});
+
+test("blocks completed but permits cancelled with unresolved dependencies", async () => {
+  const blocked = activeIssue("jp-1", "s1");
+  blocked.dependencies = [
+    { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+  ];
+  const completedStore = new FakeStore(blocked);
+
+  await assert.rejects(
+    service(completedStore).close(
+      "jp-1",
+      { kind: "completed", reason: "done", evidenceArtifactIds: [] },
+      session("s1"),
+      "close-completed",
+    ),
+    /unresolved condition/,
+  );
+  assert.equal(completedStore.saved.lifecycle?.phase, "active");
+
+  const cancelledStore = new FakeStore(blocked);
+  const cancelled = await service(cancelledStore).close(
+    "jp-1",
+    { kind: "cancelled", reason: "obsolete", evidenceArtifactIds: [] },
+    session("s1"),
+    "close-cancelled",
+  );
+  assert.equal(cancelled.lifecycle?.phase, "done");
+  assert.equal(cancelled.lifecycle?.disposition?.kind, "cancelled");
+
+  const checked = activeIssue("jp-1", "s1");
+  checked.lifecycle = {
+    ...checked.lifecycle!,
+    waiting: { kind: "check" },
+    activeCheck: lifecycleCheck(),
+  };
+  checked.metadata = { piLifecycle: checked.lifecycle };
+  await assert.rejects(
+    service(new FakeStore(checked)).close(
+      "jp-1",
+      { kind: "completed", reason: "done", evidenceArtifactIds: [] },
+      session("s1"),
+      "close-check",
+    ),
+    /unresolved condition/,
+  );
 });
 
 test("returns expired ownership to actionable with one idempotent event", async () => {
@@ -1375,6 +1497,28 @@ test("closes a due satisfied check and wakes action-required work exactly once",
   assert.equal(actionable.status, "open");
   assert.equal(actionable.lifecycle?.phase, "actionable");
   assert.equal(actionable.lifecycle?.checkHistory[0].state, "action_required");
+});
+
+test("satisfied retained checks do not close active work", async () => {
+  const active = activeIssue("jp-1", "s1");
+  const execution = active.lifecycle!.execution;
+  active.lifecycle = {
+    ...active.lifecycle!,
+    waiting: { kind: "check" },
+    activeCheck: lifecycleCheck({ onSatisfied: "close" }),
+  };
+  active.metadata = { piLifecycle: active.lifecycle };
+  const store = new FakeStore(active);
+
+  const saved = await service(store, {
+    checkAdapters: adapter("satisfied", "merged"),
+  }).reconcileTask("jp-1", session("reconciler"));
+
+  assert.equal(saved.lifecycle?.phase, "active");
+  assert.deepEqual(saved.lifecycle?.execution, execution);
+  assert.equal(saved.lifecycle?.waiting, null);
+  assert.equal(saved.lifecycle?.activeCheck, null);
+  assert.equal(saved.lifecycle?.checkHistory.at(-1)?.state, "satisfied");
 });
 
 test("pending polls update check observation without changing phase timestamps", async () => {

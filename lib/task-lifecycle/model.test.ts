@@ -225,6 +225,45 @@ test("rejects each invalid waiting authority combination", () => {
   );
 });
 
+test("claims waiting work while preserving its unresolved condition", () => {
+  const blocker = {
+    id: "jp-blocker",
+    status: "open" as const,
+    dependencyType: "blocks",
+  };
+  const dependencyWait = baseLifecycle({
+    phase: "waiting",
+    waiting: { kind: "dependency" },
+  });
+  const activeDependency = claimLifecycle(dependencyWait, {
+    operationId: "claim-dependency",
+    sessionId: "session-a",
+    now: NOW,
+    expiresAt: LATER,
+    resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+  });
+  assert.deepEqual(activeDependency.waiting, { kind: "dependency" });
+  validateLifecycle(
+    activeDependency,
+    issue("in_progress", activeDependency, [blocker]),
+  );
+
+  const checkWait = baseLifecycle({
+    phase: "waiting",
+    waiting: { kind: "check" },
+    activeCheck: check(),
+  });
+  const activeCheck = claimLifecycle(checkWait, {
+    operationId: "claim-check",
+    sessionId: "session-a",
+    now: NOW,
+    expiresAt: LATER,
+    resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+  });
+  assert.equal(activeCheck.activeCheck?.id, "check-1");
+  validateLifecycle(activeCheck, issue("in_progress", activeCheck));
+});
+
 test("requires disposition for done and no execution outside active", () => {
   const done = baseLifecycle({ phase: "done" });
   assert.throws(

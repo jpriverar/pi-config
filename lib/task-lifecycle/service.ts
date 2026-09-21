@@ -264,6 +264,48 @@ export class TaskLifecycleService {
     });
   }
 
+  async waitOnExistingCondition(
+    taskId: string,
+    owner: LockOwner,
+    operationId: string = this.deps.uuid(),
+  ): Promise<LifecycleIssue> {
+    const current = await this.deps.store.show(taskId);
+    const lifecycle = requireManaged(current);
+    if (hasOperation(lifecycle, operationId)) return current;
+    requireCurrentOwner(taskId, lifecycle, owner);
+    const hasUnresolvedBlockers = current.dependencies.some(
+      (dependency) =>
+        dependency.dependencyType === "blocks" &&
+        dependency.status !== "closed",
+    );
+    const kind =
+      lifecycle.waiting?.kind ?? (hasUnresolvedBlockers ? "dependency" : null);
+    if (kind === null) {
+      throw new Error(`task ${taskId} has no unresolved waiting condition`);
+    }
+    if (kind === "check" && lifecycle.activeCheck === null) {
+      throw new Error(`task ${taskId} has no active check to wait on`);
+    }
+    await this.releaseResources(taskId, lifecycle, owner, operationId);
+    const now = this.nowIso();
+    return this.deps.store.mutate(taskId, owner, (issue) => {
+      const latest = requireManaged(issue);
+      requireCurrentOwner(taskId, latest, owner);
+      const next = waitLifecycle(latest, {
+        operationId,
+        now,
+        kind,
+        ...(kind === "check" ? { check: latest.activeCheck! } : {}),
+      });
+      return this.mutation(
+        issue,
+        operationId,
+        kind === "check" ? "blocked" : "open",
+        next,
+      );
+    });
+  }
+
   async defer(
     taskId: string,
     reason: string,
@@ -294,6 +336,11 @@ export class TaskLifecycleService {
     const lifecycle = requireManaged(current);
     if (lifecycle.phase === "active") {
       requireCurrentOwner(taskId, lifecycle, owner);
+    }
+    if (disposition.kind === "completed" && hasUnresolvedCondition(current)) {
+      throw new Error(
+        `task ${taskId} has an unresolved condition and cannot be completed`,
+      );
     }
     await this.releaseResources(taskId, lifecycle, owner, operationId);
     const now = this.nowIso();
@@ -342,14 +389,24 @@ export class TaskLifecycleService {
     owner: LockOwner,
     input: ObserveCheckInput = {},
   ): Promise<LifecycleIssue> {
-    const current = await this.deps.store.show(taskId);
-    const lifecycle = current.lifecycle;
+    let current = await this.deps.store.show(taskId);
+    let lifecycle = current.lifecycle;
     if (lifecycle === null) return current;
     if (lifecycle.phase === "active") {
-      await this.reconcileWorktreeResources(taskId, current, lifecycle, owner);
-      return this.reconcileExecutionTimeout(taskId, owner);
+      current = await this.reconcileWorktreeResources(
+        taskId,
+        current,
+        lifecycle,
+        owner,
+      );
+      current = await this.reconcileExecutionTimeout(taskId, owner);
+      lifecycle = current.lifecycle;
+      if (lifecycle?.phase !== "active") return current;
     }
-    if (lifecycle.phase !== "waiting" || lifecycle.waiting === null) {
+    if (
+      (lifecycle.phase !== "waiting" && lifecycle.phase !== "active") ||
+      lifecycle.waiting === null
+    ) {
       return current;
     }
     const now = this.nowIso();
@@ -364,19 +421,33 @@ export class TaskLifecycleService {
       return this.deps.store.mutate(taskId, owner, (issue) => {
         const latest = requireManaged(issue);
         if (
-          latest.phase !== "waiting" ||
+          (latest.phase !== "waiting" && latest.phase !== "active") ||
           latest.waiting?.kind !== "dependency"
         ) {
           return unchangedMutation(issue, operationId);
         }
-        const next = finishWaiting(
-          latest,
+        const next =
+          latest.phase === "active"
+            ? finishActiveWaiting(
+                latest,
+                operationId,
+                "dependencies_satisfied",
+                now,
+                null,
+              )
+            : finishWaiting(
+                latest,
+                operationId,
+                "dependencies_satisfied",
+                now,
+                null,
+              );
+        return this.mutation(
+          issue,
           operationId,
-          "dependencies_satisfied",
-          now,
-          null,
+          latest.phase === "active" ? "in_progress" : "open",
+          next,
         );
-        return this.mutation(issue, operationId, "open", next);
       });
     }
 
@@ -402,7 +473,7 @@ export class TaskLifecycleService {
     return this.deps.store.mutate(taskId, owner, (issue) => {
       const latest = requireManaged(issue);
       if (
-        latest.phase !== "waiting" ||
+        (latest.phase !== "waiting" && latest.phase !== "active") ||
         latest.waiting?.kind !== "check" ||
         latest.activeCheck?.id !== activeCheck.id
       ) {
@@ -424,7 +495,12 @@ export class TaskLifecycleService {
           operationId,
           now,
         );
-        return this.mutation(issue, operationId, "blocked", next);
+        return this.mutation(
+          issue,
+          operationId,
+          latest.phase === "active" ? "in_progress" : "blocked",
+          next,
+        );
       }
       if (observation.outcome === "error") {
         check.errorCount = latest.activeCheck.errorCount + 1;
@@ -441,9 +517,22 @@ export class TaskLifecycleService {
           operationId,
           now,
         );
-        return this.mutation(issue, operationId, "blocked", next);
+        return this.mutation(
+          issue,
+          operationId,
+          latest.phase === "active" ? "in_progress" : "blocked",
+          next,
+        );
       }
       check.nextCheckAt = null;
+      if (latest.phase === "active") {
+        const type =
+          observation.outcome === "satisfied"
+            ? "check_satisfied"
+            : "check_action_required";
+        const next = finishActiveWaiting(latest, operationId, type, now, check);
+        return this.mutation(issue, operationId, "in_progress", next);
+      }
       if (
         observation.outcome === "satisfied" &&
         check.onSatisfied === "close"
@@ -486,7 +575,8 @@ export class TaskLifecycleService {
     for (const issue of issues) {
       if (results.length >= limits.taskLimit) break;
       if (
-        issue.lifecycle?.phase === "waiting" &&
+        (issue.lifecycle?.phase === "waiting" ||
+          issue.lifecycle?.phase === "active") &&
         issue.lifecycle.waiting?.kind === "check"
       ) {
         if (checks >= limits.checkLimit) continue;
@@ -1218,6 +1308,17 @@ export class TaskLifecycleService {
   }
 }
 
+function hasUnresolvedCondition(issue: LifecycleIssue): boolean {
+  return (
+    issue.dependencies.some(
+      (dependency) =>
+        dependency.dependencyType === "blocks" &&
+        dependency.status !== "closed",
+    ) ||
+    (issue.lifecycle !== null && issue.lifecycle.activeCheck !== null)
+  );
+}
+
 function requireManaged(issue: LifecycleIssue): LifecycleMetadataV1 {
   if (issue.lifecycle === null) {
     throw new Error(`task ${issue.id} has no valid piLifecycle metadata`);
@@ -1246,6 +1347,36 @@ function requireCurrentOwnerSession(
       `task ${taskId} is owned by active session ${lifecycle.execution.sessionId}`,
     );
   }
+}
+
+function finishActiveWaiting(
+  lifecycle: LifecycleMetadataV1,
+  operationId: string,
+  type: string,
+  now: string,
+  check: LifecycleCheck | null,
+): LifecycleMetadataV1 {
+  return {
+    ...lifecycle,
+    waiting: null,
+    activeCheck: null,
+    checkHistory:
+      check === null
+        ? lifecycle.checkHistory
+        : [...lifecycle.checkHistory, check],
+    lastProgressAt: now,
+    transitionHistory: [
+      ...lifecycle.transitionHistory,
+      {
+        operationId,
+        type,
+        at: now,
+        from: "active",
+        to: "active",
+        sessionId: lifecycle.execution?.sessionId,
+      },
+    ],
+  };
 }
 
 function finishWaiting(
