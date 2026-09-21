@@ -129,6 +129,140 @@ test("reads lifecycle metadata and native dependency edges", async () => {
   assert.deepEqual(read.metadata.unrelated, { keep: true });
 });
 
+test("creates a managed task and verifies it through the explicit store", async () => {
+  const calls: Array<[string, readonly string[]]> = [];
+  let current: Record<string, unknown> = {
+    ...rawIssue(),
+    id: "jp-created",
+    title: "Ship it",
+  };
+  const state = lifecycle();
+  const exec: BeadsExec = async (command, args) => {
+    calls.push([command, args]);
+    if (args[0] === "create") {
+      current = {
+        ...current,
+        metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+      };
+      return { code: 0, stdout: JSON.stringify(current), stderr: "" };
+    }
+    return result(current);
+  };
+  const store = createLifecycleStore(exec, options());
+
+  const created = await store.create(
+    {
+      title: "Ship it",
+      why: "Required",
+      workstream: "pi-setup",
+      needsJp: false,
+    },
+    state,
+    OWNER,
+  );
+
+  assert.equal(created.id, "jp-created");
+  assert.equal(created.lifecycle?.phase, "actionable");
+  assert.deepEqual(calls[0]?.[1], [
+    "create",
+    "Ship it",
+    "-d",
+    "Required",
+    "-l",
+    "workstream:pi-setup",
+    "--metadata",
+    JSON.stringify({ piLifecycle: state }),
+    "--json",
+    "--db",
+    STORE,
+  ]);
+  assert.deepEqual(calls[1]?.[1], [
+    "show",
+    "jp-created",
+    "--long",
+    "--json",
+    "--db",
+    STORE,
+  ]);
+});
+
+test("updates labels in one command and rejects no-op or overlap", async () => {
+  const calls: Array<[string, readonly string[]]> = [];
+  const exec: BeadsExec = async (command, args) => {
+    calls.push([command, args]);
+    return result(rawIssue(null));
+  };
+  const store = createLifecycleStore(exec, options());
+
+  const saved = await store.updateLabels(
+    "jp-1",
+    { addLabels: ["priority:high"], removeLabels: ["priority:low"] },
+    OWNER,
+  );
+
+  assert.equal(saved.lifecycle, null);
+  assert.deepEqual(calls[0]?.[1], [
+    "update",
+    "jp-1",
+    "--add-label",
+    "priority:high",
+    "--remove-label",
+    "priority:low",
+    "--json",
+    "--db",
+    STORE,
+  ]);
+  assert.deepEqual(calls[1]?.[1], [
+    "show",
+    "jp-1",
+    "--long",
+    "--json",
+    "--db",
+    STORE,
+  ]);
+});
+
+test("revalidates ownership under lock before appending a comment", async () => {
+  const calls: Array<[string, readonly string[]]> = [];
+  const current = rawIssue(
+    lifecycle({
+      phase: "active",
+      execution: {
+        sessionId: OWNER.sessionId,
+        claimedAt: NOW,
+        lastActivityAt: NOW,
+        expiresAt: "2026-09-17T16:00:00.000Z",
+        resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+      },
+    }),
+  );
+  current.status = "in_progress";
+  const exec: BeadsExec = async (command, args) => {
+    calls.push([command, args]);
+    return result(current);
+  };
+  const store = createLifecycleStore(exec, options());
+
+  const saved = await store.appendComment(
+    "jp-1",
+    "progress",
+    OWNER,
+    (issue) => {
+      assert.equal(issue.lifecycle?.execution?.sessionId, OWNER.sessionId);
+    },
+  );
+
+  assert.equal(saved.lifecycle?.phase, "active");
+  assert.deepEqual(
+    calls.map((call) => call[1]),
+    [
+      ["show", "jp-1", "--long", "--json", "--db", STORE],
+      ["comments", "add", "jp-1", "progress", "--json", "--db", STORE],
+      ["show", "jp-1", "--long", "--json", "--db", STORE],
+    ],
+  );
+});
+
 test("list ignores Beads edge-shaped dependency summaries", async () => {
   const calls: Array<[string, readonly string[]]> = [];
   const raw = rawIssue();

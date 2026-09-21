@@ -23,6 +23,8 @@ import {
   closeLifecycle,
   completeWorktreeAcquire,
   completeWorktreeRelease,
+  createActionableLifecycle,
+  deferLifecycle,
   interruptLifecycle,
   reopenLifecycle,
   validateLifecycle,
@@ -30,6 +32,7 @@ import {
 } from "./model.js";
 import type {
   ArtifactInput,
+  CreateTaskInput,
   Disposition,
   LifecycleCheck,
   LifecycleIssue,
@@ -40,6 +43,7 @@ import type {
   LockOwner,
   Mutation,
   PreparedWorktreeOperation,
+  UpdateTaskLabelsInput,
   WorktreeResource,
 } from "./types.js";
 
@@ -80,8 +84,68 @@ export interface ReconcileLimits {
 
 export type CloseDispositionInput = Omit<Disposition, "at">;
 
+export function normalizeLabelUpdate(
+  input: UpdateTaskLabelsInput,
+): UpdateTaskLabelsInput {
+  const addLabels = normalizeLabels(input.addLabels);
+  const removeLabels = normalizeLabels(input.removeLabels);
+  if (addLabels.length === 0 && removeLabels.length === 0) {
+    throw new Error("task update requires at least one label change");
+  }
+  const removed = new Set(removeLabels);
+  const overlap = addLabels.find((label) => removed.has(label));
+  if (overlap !== undefined) {
+    throw new Error(
+      `label ${JSON.stringify(overlap)} cannot be both add and remove`,
+    );
+  }
+  return { addLabels, removeLabels };
+}
+
 export class TaskLifecycleService {
   constructor(private readonly deps: TaskLifecycleServiceDependencies) {}
+
+  async create(
+    input: CreateTaskInput,
+    owner: LockOwner,
+  ): Promise<LifecycleIssue> {
+    return this.deps.store.create(
+      input,
+      createActionableLifecycle(this.nowIso()),
+      owner,
+    );
+  }
+
+  async updateLabels(
+    taskId: string,
+    input: UpdateTaskLabelsInput,
+    owner: LockOwner,
+  ): Promise<LifecycleIssue> {
+    return this.deps.store.updateLabels(
+      taskId,
+      normalizeLabelUpdate(input),
+      owner,
+    );
+  }
+
+  async log(
+    taskId: string,
+    message: string,
+    owner: LockOwner,
+  ): Promise<LifecycleIssue> {
+    if (message.trim().length === 0) {
+      throw new Error("task log message must not be empty");
+    }
+    return this.deps.store.appendComment(taskId, message, owner, (issue) => {
+      const lifecycle = requireManaged(issue);
+      requireCurrentOwner(taskId, lifecycle, owner);
+      if (lifecycle.phase !== "active") {
+        throw new Error(
+          `task ${taskId} must be active before logging progress`,
+        );
+      }
+    });
+  }
 
   async claim(
     taskId: string,
@@ -197,6 +261,26 @@ export class TaskLifecycleService {
         check,
       });
       return this.mutation(issue, operationId, "blocked", next);
+    });
+  }
+
+  async defer(
+    taskId: string,
+    reason: string,
+    owner: LockOwner,
+    operationId: string = this.deps.uuid(),
+  ): Promise<LifecycleIssue> {
+    const current = await this.deps.store.show(taskId);
+    const lifecycle = requireManaged(current);
+    if (hasOperation(lifecycle, operationId)) return current;
+    requireCurrentOwner(taskId, lifecycle, owner);
+    await this.releaseResources(taskId, lifecycle, owner, operationId);
+    const now = this.nowIso();
+    return this.deps.store.mutate(taskId, owner, (issue) => {
+      const latest = requireManaged(issue);
+      requireCurrentOwner(taskId, latest, owner);
+      const next = deferLifecycle(latest, { operationId, now, reason });
+      return this.mutation(issue, operationId, "deferred", next);
     });
   }
 
@@ -1286,6 +1370,15 @@ function assertValidAssociation(
       `contradictory worktree association for claim ${resource.claimId}`,
     );
   }
+}
+
+function normalizeLabels(labels: readonly string[]): string[] {
+  const normalized = labels.map((label) => label.trim());
+  const empty = normalized.find((label) => label.length === 0);
+  if (empty !== undefined) {
+    throw new Error("task labels must not be empty");
+  }
+  return [...new Set(normalized)];
 }
 
 function safeIdentifier(value: string): string {

@@ -8,7 +8,11 @@ import type {
   PoolListing,
   ReleaseResult,
 } from "../../extensions/worktree-pool/pool.js";
-import { TaskLifecycleService, type TaskLifecyclePoolPort } from "./service.js";
+import {
+  normalizeLabelUpdate,
+  TaskLifecycleService,
+  type TaskLifecyclePoolPort,
+} from "./service.js";
 import type {
   ArtifactInput,
   LifecycleCheck,
@@ -81,6 +85,8 @@ class FakeStore implements LifecycleStore {
   saved: LifecycleIssue;
   listed: LifecycleIssue[] | null = null;
   blockers: Array<[string, string]> = [];
+  comments: string[] = [];
+  labelUpdates: Array<{ addLabels: string[]; removeLabels: string[] }> = [];
   mutations = 0;
 
   constructor(initial: LifecycleIssue = issue()) {
@@ -97,6 +103,44 @@ class FakeStore implements LifecycleStore {
 
   async readyIds(): Promise<ReadonlySet<string>> {
     return new Set(this.saved.status === "open" ? [this.saved.id] : []);
+  }
+
+  async create(
+    input: {
+      title: string;
+      why: string;
+      workstream?: string;
+      needsJp: boolean;
+    },
+    state: LifecycleMetadataV1,
+    _owner: LockOwner,
+  ): Promise<LifecycleIssue> {
+    this.saved = {
+      ...issue(state),
+      id: "jp-created",
+      title: input.title,
+    };
+    return this.saved;
+  }
+
+  async updateLabels(
+    _id: string,
+    input: { addLabels: string[]; removeLabels: string[] },
+    _owner: LockOwner,
+  ): Promise<LifecycleIssue> {
+    this.labelUpdates.push(input);
+    return this.saved;
+  }
+
+  async appendComment(
+    _id: string,
+    message: string,
+    _owner: LockOwner,
+    validate: (issue: LifecycleIssue) => void,
+  ): Promise<LifecycleIssue> {
+    validate(this.saved);
+    this.comments.push(message);
+    return this.saved;
   }
 
   failActiveResourceOnce = false;
@@ -162,6 +206,67 @@ function service(
     maxBackoffMs: options.maxBackoffMs ?? 21_600_000,
   });
 }
+
+test("creates managed actionable tasks", async () => {
+  const store = new FakeStore(issue(null));
+
+  const created = await service(store).create(
+    {
+      title: "Ship it",
+      why: "Required",
+      workstream: "pi-setup",
+      needsJp: false,
+    },
+    session("s1"),
+  );
+
+  assert.equal(created.id, "jp-created");
+  assert.equal(created.status, "open");
+  assert.equal(created.lifecycle?.phase, "actionable");
+});
+
+test("updates labels without adopting legacy lifecycle", async () => {
+  const store = new FakeStore(issue(null));
+
+  const saved = await service(store).updateLabels(
+    "jp-1",
+    { addLabels: ["priority:high"], removeLabels: ["priority:low"] },
+    session("s1"),
+  );
+
+  assert.equal(saved.lifecycle, null);
+  assert.deepEqual(store.labelUpdates, [
+    { addLabels: ["priority:high"], removeLabels: ["priority:low"] },
+  ]);
+});
+
+test("rejects empty and overlapping label updates", () => {
+  assert.throws(
+    () => normalizeLabelUpdate({ addLabels: [], removeLabels: [] }),
+    /at least one label change/,
+  );
+  assert.throws(
+    () =>
+      normalizeLabelUpdate({
+        addLabels: ["priority"],
+        removeLabels: ["priority"],
+      }),
+    /both add and remove/,
+  );
+});
+
+test("logs only while the same session owns the active task", async () => {
+  const store = new FakeStore(activeIssue("jp-1", "s1"));
+
+  await assert.rejects(
+    service(store).log("jp-1", "progress", session("other")),
+    /owned by active session s1/,
+  );
+  assert.deepEqual(store.comments, []);
+
+  await service(store).log("jp-1", "progress", session("s1"));
+  assert.deepEqual(store.comments, ["progress"]);
+});
 
 test("claims a legacy task into active ownership", async () => {
   const store = new FakeStore(issue(null));
@@ -573,6 +678,35 @@ async function activeServiceWithPool() {
   await sut.claim("jp-1", session("s1"), "claim-task");
   return { store, pool, sut };
 }
+
+test("defers only after releasing task worktrees", async () => {
+  const { pool, sut } = await activeServiceWithPool();
+  const owner = session("s1");
+  const request = {
+    repository: "pi-config",
+    branch: "jpriverar/topic",
+    startPoint: "origin/main",
+  };
+  const identity = {
+    claimId: "11111111-1111-4111-8111-111111111111",
+    pathId: "22222222-2222-4222-8222-222222222222",
+  };
+  const acquired = await pool.acquire(request, owner, identity);
+  await sut.recordWorktreeAcquire(
+    { ...request, taskId: "jp-1" },
+    acquired,
+    owner,
+    "acquire-1",
+  );
+
+  const saved = await sut.defer("jp-1", "Lower priority", owner, "defer-1");
+
+  assert.equal(pool.releaseCalls.length, 1);
+  assert.equal(saved.lifecycle?.phase, "deferred");
+  assert.equal(saved.lifecycle?.execution, null);
+  assert.equal(saved.lifecycle?.resources[0]?.cleanupState, "released");
+  assert.equal(saved.status, "deferred");
+});
 
 test("records a pool-generated acquisition after the tool succeeds", async () => {
   const { pool, sut } = await activeServiceWithPool();

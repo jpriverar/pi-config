@@ -150,6 +150,18 @@ export interface Mutation {
   lifecycle: LifecycleMetadataV1;
 }
 
+export interface CreateTaskInput {
+  title: string;
+  why: string;
+  workstream?: string;
+  needsJp: boolean;
+}
+
+export interface UpdateTaskLabelsInput {
+  addLabels: string[];
+  removeLabels: string[];
+}
+
 export interface LifecycleMetadataV1 {
   version: 1;
   phase: LifecyclePhase;
@@ -178,6 +190,22 @@ export interface LifecycleStore {
   show(id: string): Promise<LifecycleIssue>;
   list(statuses: readonly LifecycleStatus[]): Promise<LifecycleIssue[]>;
   readyIds(): Promise<ReadonlySet<string>>;
+  create(
+    input: CreateTaskInput,
+    lifecycle: LifecycleMetadataV1,
+    owner: LockOwner,
+  ): Promise<LifecycleIssue>;
+  updateLabels(
+    id: string,
+    input: UpdateTaskLabelsInput,
+    owner: LockOwner,
+  ): Promise<LifecycleIssue>;
+  appendComment(
+    id: string,
+    message: string,
+    owner: LockOwner,
+    validate: (issue: LifecycleIssue) => void,
+  ): Promise<LifecycleIssue>;
   mutate(
     id: string,
     owner: LockOwner,

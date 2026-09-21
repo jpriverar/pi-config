@@ -225,6 +225,24 @@ export function validateLifecycle(
   validateCheckTargets(lifecycle);
 }
 
+export function createActionableLifecycle(now: string): LifecycleMetadataV1 {
+  assertTimestamp(now, "task creation timestamp");
+  return {
+    version: 1,
+    phase: "actionable",
+    waiting: null,
+    stateEnteredAt: now,
+    lastProgressAt: now,
+    execution: null,
+    artifacts: [],
+    activeCheck: null,
+    checkHistory: [],
+    transitionHistory: [],
+    resources: [],
+    disposition: null,
+  };
+}
+
 export function adoptLegacyLifecycle(
   issue: LifecycleIssue,
   readyIds: ReadonlySet<string>,
@@ -447,6 +465,43 @@ export function waitLifecycle(
     input.now,
     "waiting",
     input.reason === undefined ? {} : { reason: input.reason },
+  );
+}
+
+export function deferLifecycle(
+  state: LifecycleMetadataV1,
+  input: { operationId: string; now: string; reason: string },
+): LifecycleMetadataV1 {
+  if (hasOperation(state, input.operationId)) return state;
+  requireInvariant(state.phase === "active", "defer requires phase active");
+  requireInvariant(
+    state.execution !== null,
+    "defer requires an execution lease",
+  );
+  requireNoUnreleasedWorktrees(state);
+  assertText(input.operationId, "defer operationId");
+  assertTimestamp(input.now, "defer timestamp");
+  assertText(input.reason, "defer reason");
+  const checkHistory =
+    state.activeCheck === null ||
+    state.checkHistory.some(
+      (candidate) => candidate.id === state.activeCheck?.id,
+    )
+      ? state.checkHistory
+      : [...state.checkHistory, state.activeCheck];
+  return transition(
+    {
+      ...state,
+      execution: null,
+      waiting: null,
+      activeCheck: null,
+      checkHistory,
+    },
+    input.operationId,
+    "defer",
+    input.now,
+    "deferred",
+    { reason: input.reason },
   );
 }
 

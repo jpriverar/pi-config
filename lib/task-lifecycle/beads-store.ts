@@ -9,12 +9,15 @@ import {
 } from "../file-operation-lock.js";
 import { decodeLifecycle } from "./model.js";
 import type {
+  CreateTaskInput,
   LifecycleIssue,
   LifecycleMetadataV1,
   LifecycleStatus,
   LifecycleStore,
+  LockOwner,
   Mutation,
   NativeDependency,
+  UpdateTaskLabelsInput,
 } from "./types.js";
 
 export interface LifecycleStoreOptions {
@@ -141,6 +144,111 @@ export function createLifecycleStore(
     return new Set(ids);
   }
 
+  async function create(
+    input: CreateTaskInput,
+    lifecycle: LifecycleMetadataV1,
+    owner: LockOwner,
+  ): Promise<LifecycleIssue> {
+    assertNonEmpty(input.title, "task title");
+    assertNonEmpty(input.why, "task why");
+    if (input.workstream?.includes(",")) {
+      throw lifecycleStoreError(
+        "create task",
+        store,
+        "workstream must not contain a comma",
+      );
+    }
+    return withFileOperationLock(
+      join(store, "pi-task-lifecycle"),
+      owner,
+      async () => {
+        const labels = [
+          ...(input.workstream === undefined
+            ? []
+            : [`workstream:${input.workstream}`]),
+          ...(input.needsJp ? ["needs:jp"] : []),
+        ];
+        const args = [
+          "create",
+          input.title,
+          "-d",
+          input.why,
+          ...(labels.length === 0 ? [] : ["-l", labels.join(",")]),
+          "--metadata",
+          JSON.stringify({ piLifecycle: lifecycle }),
+          "--json",
+        ];
+        const value = await executeJson("create task", args);
+        const record = isRecord(value)
+          ? value
+          : decodeEnvelope(value, "create task", store)[0];
+        if (record === undefined) {
+          throw lifecycleStoreError(
+            "create task",
+            store,
+            "bd returned no created issue",
+          );
+        }
+        const created = decodeIssue(record, undefined, "create task", store);
+        return (await readOne(created.issue.id, "verify created task")).issue;
+      },
+      lockDependencies,
+    );
+  }
+
+  async function updateLabels(
+    id: string,
+    input: UpdateTaskLabelsInput,
+    owner: LockOwner,
+  ): Promise<LifecycleIssue> {
+    assertIdentifier(id, "issue id");
+    return withFileOperationLock(
+      join(store, "pi-task-lifecycle"),
+      owner,
+      async () => {
+        const args = ["update", id];
+        for (const label of input.addLabels) {
+          assertNonEmpty(label, "label to add");
+          args.push("--add-label", label);
+        }
+        for (const label of input.removeLabels) {
+          assertNonEmpty(label, "label to remove");
+          args.push("--remove-label", label);
+        }
+        await execute(`update labels ${id}`, [...args, "--json"]);
+        return (await readOne(id, `verify labels ${id}`)).issue;
+      },
+      lockDependencies,
+    );
+  }
+
+  async function appendComment(
+    id: string,
+    message: string,
+    owner: LockOwner,
+    validate: (issue: LifecycleIssue) => void,
+  ): Promise<LifecycleIssue> {
+    assertIdentifier(id, "issue id");
+    assertNonEmpty(message, "task comment");
+    return withFileOperationLock(
+      join(store, "pi-task-lifecycle"),
+      owner,
+      async () => {
+        const current = await readOne(id, `read issue ${id} before comment`);
+        validate(current.issue);
+        await execute(`append comment ${id}`, [
+          "comments",
+          "add",
+          id,
+          message,
+          "--json",
+        ]);
+        return (await readOne(id, `verify comment ${id}`)).issue;
+      },
+      lockDependencies,
+    );
+  }
+
   async function mutate(
     id: string,
     owner: Parameters<LifecycleStore["mutate"]>[1],
@@ -191,7 +299,16 @@ export function createLifecycleStore(
     ]);
   }
 
-  return { show, list, readyIds, mutate, addBlocker };
+  return {
+    show,
+    list,
+    readyIds,
+    create,
+    updateLabels,
+    appendComment,
+    mutate,
+    addBlocker,
+  };
 }
 
 function decodeEnvelope(
@@ -398,6 +515,19 @@ function assertStatus(
 ): asserts value is LifecycleStatus {
   if (typeof value !== "string" || !STATUSES.has(value)) {
     throw new Error(`${field} is unsupported`);
+  }
+}
+
+function assertNonEmpty(
+  value: unknown,
+  field: string,
+): asserts value is string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new Error(`${field} is invalid`);
   }
 }
 

@@ -12,6 +12,7 @@ import {
   completeWorktreeAcquire,
   completeWorktreeRelease,
   decodeLifecycle,
+  deferLifecycle,
   interruptLifecycle,
   reopenLifecycle,
   validateLifecycle,
@@ -455,6 +456,27 @@ test("performs idempotent claim, wait, close, and reopen transitions", () => {
   assert.equal(reopened.phase, "waiting");
   assert.deepEqual(reopened.waiting, { kind: "dependency" });
   assert.equal(reopened.disposition, null);
+});
+
+test("defers active ownership after resources are released", () => {
+  const active = claimLifecycle(baseLifecycle(), {
+    operationId: "claim-1",
+    sessionId: "session-a",
+    now: NOW,
+    expiresAt: LATER,
+    resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+  });
+
+  const deferred = deferLifecycle(active, {
+    operationId: "defer-1",
+    now: LATER,
+    reason: "Lower priority",
+  });
+
+  assert.equal(deferred.phase, "deferred");
+  assert.equal(deferred.execution, null);
+  assert.equal(deferred.transitionHistory.at(-1)?.type, "defer");
+  assert.equal(deferred.transitionHistory.at(-1)?.reason, "Lower priority");
 });
 
 test("idempotently interrupts expired active ownership", () => {
