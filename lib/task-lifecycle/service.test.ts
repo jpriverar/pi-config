@@ -690,6 +690,100 @@ test("session interruption returns retained conditions to waiting", async (t) =>
   }
 });
 
+test("interruption releases retained-condition worktrees before waiting", async (t) => {
+  for (const path of ["shutdown", "expiry"] as const) {
+    for (const kind of ["dependency", "check"] as const) {
+      await t.test(`${path} ${kind}`, async () => {
+        const { store, pool, sut } = await activeServiceWithPool();
+        const acquired = await sut.acquireWorktree(
+          {
+            taskId: "jp-1",
+            repository: "DataDog/dd-source",
+            branch: `jpriverar/${path}-${kind}`,
+          },
+          session("s1"),
+          `acquire-${path}-${kind}`,
+        );
+        const claimId = acquired.lifecycle!.resources[0].claimId;
+        store.saved.lifecycle = {
+          ...store.saved.lifecycle!,
+          waiting: { kind },
+          activeCheck: kind === "check" ? lifecycleCheck() : null,
+        };
+        store.saved.metadata = { piLifecycle: store.saved.lifecycle };
+        store.saved.dependencies =
+          kind === "dependency"
+            ? [{ id: "jp-blocker", status: "open", dependencyType: "blocks" }]
+            : [];
+
+        const saved =
+          path === "shutdown"
+            ? (await sut.interruptSession(session("s1"), "quit"))[0]
+            : await service(store, {
+                pool: pool as TaskLifecyclePoolPort,
+                now: () => NOW_MS + 6 * 60 * 60 * 1_000 + 1,
+              }).reconcileExecutionTimeout("jp-1", session("reconciler"));
+
+        assert.equal(saved.lifecycle?.phase, "waiting");
+        assert.equal(saved.lifecycle?.execution, null);
+        assert.equal(saved.status, kind === "check" ? "blocked" : "open");
+        assert.equal(saved.lifecycle?.resources[0].cleanupState, "released");
+        assert.equal(pool.entries.has(claimId), false);
+      });
+    }
+  }
+});
+
+test("cleanup refusal preserves retained-condition ownership during interruption", async (t) => {
+  for (const path of ["shutdown", "expiry"] as const) {
+    for (const kind of ["dependency", "check"] as const) {
+      await t.test(`${path} ${kind}`, async () => {
+        const { store, pool, sut } = await activeServiceWithPool();
+        const acquired = await sut.acquireWorktree(
+          {
+            taskId: "jp-1",
+            repository: "DataDog/dd-source",
+            branch: `jpriverar/refuse-${path}-${kind}`,
+          },
+          session("s1"),
+          `acquire-refuse-${path}-${kind}`,
+        );
+        const claimId = acquired.lifecycle!.resources[0].claimId;
+        store.saved.lifecycle = {
+          ...store.saved.lifecycle!,
+          waiting: { kind },
+          activeCheck: kind === "check" ? lifecycleCheck() : null,
+        };
+        store.saved.metadata = { piLifecycle: store.saved.lifecycle };
+        store.saved.dependencies =
+          kind === "dependency"
+            ? [{ id: "jp-blocker", status: "open", dependencyType: "blocks" }]
+            : [];
+        pool.refuseRelease = true;
+
+        const interrupt =
+          path === "shutdown"
+            ? () => sut.interruptSession(session("s1"), "quit")
+            : () =>
+                service(store, {
+                  pool: pool as TaskLifecyclePoolPort,
+                  now: () => NOW_MS + 6 * 60 * 60 * 1_000 + 1,
+                }).reconcileExecutionTimeout("jp-1", session("reconciler"));
+
+        await assert.rejects(interrupt(), /still owns worktree/);
+        assert.equal(store.saved.lifecycle?.phase, "active");
+        assert.equal(store.saved.lifecycle?.execution?.sessionId, "s1");
+        assert.equal(
+          store.saved.lifecycle?.resources[0].cleanupState,
+          "release_pending",
+        );
+        assert.equal(pool.entries.has(claimId), true);
+        assert.equal(pool.releaseCalls.length, 1);
+      });
+    }
+  }
+});
+
 test("deduplicates retried operations by explicit operation ID", async () => {
   const store = new FakeStore();
   const sut = service(store);

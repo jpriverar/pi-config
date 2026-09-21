@@ -652,6 +652,13 @@ export class TaskLifecycleService {
         continue;
       }
       const operationId = `execution-interrupted:${owner.sessionId}:${execution.expiresAt}`;
+      await this.releaseResources(
+        issue.id,
+        issue.lifecycle,
+        owner,
+        operationId,
+        owner.sessionId,
+      );
       results.push(
         await this.deps.store.mutate(issue.id, owner, (latestIssue) => {
           const lifecycle = requireManaged(latestIssue);
@@ -929,9 +936,25 @@ export class TaskLifecycleService {
     owner: LockOwner,
     operationId: string = this.deps.uuid(),
   ): Promise<Extract<PreparedWorktreeOperation, { mode: "release" }>> {
+    return this.prepareWorktreeReleaseForSession(
+      taskId,
+      claimId,
+      owner,
+      operationId,
+      owner.sessionId,
+    );
+  }
+
+  private async prepareWorktreeReleaseForSession(
+    taskId: string,
+    claimId: string,
+    owner: LockOwner,
+    operationId: string,
+    expectedSessionId: string,
+  ): Promise<Extract<PreparedWorktreeOperation, { mode: "release" }>> {
     const current = await this.deps.store.show(taskId);
     const lifecycle = requireManaged(current);
-    requireCurrentOwner(taskId, lifecycle, owner);
+    requireCurrentOwnerSession(taskId, lifecycle, expectedSessionId);
     const resource = lifecycle.resources.find(
       (candidate) => candidate.claimId === claimId,
     );
@@ -955,7 +978,7 @@ export class TaskLifecycleService {
     const now = this.nowIso();
     await this.deps.store.mutate(taskId, owner, (issue) => {
       const latest = requireManaged(issue);
-      requireCurrentOwner(taskId, latest, owner);
+      requireCurrentOwnerSession(taskId, latest, expectedSessionId);
       const next = beginWorktreeRelease(latest, {
         operationId,
         claimId,
@@ -996,6 +1019,22 @@ export class TaskLifecycleService {
     owner: LockOwner,
     operationId: string = this.deps.uuid(),
   ): Promise<LifecycleIssue> {
+    return this.releaseWorktreeForSession(
+      taskId,
+      claimId,
+      owner,
+      operationId,
+      owner.sessionId,
+    );
+  }
+
+  private async releaseWorktreeForSession(
+    taskId: string,
+    claimId: string,
+    owner: LockOwner,
+    operationId: string,
+    expectedSessionId: string,
+  ): Promise<LifecycleIssue> {
     const pool = this.requirePool();
     const before = requireManaged(await this.deps.store.show(taskId));
     const wasPending = before.resources.some(
@@ -1003,11 +1042,12 @@ export class TaskLifecycleService {
         resource.claimId === claimId &&
         resource.cleanupState === "release_pending",
     );
-    const prepared = await this.prepareWorktreeRelease(
+    const prepared = await this.prepareWorktreeReleaseForSession(
       taskId,
       claimId,
       owner,
       operationId,
+      expectedSessionId,
     );
     if (wasPending) {
       const matches = await exactClaimMatches(
@@ -1019,14 +1059,26 @@ export class TaskLifecycleService {
         throw new Error(`ambiguous worktree association for claim ${claimId}`);
       }
       if (matches.length === 0) {
-        return this.finalizeWorktreeRelease(prepared, owner);
+        return this.finishWorktreeRelease(
+          prepared.taskId,
+          owner,
+          prepared.operationId,
+          prepared.claimId,
+          expectedSessionId,
+        );
       }
     }
     const released = await pool.release(prepared.repository, claimId, owner);
     if (!released.released) {
       throw new Error(`worktree release refused for claim ${claimId}`);
     }
-    return this.finalizeWorktreeRelease(prepared, owner);
+    return this.finishWorktreeRelease(
+      prepared.taskId,
+      owner,
+      prepared.operationId,
+      prepared.claimId,
+      expectedSessionId,
+    );
   }
 
   async activeTasksForSession(sessionId: string): Promise<LifecycleIssue[]> {
@@ -1245,6 +1297,13 @@ export class TaskLifecycleService {
     }
     const now = this.nowIso();
     const operationId = `execution-interrupted:${execution.sessionId}:${execution.expiresAt}`;
+    await this.releaseResources(
+      taskId,
+      current.lifecycle!,
+      owner,
+      operationId,
+      execution.sessionId,
+    );
     return this.deps.store.mutate(taskId, owner, (issue) => {
       const lifecycle = requireManaged(issue);
       if (
@@ -1288,15 +1347,17 @@ export class TaskLifecycleService {
     lifecycle: LifecycleMetadataV1,
     owner: LockOwner,
     parentOperationId: string,
+    expectedSessionId: string = owner.sessionId,
   ): Promise<void> {
     for (const resource of lifecycle.resources) {
       if (resource.cleanupState === "released") continue;
       try {
-        await this.releaseWorktree(
+        await this.releaseWorktreeForSession(
           taskId,
           resource.claimId,
           owner,
           `${parentOperationId}:release:${resource.claimId}`,
+          expectedSessionId,
         );
       } catch {
         throw new Error(

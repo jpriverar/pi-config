@@ -317,10 +317,12 @@ PR-check limits. It creates no timer, watcher, or background process.
 
 Activity events rate-limit metadata writes while extending long-running leases.
 A `reload` shutdown preserves current ownership. Quit, new, resume, fork-style,
-and other shutdowns interrupt ownership: condition-free work returns to
-Actionable, while retained dependency or check work returns to Waiting. The
-transition records `execution_interrupted` once and retains resource evidence
-for handoff.
+and other shutdowns first release associated worktrees, then interrupt
+ownership: condition-free work returns to Actionable, while retained dependency
+or check work returns to Waiting. Expiry reconciliation uses the expired lease's
+session authority for the same cleanup. Cleanup refusal leaves the task Active
+with its execution lease and resource evidence intact. A successful transition
+records `execution_interrupted` once.
 
 ## Pool boundary and recovery
 
