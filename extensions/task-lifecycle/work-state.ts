@@ -1,6 +1,5 @@
 import {
   getMarkdownTheme,
-  type ExtensionAPI,
   type Theme,
   type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
@@ -11,8 +10,6 @@ import {
   wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
-
 import {
   classifyReadiness,
   createBeadsClient,
@@ -34,6 +31,38 @@ const STALE_DAYS = 30;
 const STALE_SHOW_CAP = 5;
 const STARTUP_ENTRY = "jp-work-startup";
 const MAX_HIDDEN_STATE_CHARS = 12_000;
+
+interface TaskWorkStateContext {
+  sessionManager: {
+    getBranch(): ReadonlyArray<{ type: string; customType?: string }>;
+    getEntries(): readonly unknown[];
+    getSessionName(): string | undefined;
+  };
+  ui: {
+    notify(message: string, type: "warning"): void;
+  };
+}
+
+export interface TaskWorkStateApi {
+  exec(
+    command: string,
+    args: string[],
+  ): Promise<{ code: number; stdout: string; stderr: string }>;
+  on(
+    event: string,
+    handler: (event: any, context: TaskWorkStateContext) => unknown,
+  ): void;
+  registerEntryRenderer<T>(
+    customType: string,
+    renderer: (
+      entry: { data?: T },
+      options: unknown,
+      theme: Theme,
+    ) => Component,
+  ): void;
+  appendEntry(customType: string, data: unknown): void;
+  sendMessage(message: unknown, options: unknown): void;
+}
 
 interface State {
   project?: string;
@@ -539,7 +568,7 @@ class StartupWorkTable implements Component {
   }
 }
 
-export default function jpWorkflow(pi: ExtensionAPI) {
+export function registerTaskWorkState(pi: TaskWorkStateApi): void {
   const client = createBeadsClient(async (command, args) => {
     const result = await pi.exec(command, [...args]);
     return {
@@ -612,19 +641,6 @@ export default function jpWorkflow(pi: ExtensionAPI) {
     };
   }
 
-  async function runMutation(
-    operation: string,
-    args: readonly string[],
-  ): Promise<string> {
-    const result = await client.runBd<unknown>(
-      operation,
-      [...args, "--json"],
-      (value) => value,
-    );
-    if (!result.ok) throw new Error(formatBeadsError(result.error));
-    return JSON.stringify(result.value, null, 2) ?? "null";
-  }
-
   pi.registerEntryRenderer<StartupWorkEntry>(
     STARTUP_ENTRY,
     (entry, _options, theme) => {
@@ -634,160 +650,6 @@ export default function jpWorkflow(pi: ExtensionAPI) {
       return new Markdown(entry.data?.markdown ?? "", 1, 0, getMarkdownTheme());
     },
   );
-
-  pi.registerTool({
-    name: "file_issue",
-    label: "File issue",
-    description: "Create an explicitly approved work item in the Beads store.",
-    promptSnippet: "Create an approved Beads work item",
-    promptGuidelines: [
-      "Use file_issue only after the user explicitly approves creating the work item; never turn optional ideas into tracked commitments.",
-    ],
-    parameters: Type.Object({
-      title: Type.String({ description: "One line, imperative." }),
-      why: Type.String({
-        description:
-          "Why this matters. Required — an issue that cannot justify itself in one line should not be filed.",
-      }),
-      workstream: Type.Optional(
-        Type.String({
-          description:
-            "Project label, for example 'recs-calibration'. Omit for inbox items.",
-        }),
-      ),
-      needs_jp: Type.Optional(
-        Type.Boolean({
-          description: "Set when this is blocked on the user personally.",
-        }),
-      ),
-    }),
-    async execute(_id, params) {
-      if (params.workstream?.includes(",")) {
-        throw new Error(
-          `workstream must not contain a comma: ${JSON.stringify(params.workstream)}`,
-        );
-      }
-      const labels: string[] = [];
-      if (params.workstream) labels.push(`workstream:${params.workstream}`);
-      if (params.needs_jp) labels.push("needs:jp");
-      const args = ["create", params.title, "-d", params.why];
-      if (labels.length > 0) args.push("-l", labels.join(","));
-      const output = await runMutation("create issue", args);
-      return {
-        content: [{ type: "text" as const, text: output }],
-        details: { params },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "update_issue",
-    label: "Update issue",
-    description:
-      "Change the status, labels, or notes of an existing Beads work item.",
-    promptSnippet: "Claim or update an existing Beads work item",
-    promptGuidelines: [
-      "Use update_issue to claim an approved item when substantial work starts, record meaningful phase changes, and mark blockers or deferrals.",
-    ],
-    parameters: Type.Object({
-      id: Type.String({ description: "Issue id, for example jp-abc." }),
-      status: Type.Optional(
-        Type.Union(
-          [
-            Type.Literal("open"),
-            Type.Literal("in_progress"),
-            Type.Literal("blocked"),
-            Type.Literal("deferred"),
-          ],
-          {
-            description:
-              "New status. Starting open work uses --claim; resuming blocked or deferred work preserves its assignment.",
-          },
-        ),
-      ),
-      add_labels: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "Labels to add. Repeatable.",
-        }),
-      ),
-      remove_labels: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "Labels to remove. Repeatable.",
-        }),
-      ),
-      note: Type.Optional(
-        Type.String({
-          description: "Appended to existing notes with a newline separator.",
-        }),
-      ),
-    }),
-    async execute(_id, params) {
-      const { id, status, add_labels, remove_labels, note } = params;
-      if (
-        status === undefined &&
-        !add_labels?.length &&
-        !remove_labels?.length &&
-        note === undefined
-      ) {
-        throw new Error(
-          `update_issue ${id}: no changes given — pass status, add_labels, remove_labels, or note`,
-        );
-      }
-      const args = ["update", id];
-      if (status === "in_progress") {
-        const resumable = await client.listIssues(["blocked", "deferred"]);
-        if (!resumable.ok) {
-          throw new Error(formatBeadsError(resumable.error));
-        }
-        if (resumable.value.some((issue) => issue.id === id)) {
-          args.push("-s", "in_progress");
-        } else {
-          args.push("--claim");
-        }
-      } else if (status !== undefined) args.push("-s", status);
-      for (const label of add_labels ?? []) args.push("--add-label", label);
-      for (const label of remove_labels ?? []) {
-        args.push("--remove-label", label);
-      }
-      if (note !== undefined) args.push("--append-notes", note);
-      const output = await runMutation("update issue", args);
-      return {
-        content: [{ type: "text" as const, text: output }],
-        details: { params },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "close_issue",
-    label: "Close issue",
-    description:
-      "Close a genuinely completed and verified Beads work item with a reason.",
-    promptSnippet: "Close a completed and verified Beads work item",
-    promptGuidelines: [
-      "Use close_issue only after the work item is genuinely complete and verified.",
-    ],
-    parameters: Type.Object({
-      id: Type.String({ description: "Issue id, for example jp-abc." }),
-      reason: Type.String({
-        description:
-          "Why this is done. Required — a close with no recorded reason is unrepresentable.",
-      }),
-    }),
-    async execute(_id, params) {
-      const output = await runMutation("close issue", [
-        "close",
-        params.id,
-        "-r",
-        params.reason,
-        "--suggest-next",
-      ]);
-      return {
-        content: [{ type: "text" as const, text: output }],
-        details: { params },
-      };
-    },
-  });
 
   pi.on("session_start", async (event, context) => {
     if (event.reason !== "startup" && event.reason !== "new") return;

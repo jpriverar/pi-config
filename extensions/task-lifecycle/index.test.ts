@@ -73,6 +73,7 @@ type Tool = {
 function harness() {
   const handlers = new Map<string, Handler[]>();
   const tools = new Map<string, Tool>();
+  const entryRenderers = new Map<string, Function>();
   const calls: Array<{ name: string; args: unknown[] }> = [];
   const guardState = {
     activeTasks: [] as LifecycleIssue[],
@@ -213,6 +214,10 @@ function harness() {
     registerTool(tool: Tool) {
       tools.set(tool.name, tool);
     },
+    registerEntryRenderer(type: string, renderer: Function) {
+      entryRenderers.set(type, renderer);
+    },
+    exec: async () => ({ code: 0, stdout: "[]", stderr: "" }),
   };
   createTaskLifecycleExtension({
     service,
@@ -228,6 +233,7 @@ function harness() {
     guardState,
     handlers,
     tools,
+    entryRenderers,
     context: {
       cwd: "/repo",
       sessionManager: { getSessionId: () => "session-1" },
@@ -264,8 +270,10 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
       "before_agent_start",
       "tool_call",
       "tool_result",
+      "session_compact",
     ],
   );
+  assert.equal(h.entryRenderers.has("jp-work-startup"), true);
   for (const tool of h.tools.values()) {
     assert.equal(tool.parameters.type, "object");
     assert.equal(tool.parameters.additionalProperties, false);

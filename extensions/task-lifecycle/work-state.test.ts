@@ -5,7 +5,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import type { BeadsIssue } from "../../lib/beads.js";
 import { SESSION_PROJECT_ENTRY_TYPE } from "../../lib/session-project.js";
-import jpWorkflow from "./index.js";
+import { registerTaskWorkState } from "./work-state.js";
 
 const store = "/tmp/personal/.beads";
 process.env.BEADS_DIR = store;
@@ -134,7 +134,7 @@ function createHarness(
     },
   };
 
-  jpWorkflow(pi as any);
+  registerTaskWorkState(pi as any);
 
   return {
     appended,
@@ -575,6 +575,41 @@ test("hidden context remains capped while the visible table remains complete", a
   assert.match(visible, /jp-11/);
 });
 
+function lifecycle(
+  phase: "actionable" | "active" | "waiting",
+  enteredAt: string,
+  activeCheck: any = null,
+): any {
+  return {
+    version: 1,
+    phase,
+    waiting:
+      phase === "waiting"
+        ? { kind: activeCheck ? "check" : "dependency" }
+        : null,
+    stateEnteredAt: enteredAt,
+    lastProgressAt: enteredAt,
+    execution:
+      phase === "active"
+        ? {
+            sessionId: "session-1",
+            claimedAt: enteredAt,
+            lastActivityAt: enteredAt,
+            expiresAt: new Date(
+              Date.parse(enteredAt) + 86_400_000,
+            ).toISOString(),
+            resourceSnapshot: { observedAt: enteredAt, resourceIds: [] },
+          }
+        : null,
+    artifacts: [],
+    activeCheck,
+    checkHistory: [],
+    transitionHistory: [],
+    resources: [],
+    disposition: null,
+  };
+}
+
 test("treats hostile task metadata as escaped non-instructional model data", async () => {
   const hostile = issue(
     "\u001b[31mjp-hostile\u001b[0m",
@@ -728,227 +763,6 @@ test("empty and unavailable Beads produce stable states without throwing", async
     assert.doesNotMatch(hidden.message.content, /SECRET TASK/);
   });
 });
-
-test("mutation tools preserve schemas, arguments, and decoded JSON output", async () => {
-  const responses = [
-    { id: "jp-new", title: "New task", status: "open" },
-    [],
-    [{ id: "jp-new", title: "New task", status: "in_progress" }],
-    [{ id: "jp-new", title: "New task", status: "closed" }],
-  ];
-  let response = 0;
-  const harness = createHarness({
-    exec: async () => ({
-      code: 0,
-      stdout: JSON.stringify(responses[response++]),
-      stderr: "",
-    }),
-  });
-  const file = harness.tools.get("file_issue");
-  const update = harness.tools.get("update_issue");
-  const close = harness.tools.get("close_issue");
-  assert.ok(file);
-  assert.ok(update);
-  assert.ok(close);
-
-  assert.deepEqual(file.parameters.required, ["title", "why"]);
-  assert.deepEqual(close.parameters.required, ["id", "reason"]);
-  assert.equal(
-    file.description,
-    "Create an explicitly approved work item in the Beads store.",
-  );
-  assert.equal(file.promptSnippet, "Create an approved Beads work item");
-  assert.deepEqual(file.promptGuidelines, [
-    "Use file_issue only after the user explicitly approves creating the work item; never turn optional ideas into tracked commitments.",
-  ]);
-  assert.equal(
-    update.description,
-    "Change the status, labels, or notes of an existing Beads work item.",
-  );
-  assert.equal(
-    update.promptSnippet,
-    "Claim or update an existing Beads work item",
-  );
-  assert.deepEqual(update.promptGuidelines, [
-    "Use update_issue to claim an approved item when substantial work starts, record meaningful phase changes, and mark blockers or deferrals.",
-  ]);
-  assert.equal(
-    close.description,
-    "Close a genuinely completed and verified Beads work item with a reason.",
-  );
-  assert.equal(
-    close.promptSnippet,
-    "Close a completed and verified Beads work item",
-  );
-  assert.deepEqual(close.promptGuidelines, [
-    "Use close_issue only after the work item is genuinely complete and verified.",
-  ]);
-
-  const filed = await file.execute("call-1", {
-    title: "New task",
-    why: "It matters",
-    workstream: "core",
-    needs_jp: true,
-  });
-  const updated = await update.execute("call-2", {
-    id: "jp-new",
-    status: "in_progress",
-  });
-  const closed = await close.execute("call-3", {
-    id: "jp-new",
-    reason: "Verified",
-  });
-
-  assert.deepEqual(harness.calls, [
-    {
-      command: "bd",
-      args: [
-        "create",
-        "New task",
-        "-d",
-        "It matters",
-        "-l",
-        "workstream:core,needs:jp",
-        "--json",
-        "--db",
-        store,
-      ],
-    },
-    {
-      command: "bd",
-      args: [
-        "list",
-        "-s",
-        "blocked,deferred",
-        "-n",
-        "0",
-        "--json",
-        "--db",
-        store,
-      ],
-    },
-    {
-      command: "bd",
-      args: ["update", "jp-new", "--claim", "--json", "--db", store],
-    },
-    {
-      command: "bd",
-      args: [
-        "close",
-        "jp-new",
-        "-r",
-        "Verified",
-        "--suggest-next",
-        "--json",
-        "--db",
-        store,
-      ],
-    },
-  ]);
-  assert.deepEqual(JSON.parse(filed.content[0].text), responses[0]);
-  assert.deepEqual(JSON.parse(updated.content[0].text), responses[2]);
-  assert.deepEqual(JSON.parse(closed.content[0].text), responses[3]);
-});
-
-test("update_issue resumes blocked and deferred issues without claiming them", async (t) => {
-  for (const status of ["blocked", "deferred"] as const) {
-    await t.test(status, async () => {
-      const id = `jp-${status}`;
-      const harness = createHarness({ issues: [issue(id, status)] });
-      const update = harness.tools.get("update_issue");
-      assert.ok(update);
-
-      await update.execute("call", { id, status: "in_progress" });
-
-      assert.deepEqual(harness.calls, [
-        {
-          command: "bd",
-          args: [
-            "list",
-            "-s",
-            "blocked,deferred",
-            "-n",
-            "0",
-            "--json",
-            "--db",
-            store,
-          ],
-        },
-        {
-          command: "bd",
-          args: ["update", id, "-s", "in_progress", "--json", "--db", store],
-        },
-      ]);
-    });
-  }
-});
-
-test("update_issue rejects an empty mutation without invoking Beads", async () => {
-  const harness = createHarness();
-  const update = harness.tools.get("update_issue");
-  assert.ok(update);
-
-  await assert.rejects(
-    update.execute("call", { id: "jp-1" }),
-    /update_issue jp-1: no changes given/,
-  );
-  assert.equal(harness.calls.length, 0);
-});
-
-test("mutation failures include operation and store but redact process output", async () => {
-  const sentinel = "SECRET TASK: customer incident";
-  const harness = createHarness({
-    exec: async () => ({ code: 2, stdout: "", stderr: sentinel }),
-  });
-  const file = harness.tools.get("file_issue");
-  assert.ok(file);
-
-  await assert.rejects(
-    file.execute("call", { title: "New", why: "Needed" }),
-    (error: Error) => {
-      assert.match(error.message, /create issue/);
-      assert.match(error.message, /\/tmp\/personal\/\.beads/);
-      assert.match(error.message, /bd exited with code 2/);
-      assert.doesNotMatch(error.message, /SECRET TASK/);
-      return true;
-    },
-  );
-});
-
-function lifecycle(
-  phase: "actionable" | "active" | "waiting",
-  enteredAt: string,
-  activeCheck: any = null,
-): any {
-  return {
-    version: 1,
-    phase,
-    waiting:
-      phase === "waiting"
-        ? { kind: activeCheck ? "check" : "dependency" }
-        : null,
-    stateEnteredAt: enteredAt,
-    lastProgressAt: enteredAt,
-    execution:
-      phase === "active"
-        ? {
-            sessionId: "session-1",
-            claimedAt: enteredAt,
-            lastActivityAt: enteredAt,
-            expiresAt: new Date(
-              Date.parse(enteredAt) + 86_400_000,
-            ).toISOString(),
-            resourceSnapshot: { observedAt: enteredAt, resourceIds: [] },
-          }
-        : null,
-    artifacts: [],
-    activeCheck,
-    checkHistory: [],
-    transitionHistory: [],
-    resources: [],
-    disposition: null,
-  };
-}
 
 test("renders explicit lifecycle sections and deterministic waiting details", async () => {
   const oneDayAgo = new Date(Date.now() - 86_400_000).toISOString();

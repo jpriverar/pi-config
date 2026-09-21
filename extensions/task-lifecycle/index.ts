@@ -5,6 +5,7 @@ import { hostname as readHostname } from "node:os";
 import { resolveBeadsDir, type BeadsExec } from "../../lib/beads.js";
 import type { AcquireResult } from "../worktree-pool/pool.js";
 import { loadWorktreePoolRuntime } from "../worktree-pool/runtime.js";
+import { registerTaskWorkState, type TaskWorkStateApi } from "./work-state.js";
 import { createLifecycleStore } from "../../lib/task-lifecycle/beads-store.js";
 import { createCheckAdapterRegistry } from "../../lib/task-lifecycle/checks.js";
 import { classifyTaskToolRequirement } from "../../lib/task-lifecycle/tool-guard.js";
@@ -250,7 +251,9 @@ const checkSchema = objectSchema(
 export function createTaskLifecycleExtension(
   deps: TaskLifecycleExtensionDependencies,
 ) {
-  return function taskLifecycleExtension(pi: ExtensionApi): void {
+  return function taskLifecycleExtension(
+    pi: ExtensionApi & TaskWorkStateApi,
+  ): void {
     const ownerFor = (context: ExtensionContext): LockOwner => ({
       pid: deps.pid,
       sessionId: context.sessionManager.getSessionId(),
@@ -752,6 +755,8 @@ export function createTaskLifecycleExtension(
         return lifecycleFinalizationError("release", operation);
       }
     });
+
+    registerTaskWorkState(pi);
   };
 }
 
@@ -982,7 +987,9 @@ function loadConfig(): LifecycleConfig {
   return record as unknown as LifecycleConfig;
 }
 
-export default function taskLifecycle(pi: ExtensionApi): void {
+export default function taskLifecycle(
+  pi: ExtensionApi & TaskWorkStateApi,
+): void {
   if (pi.exec === undefined) {
     throw new Error("task lifecycle requires Pi command execution");
   }

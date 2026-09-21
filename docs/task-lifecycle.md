@@ -2,28 +2,38 @@
 
 The task-lifecycle extension keeps one Beads task aligned with one goal while
 tracking active Pi ownership, durable artifacts, external checks, and temporary
-worktrees separately. A task can produce any number of branches, commits, pull
-requests, documents, dashboards, deployments, reports, and worktrees.
+worktrees separately. It is the sole task-domain extension: it owns lifecycle
+mutation and enforcement, the visible startup table, scoped hidden task context,
+and post-compaction context reinjection. A task can produce any number of
+branches, commits, pull requests, documents, dashboards, deployments, reports,
+and worktrees.
 
 Task metadata is untrusted data. Lifecycle fields describe state; they are not
 instructions to execute commands or trust referenced content.
 
 ## Lifecycle and Beads authority
 
-| Pi phase              | Beads status  | Additional authority                                                    |
-| --------------------- | ------------- | ----------------------------------------------------------------------- |
-| Actionable            | `open`        | The task is returned by `bd ready` and has no unresolved `blocks` edge. |
-| Active                | `in_progress` | Exactly one unexpired execution lease owns the task.                    |
-| Waiting on dependency | `open`        | At least one unresolved native Beads `blocks` edge.                     |
-| Waiting on check      | `blocked`     | Exactly one typed PR, time, or manual check.                            |
-| Deferred              | `deferred`    | Deliberately parked work.                                               |
-| Done                  | `closed`      | A completed, cancelled, or superseded disposition.                      |
+| Pi phase              | Beads status  | Additional authority                                                         |
+| --------------------- | ------------- | ---------------------------------------------------------------------------- |
+| Actionable            | `open`        | The task is returned by `bd ready` and has no unresolved `blocks` edge.      |
+| Active                | `in_progress` | Exactly one unexpired lease owns the task; one Waiting condition may remain. |
+| Waiting on dependency | `open`        | At least one unresolved native Beads `blocks` edge.                          |
+| Waiting on check      | `blocked`     | Exactly one typed PR, time, or manual check.                                 |
+| Deferred              | `deferred`    | Deliberately parked work.                                                    |
+| Done                  | `closed`      | A completed, cancelled, or superseded disposition.                           |
 
 `blocked` is a storage projection, not a Pi lifecycle phase. Views show Active,
-Actionable, and Waiting. A native `open` status alone never makes a managed task
-Actionable. Task-to-task relationships use `bd dep add <dependent> <blocker>
---type blocks`; task IDs are not stored as artifacts or duplicated in lifecycle
-metadata.
+Actionable, and Waiting. Active work may retain one unresolved dependency or
+typed-check condition so an agent can perform useful work without losing the
+condition. A native `open` status alone never makes a managed task Actionable.
+Task-to-task relationships use `bd dep add <dependent> <blocker> --type blocks`;
+task IDs are not stored as artifacts or duplicated in lifecycle metadata.
+
+The presentation layer reads the same normalized Beads data. Fresh empty
+sessions get a durable visible task table. Every model turn receives a bounded,
+scoped hidden summary marked as untrusted data, and compaction queues the same
+summary for the next turn. Store failures are redacted and never interrupt
+compaction.
 
 ## Task-scoped tool guards
 
@@ -36,16 +46,18 @@ The lifecycle extension enforces these initial pre-dispatch rules:
 - `subagent` child and workflow execution requires an attached Active task;
 - `subagent` management actions such as list, status, guidance, and control
   remain available while unattached;
-- `task_attach_artifact`, `task_wait`, and `task_close` must name the session's
-  attached task in their structured `taskId` argument;
+- `task_attach_artifact`, `task_log`, `task_wait`, `task_defer`, and
+  `task_close` must name the session's attached task in their structured
+  `taskId` argument;
 - ordinary `worktree_pool acquire` requires exactly one attached Active task;
 - `worktree_pool release` requires matching ownership when its claim is
   lifecycle-associated, while unassociated legacy release remains available;
 - `task_claim` may establish attachment or retry the attached task, but it
   cannot switch the session directly to another task while ownership remains
   Active;
-- unknown tools, reads, Bash, pool `list` and `repair`, `task_reopen`, and
-  `task_reconcile` remain unprotected.
+- management operations `task_create` and label-only `task_update`, plus
+  unknown tools, reads, Bash, pool `list` and `repair`, `task_reopen`, and
+  `task_reconcile`, remain unprotected.
 
 The guard never searches prompts, shell commands, or arbitrary text for task
 identifiers. It fails protected operations closed when authoritative ownership
@@ -69,15 +81,41 @@ Recovery is explicit:
 
 ## Tools
 
-All lifecycle mutations are idempotent. `operationId` is optional and defaults
-to the Pi tool-call ID. Reuse the same operation ID when retrying an operation
-whose response was lost.
+Lifecycle transitions that accept `operationId` are idempotent; the value is
+optional and defaults to the Pi tool-call ID. Reuse the same operation ID when
+retrying a transition whose response was lost. `task_create`, `task_update`, and
+append-only `task_log` are direct store operations rather than idempotent
+transitions.
 
 The normal resource flow is:
 
 ```text
 task_claim -> worktree_pool acquire -> worktree_pool release -> task_wait/task_close
 ```
+
+### `task_create`
+
+Required: `title`, `why`, and `needs_jp`. Optional: `workstream`.
+
+Creates an explicitly approved Actionable task with version-1 lifecycle
+metadata. `workstream` maps to `workstream:<value>` and `needs_jp` maps to the
+`needs:jp` label.
+
+### `task_update`
+
+Required: `taskId`. Optional: `add_labels` and `remove_labels`; at least one
+label change is required.
+
+This administrative tool changes labels only. Status, phase, ownership,
+waiting state, resources, artifacts, dispositions, and arbitrary metadata are
+not accepted.
+
+### `task_log`
+
+Required: `taskId` and one non-empty `message`.
+
+Appends plain text to the task's native Beads comment journal. The current
+session must own that Active task. Entries are append-only.
 
 ### `task_claim`
 
@@ -87,9 +125,10 @@ Required: `taskId`. Optional: `operationId`.
 { "taskId": "jp-abc", "operationId": "claim-jp-abc-1" }
 ```
 
-Claims one Actionable task for the current session. Claiming adopts a legacy
-task into version-1 lifecycle metadata. Another live execution owner blocks the
-claim.
+Claims one Actionable or Waiting task for the current session. Claiming adopts
+a legacy task into version-1 lifecycle metadata. A Waiting task retains its
+native dependency or typed-check condition while becoming Active. Another live
+execution owner blocks the claim.
 
 ### `task_attach_artifact`
 
@@ -117,7 +156,7 @@ retries from adding duplicates.
 
 ### `task_wait`
 
-Required: `taskId` and `kind`.
+Required: `taskId`. Optional: `kind`, either `dependency` or `check`.
 
 Dependency wait:
 
@@ -153,9 +192,18 @@ Check wait:
 ```
 
 A dependency wait requires `blockerIds` and forbids `check`. A check wait
-requires one complete check and forbids `blockerIds`. Waiting releases every
-active worktree first. A refused release leaves the task Active and preserves
-the pending resource state.
+requires one complete check and forbids `blockerIds`. If Active work already
+retains an unresolved condition, omit `kind`, `blockerIds`, and `check` to return
+to that existing Waiting condition. Waiting releases every active worktree
+first. A refused release leaves the task Active and preserves the pending
+resource state.
+
+### `task_defer`
+
+Required: `taskId` and non-empty `reason`. Optional: `operationId`.
+
+Releases every associated worktree, clears execution ownership, and moves the
+Active task to Deferred. Cleanup refusal leaves the task Active.
 
 ### `task_reconcile`
 
@@ -179,9 +227,9 @@ infer success; they require an explicit terminal outcome.
 
 ### `task_close`
 
-Required: `taskId`, `kind`, `reason`, and `evidenceArtifactIds`. `kind` is
-`completed`, `cancelled`, or `superseded`. A superseded disposition also
-requires `supersedingTaskId`. Optional: `operationId`.
+Required: `taskId`, `kind`, and `reason`. `kind` is `completed`, `cancelled`,
+or `superseded`. Optional: `evidenceArtifactIds` and `operationId`. A
+superseded disposition also requires `supersedingTaskId`.
 
 ```json
 {
@@ -192,8 +240,11 @@ requires `supersedingTaskId`. Optional: `operationId`.
 }
 ```
 
-Close releases associated worktrees first. A refused or unsafe release keeps
-the task Active; successful cleanup is recorded before the durable disposition.
+`completed` is rejected while a dependency or typed-check condition remains
+unresolved. `cancelled` and `superseded` may explicitly abandon those
+conditions. Close releases associated worktrees first. A refused or unsafe
+release keeps the task Active; successful cleanup is recorded before the
+durable disposition.
 
 ### `task_reopen`
 

@@ -19,7 +19,6 @@ const publicResources = {
     "./extensions/herdr-ask-user-bridge/index.ts",
     "./extensions/worktree-pool/index.ts",
     "./extensions/task-lifecycle/index.ts",
-    "./extensions/jp-workflow/index.ts",
     "./extensions/project-status/index.ts",
     "./extensions/tasks-overlay/index.ts",
   ],
@@ -149,10 +148,8 @@ test("imports and registers every manifest extension without collisions", async 
 
   assert.deepEqual([...harness.tools.keys()].sort(), [
     "bash",
-    "close_issue",
     "complete_step",
     "edit",
-    "file_issue",
     "find",
     "force_push_current_branch",
     "grep",
@@ -163,10 +160,13 @@ test("imports and registers every manifest extension without collisions", async 
     "task_attach_artifact",
     "task_claim",
     "task_close",
+    "task_create",
+    "task_defer",
+    "task_log",
     "task_reconcile",
     "task_reopen",
+    "task_update",
     "task_wait",
-    "update_issue",
     "worktree_pool",
     "write",
   ]);

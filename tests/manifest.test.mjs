@@ -14,7 +14,6 @@ const expectedExtensions = [
   "./extensions/herdr-ask-user-bridge/index.ts",
   "./extensions/worktree-pool/index.ts",
   "./extensions/task-lifecycle/index.ts",
-  "./extensions/jp-workflow/index.ts",
   "./extensions/project-status/index.ts",
   "./extensions/tasks-overlay/index.ts",
 ];

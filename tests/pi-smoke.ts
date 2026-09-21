@@ -38,7 +38,8 @@ const publicManifest = {
     "./extensions/plan-progress/index.ts",
     "./extensions/styled-editor/index.ts",
     "./extensions/herdr-ask-user-bridge/index.ts",
-    "./extensions/jp-workflow/index.ts",
+    "./extensions/worktree-pool/index.ts",
+    "./extensions/task-lifecycle/index.ts",
     "./extensions/project-status/index.ts",
     "./extensions/tasks-overlay/index.ts",
   ],
@@ -150,28 +151,40 @@ if (command === "list") {
   if (clean[1] === "MALFORMED") process.stdout.write("not-json");
   else {
     const labelIndex = clean.indexOf("-l");
+    const metadataIndex = clean.indexOf("--metadata");
     const issue = {
       id: "jp-" + state.next++,
       title: clean[1],
       status: "open",
       labels: labelIndex === -1 ? [] : clean[labelIndex + 1].split(","),
+      metadata: metadataIndex === -1 ? {} : JSON.parse(clean[metadataIndex + 1]),
     };
     state.issues.push(issue);
     save();
     output(issue);
   }
+} else if (command === "show") {
+  const issue = state.issues.find((candidate) => candidate.id === clean[1]);
+  if (!issue) process.exit(2);
+  output([issue]);
 } else if (command === "update") {
   const issue = state.issues.find((candidate) => candidate.id === clean[1]);
   if (!issue) process.exit(2);
   if (clean.includes("--claim")) issue.status = "in_progress";
   const statusIndex = clean.indexOf("-s");
   if (statusIndex !== -1) issue.status = clean[statusIndex + 1];
+  const metadataIndex = clean.indexOf("--metadata");
+  if (metadataIndex !== -1) issue.metadata = JSON.parse(clean[metadataIndex + 1]);
   for (let index = 0; index < clean.length; index++) {
     if (clean[index] === "--add-label") issue.labels.push(clean[index + 1]);
     if (clean[index] === "--remove-label") issue.labels = issue.labels.filter((label) => label !== clean[index + 1]);
   }
   save();
   output([issue]);
+} else if (command === "comments" && clean[1] === "add") {
+  const issue = state.issues.find((candidate) => candidate.id === clean[2]);
+  if (!issue) process.exit(2);
+  output({ id: "comment-1" });
 } else if (command === "close") {
   const issue = state.issues.find((candidate) => candidate.id === clean[1]);
   if (!issue) process.exit(2);
@@ -779,7 +792,7 @@ async function invokeTool(
   const tool = harness.tools.get(name);
   assert.ok(tool, `${name} registered`);
   return tool.execute(
-    "smoke-call",
+    `smoke-${name}`,
     params,
     new AbortController().signal,
     undefined,
@@ -794,24 +807,36 @@ async function verifyContractHarness(
 ) {
   const harness = await createContractHarness(packagePath, cwd, fakeBd);
 
-  const filed = await invokeTool(harness, "file_issue", {
+  const filed = await invokeTool(harness, "task_create", {
     title: "Release fixture",
     why: "Exercise package behavior",
     workstream: "public",
+    needs_jp: false,
   });
-  const created = JSON.parse(filed.content[0].text);
+  const created = filed.details;
   assert.equal(created.status, "open");
-  const updated = await invokeTool(harness, "update_issue", {
-    id: created.id,
-    status: "in_progress",
+  assert.equal(created.lifecycle.phase, "actionable");
+  const claimed = await invokeTool(harness, "task_claim", {
+    taskId: created.id,
+  });
+  assert.equal(claimed.details.status, "in_progress");
+  const updated = await invokeTool(harness, "task_update", {
+    taskId: created.id,
     add_labels: ["verified"],
   });
-  assert.equal(JSON.parse(updated.content[0].text)[0].status, "in_progress");
-  const closed = await invokeTool(harness, "close_issue", {
-    id: created.id,
-    reason: "Smoke verified",
+  assert.ok(updated.details.metadata.piLifecycle);
+  const logged = await invokeTool(harness, "task_log", {
+    taskId: created.id,
+    message: "Package smoke verified the active task.",
   });
-  assert.equal(JSON.parse(closed.content[0].text)[0].status, "closed");
+  assert.equal(logged.details.lifecycle.phase, "active");
+  const closed = await invokeTool(harness, "task_close", {
+    taskId: created.id,
+    kind: "completed",
+    reason: "Smoke verified",
+    evidenceArtifactIds: [],
+  });
+  assert.equal(closed.details.status, "closed");
   assert.ok(
     harness.execCalls.every(
       (call) =>
@@ -822,12 +847,13 @@ async function verifyContractHarness(
     ),
   );
   await assert.rejects(
-    invokeTool(harness, "file_issue", {
+    invokeTool(harness, "task_create", {
       title: "MALFORMED",
       why: "Exercise contextual decoding error",
+      needs_jp: false,
     }),
     (error: Error) => {
-      assert.match(error.message, /create issue/);
+      assert.match(error.message, /create task/);
       assert.match(error.message, /bd returned malformed JSON/);
       assert.match(
         error.message,

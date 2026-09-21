@@ -59,9 +59,10 @@ Task data is read from `BEADS_DIR`. When it is unset, the package uses
 `$HOME/beads/.beads`. Create and manage that store with `bd`; task state is not
 included in this package.
 
-Before model turns, the workflow sends scoped task IDs, titles, explicit
-Active/Actionable/Waiting state, dependency authority, and compact lifecycle
-warnings from the Beads store to the configured model as hidden context.
+Before model turns, the `task-lifecycle` extension sends scoped task IDs,
+titles, explicit Active/Actionable/Waiting state, dependency authority, and
+compact lifecycle warnings from the Beads store to the configured model as
+hidden context.
 Compaction refreshes the same bounded context for the next turn. The values are
 normalized and explicitly marked as untrusted data rather than instructions,
 but they are still disclosed to the model. Only put task data in the configured
@@ -75,9 +76,10 @@ read-only migration report.
 
 The package manifest loads:
 
-- ten extensions for compact built-in tools, safe force pushes, permission
+- nine extensions for compact built-in tools, safe force pushes, permission
   gates, plan and spec progress, the styled editor, Herdr blocked-state mapping,
-  bounded worktree allocation, task workflow, project status, and `/tasks`;
+  bounded worktree allocation, lifecycle-safe task mutation and presentation,
+  project status, and `/tasks`;
 - four skill roots: critical review, collaborative thinking, handoffs, and the
   Thermo-Nuclear code-quality review;
 - the `modus-vivendi-tinted` and `gold-rush` themes.
