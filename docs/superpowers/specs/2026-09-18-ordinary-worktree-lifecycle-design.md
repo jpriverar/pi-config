@@ -1,6 +1,6 @@
 # Ordinary Worktree Lifecycle Coordination
 
-**Status:** Approved by JP on 2026-09-18
+**Status:** Approved by JP on 2026-09-18; acquire coordination amended by `2026-09-21-observer-worktree-lifecycle-design.md`
 
 **Work item:** `jp-fudp`
 
