@@ -77,6 +77,8 @@ Stop registering these agent-facing tools:
 
 Their lower-level Beads operations may remain internal implementation details. Prompts, tests, and package contracts must reference only the `task_*` surface.
 
+After moving its work-state presentation behavior, delete the entire `extensions/jp-workflow` extension and remove it from the package manifest. Preserve its visible startup table, scoped hidden task context, and post-compaction context reinjection inside a focused module registered by `task-lifecycle`.
+
 Existing legacy tasks do not require a bulk rewrite. They enter managed execution through the existing claim/adoption path. `task_update` may modify their labels without adopting them. A legacy task must be claimed before it can be logged, deferred, waited, or manually closed.
 
 ## Working on Waiting tasks
@@ -108,7 +110,8 @@ All close dispositions continue releasing associated worktrees before changing t
 
 - Extend `lib/task-lifecycle` store, model, and service methods rather than adding a second task subsystem.
 - Register all public mutation tools in `extensions/task-lifecycle`.
-- Remove only the three retired registrations from `extensions/jp-workflow`; keep unrelated workflow behavior.
+- Move the work-state renderer and hooks into a focused module under `extensions/task-lifecycle`; keep `index.ts` as the composition boundary.
+- Delete `extensions/jp-workflow` and remove its package, smoke-test, and manifest registrations.
 - Extend task-tool classification for `task_log` and `task_defer` same-task ownership.
 - Keep `task_update` lifecycle-neutral and field-whitelisted.
 - Use native Beads comments for `task_log`.
@@ -126,8 +129,9 @@ Focused tests must cover:
 6. returning Active work to a retained Waiting condition;
 7. completed-close refusal with unresolved conditions;
 8. cancelled and superseded close with unresolved conditions;
-9. absence of retired tools from registration and package contracts;
-10. existing lifecycle, worktree, adapter, manifest, portability, formatting, typecheck, and repository test gates.
+9. unchanged startup rendering, scoped hidden context, and post-compaction reinjection after relocation;
+10. absence of retired tools and the `jp-workflow` extension from registration and package contracts;
+11. existing lifecycle, worktree, adapter, manifest, portability, formatting, typecheck, and repository test gates.
 
 ## Rollout
 
