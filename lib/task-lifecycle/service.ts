@@ -34,6 +34,7 @@ import type {
   ArtifactInput,
   CreateTaskInput,
   Disposition,
+  ExecutionLease,
   LifecycleCheck,
   LifecycleIssue,
   LifecycleMetadataV1,
@@ -83,6 +84,11 @@ export interface ReconcileLimits {
 }
 
 export type CloseDispositionInput = Omit<Disposition, "at">;
+
+type ExecutionLeaseIdentity = Pick<
+  ExecutionLease,
+  "sessionId" | "claimedAt" | "expiresAt"
+>;
 
 export function normalizeLabelUpdate(
   input: UpdateTaskLabelsInput,
@@ -603,6 +609,7 @@ export class TaskLifecycleService {
       if (
         issue.lifecycle?.phase !== "active" ||
         execution?.sessionId !== owner.sessionId ||
+        expiryCleanupReservation(issue.lifecycle) !== null ||
         nowMs - Date.parse(execution.lastActivityAt) < interval
       ) {
         continue;
@@ -612,6 +619,15 @@ export class TaskLifecycleService {
         await this.deps.store.mutate(issue.id, owner, (latestIssue) => {
           const lifecycle = requireManaged(latestIssue);
           requireCurrentOwner(issue.id, lifecycle, owner);
+          const reservation = expiryCleanupReservation(lifecycle);
+          if (reservation !== null) {
+            return this.mutation(
+              latestIssue,
+              `${reservation.operationId}:release-pending`,
+              latestIssue.status,
+              lifecycle,
+            );
+          }
           const currentExecution = lifecycle.execution!;
           const next = recordCheckObservation(
             {
@@ -951,10 +967,16 @@ export class TaskLifecycleService {
     owner: LockOwner,
     operationId: string,
     expectedSessionId: string,
+    expectedLease?: ExecutionLeaseIdentity,
   ): Promise<Extract<PreparedWorktreeOperation, { mode: "release" }>> {
     const current = await this.deps.store.show(taskId);
     const lifecycle = requireManaged(current);
-    requireCurrentOwnerSession(taskId, lifecycle, expectedSessionId);
+    requireCleanupAuthority(
+      taskId,
+      lifecycle,
+      expectedSessionId,
+      expectedLease,
+    );
     const resource = lifecycle.resources.find(
       (candidate) => candidate.claimId === claimId,
     );
@@ -978,7 +1000,7 @@ export class TaskLifecycleService {
     const now = this.nowIso();
     await this.deps.store.mutate(taskId, owner, (issue) => {
       const latest = requireManaged(issue);
-      requireCurrentOwnerSession(taskId, latest, expectedSessionId);
+      requireCleanupAuthority(taskId, latest, expectedSessionId, expectedLease);
       const next = beginWorktreeRelease(latest, {
         operationId,
         claimId,
@@ -1034,6 +1056,7 @@ export class TaskLifecycleService {
     owner: LockOwner,
     operationId: string,
     expectedSessionId: string,
+    expectedLease?: ExecutionLeaseIdentity,
   ): Promise<LifecycleIssue> {
     const pool = this.requirePool();
     const before = requireManaged(await this.deps.store.show(taskId));
@@ -1048,6 +1071,7 @@ export class TaskLifecycleService {
       owner,
       operationId,
       expectedSessionId,
+      expectedLease,
     );
     if (wasPending) {
       const matches = await exactClaimMatches(
@@ -1065,6 +1089,7 @@ export class TaskLifecycleService {
           prepared.operationId,
           prepared.claimId,
           expectedSessionId,
+          expectedLease,
         );
       }
     }
@@ -1078,6 +1103,7 @@ export class TaskLifecycleService {
       prepared.operationId,
       prepared.claimId,
       expectedSessionId,
+      expectedLease,
     );
   }
 
@@ -1167,11 +1193,12 @@ export class TaskLifecycleService {
     operationId: string,
     claimId: string,
     expectedSessionId: string = owner.sessionId,
+    expectedLease?: ExecutionLeaseIdentity,
   ): Promise<LifecycleIssue> {
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
       const latest = requireManaged(issue);
-      requireCurrentOwnerSession(taskId, latest, expectedSessionId);
+      requireCleanupAuthority(taskId, latest, expectedSessionId, expectedLease);
       const next = completeWorktreeRelease(latest, {
         operationId,
         claimId,
@@ -1303,6 +1330,7 @@ export class TaskLifecycleService {
       owner,
       operationId,
       execution.sessionId,
+      execution,
     );
     return this.deps.store.mutate(taskId, owner, (issue) => {
       const lifecycle = requireManaged(issue);
@@ -1348,6 +1376,7 @@ export class TaskLifecycleService {
     owner: LockOwner,
     parentOperationId: string,
     expectedSessionId: string = owner.sessionId,
+    expectedLease?: ExecutionLeaseIdentity,
   ): Promise<void> {
     for (const resource of lifecycle.resources) {
       if (resource.cleanupState === "released") continue;
@@ -1358,6 +1387,7 @@ export class TaskLifecycleService {
           owner,
           `${parentOperationId}:release:${resource.claimId}`,
           expectedSessionId,
+          expectedLease,
         );
       } catch {
         throw new Error(
@@ -1401,6 +1431,40 @@ function requireManaged(issue: LifecycleIssue): LifecycleMetadataV1 {
     throw new Error(`task ${issue.id} has no valid piLifecycle metadata`);
   }
   return issue.lifecycle;
+}
+
+function expiryCleanupReservation(
+  lifecycle: LifecycleMetadataV1,
+): WorktreeResource | null {
+  if (lifecycle.phase !== "active" || lifecycle.execution === null) return null;
+  const prefix = `execution-interrupted:${lifecycle.execution.sessionId}:${lifecycle.execution.expiresAt}:release:`;
+  return (
+    lifecycle.resources.find(
+      (resource) =>
+        resource.cleanupState === "release_pending" &&
+        resource.operationId.startsWith(prefix),
+    ) ?? null
+  );
+}
+
+function requireCleanupAuthority(
+  taskId: string,
+  lifecycle: LifecycleMetadataV1,
+  expectedSessionId: string,
+  expectedLease?: ExecutionLeaseIdentity,
+): void {
+  requireCurrentOwnerSession(taskId, lifecycle, expectedSessionId);
+  if (expectedLease === undefined) return;
+  const execution = lifecycle.execution!;
+  if (
+    execution.sessionId !== expectedLease.sessionId ||
+    execution.claimedAt !== expectedLease.claimedAt ||
+    execution.expiresAt !== expectedLease.expiresAt
+  ) {
+    throw new Error(
+      `task ${safeIdentifier(taskId)} execution lease changed before cleanup`,
+    );
+  }
 }
 
 function requireCurrentOwner(

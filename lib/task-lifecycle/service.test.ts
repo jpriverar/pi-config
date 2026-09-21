@@ -784,6 +784,84 @@ test("cleanup refusal preserves retained-condition ownership during interruption
   }
 });
 
+test("expiry cleanup does not release a concurrently renewed lease", async () => {
+  const { store, pool, sut } = await activeServiceWithPool();
+  const acquired = await sut.acquireWorktree(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: "jpriverar/renew-before-cleanup",
+    },
+    session("s1"),
+    "acquire-renew-before-cleanup",
+  );
+  const claimId = acquired.lifecycle!.resources[0].claimId;
+  const renewedExpiresAt = new Date(
+    NOW_MS + 12 * 60 * 60 * 1_000,
+  ).toISOString();
+  store.beforeMutate = () => {
+    store.saved.lifecycle = {
+      ...store.saved.lifecycle!,
+      execution: {
+        ...store.saved.lifecycle!.execution!,
+        lastActivityAt: new Date(NOW_MS + 6 * 60 * 60 * 1_000).toISOString(),
+        expiresAt: renewedExpiresAt,
+      },
+    };
+    store.saved.metadata = { piLifecycle: store.saved.lifecycle };
+  };
+
+  await assert.rejects(
+    service(store, {
+      pool: pool as TaskLifecyclePoolPort,
+      now: () => NOW_MS + 6 * 60 * 60 * 1_000 + 1,
+    }).reconcileExecutionTimeout("jp-1", session("reconciler")),
+    /still owns worktree/,
+  );
+
+  assert.equal(store.saved.lifecycle?.phase, "active");
+  assert.equal(store.saved.lifecycle?.execution?.expiresAt, renewedExpiresAt);
+  assert.equal(store.saved.lifecycle?.resources[0].cleanupState, "active");
+  assert.equal(pool.entries.has(claimId), true);
+  assert.equal(pool.releaseCalls.length, 0);
+});
+
+test("expiry cleanup reservation suppresses concurrent activity renewal", async () => {
+  const { store, pool, sut } = await activeServiceWithPool();
+  const acquired = await sut.acquireWorktree(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: "jpriverar/renew-after-reservation",
+    },
+    session("s1"),
+    "acquire-renew-after-reservation",
+  );
+  const claimId = acquired.lifecycle!.resources[0].claimId;
+  const expiredNow = NOW_MS + 6 * 60 * 60 * 1_000 + 1;
+  const renewer = service(store, {
+    pool: pool as TaskLifecyclePoolPort,
+    now: () => expiredNow,
+    activityWriteIntervalMs: 0,
+  });
+  let refreshResults = -1;
+  pool.onRelease = async () => {
+    refreshResults = (await renewer.refreshSessionActivity(session("s1")))
+      .length;
+  };
+
+  const saved = await service(store, {
+    pool: pool as TaskLifecyclePoolPort,
+    now: () => expiredNow,
+  }).reconcileExecutionTimeout("jp-1", session("reconciler"));
+
+  assert.equal(refreshResults, 0);
+  assert.equal(saved.lifecycle?.phase, "actionable");
+  assert.equal(saved.lifecycle?.execution, null);
+  assert.equal(saved.lifecycle?.resources[0].cleanupState, "released");
+  assert.equal(pool.entries.has(claimId), false);
+});
+
 test("deduplicates retried operations by explicit operation ID", async () => {
   const store = new FakeStore();
   const sut = service(store);
@@ -874,7 +952,7 @@ test("keeps phase and ownership active when resource release fails", async () =>
 
 class FakeTaskPool {
   onAcquire?: () => void;
-  onRelease?: () => void;
+  onRelease?: () => void | Promise<void>;
   refuseRelease = false;
   duplicateClaims = false;
   acquireCalls: Array<{
@@ -980,7 +1058,7 @@ class FakeTaskPool {
     claimId: string,
     owner: OwnerIdentity,
   ): Promise<ReleaseResult> {
-    this.onRelease?.();
+    await this.onRelease?.();
     this.releaseCalls.push({ repository, claimId, owner });
     const entry = this.entries.get(claimId);
     if (!this.refuseRelease) this.entries.delete(claimId);

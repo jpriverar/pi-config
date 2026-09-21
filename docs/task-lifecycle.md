@@ -319,10 +319,11 @@ Activity events rate-limit metadata writes while extending long-running leases.
 A `reload` shutdown preserves current ownership. Quit, new, resume, fork-style,
 and other shutdowns first release associated worktrees, then interrupt
 ownership: condition-free work returns to Actionable, while retained dependency
-or check work returns to Waiting. Expiry reconciliation uses the expired lease's
-session authority for the same cleanup. Cleanup refusal leaves the task Active
-with its execution lease and resource evidence intact. A successful transition
-records `execution_interrupted` once.
+or check work returns to Waiting. Expiry reconciliation reserves cleanup against
+the exact expired lease; a concurrent renewal cancels cleanup, while activity
+cannot renew a lease after its cleanup reservation is persisted. Cleanup refusal
+leaves the task Active with its execution lease and resource evidence intact. A
+successful transition records `execution_interrupted` once.
 
 ## Pool boundary and recovery
 
