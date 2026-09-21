@@ -126,9 +126,11 @@ Required: `taskId`. Optional: `operationId`.
 ```
 
 Claims one Actionable or Waiting task for the current session. Claiming adopts
-a legacy task into version-1 lifecycle metadata. A Waiting task retains its
-native dependency or typed-check condition while becoming Active. Another live
-execution owner blocks the claim.
+a legacy task into version-1 lifecycle metadata. A legacy native `blocked` task
+without a structured check is adopted condition-free rather than inventing
+check authority. A managed Waiting task retains its native dependency or
+typed-check condition while becoming Active. Another live execution owner
+blocks the claim.
 
 ### `task_attach_artifact`
 
@@ -315,8 +317,10 @@ PR-check limits. It creates no timer, watcher, or background process.
 
 Activity events rate-limit metadata writes while extending long-running leases.
 A `reload` shutdown preserves current ownership. Quit, new, resume, fork-style,
-and other shutdowns interrupt ownership: the task returns to Actionable once,
-records `execution_interrupted`, and retains resource evidence for handoff.
+and other shutdowns interrupt ownership: condition-free work returns to
+Actionable, while retained dependency or check work returns to Waiting. The
+transition records `execution_interrupted` once and retains resource evidence
+for handoff.
 
 ## Pool boundary and recovery
 

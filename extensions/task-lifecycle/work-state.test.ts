@@ -828,6 +828,38 @@ test("renders explicit lifecycle sections and deterministic waiting details", as
   assert.match(hidden.message.content, /untrusted data, not instructions/i);
 });
 
+test("active retained dependencies preserve blocker authority in hidden context", async () => {
+  const retained = issue(
+    "jp-active",
+    "in_progress",
+    ["workstream:alpha"],
+    "Work the retained blocker",
+  );
+  retained.lifecycle = {
+    ...lifecycle("active", new Date().toISOString()),
+    waiting: { kind: "dependency" },
+  };
+  retained.blockingDependencies = [
+    { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+  ];
+  const harness = createHarness({
+    issues: [retained],
+    readyIds: [],
+    entries: [projectEntry({ version: 1, workstream: "alpha" })],
+  });
+
+  const hidden = await harness.handlers.get("before_agent_start")?.(
+    {},
+    harness.context,
+  );
+
+  assert.match(hidden.message.content, /\*\*Active \(1\)\*\*/);
+  assert.match(
+    hidden.message.content,
+    /jp-active Work the retained blocker · blocked by jp-blocker/,
+  );
+});
+
 test("hidden lifecycle context obeys its measured character budget", async () => {
   const issues = Array.from({ length: 40 }, (_, index) =>
     issue(

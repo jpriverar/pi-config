@@ -588,7 +588,8 @@ export async function listClassifiedIssues(
   for (const issue of listed.value) {
     const needsBlockers =
       issue.lifecycle?.phase === "actionable" ||
-      (issue.lifecycle?.phase === "waiting" &&
+      ((issue.lifecycle?.phase === "waiting" ||
+        issue.lifecycle?.phase === "active") &&
         issue.lifecycle.waiting?.kind === "dependency");
     if (!needsBlockers) {
       enriched.push(issue);

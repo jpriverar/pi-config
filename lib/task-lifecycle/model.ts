@@ -228,6 +228,10 @@ function validateActiveCondition(
       lifecycle.activeCheck === null,
       "active work without a waiting condition must not retain an active check",
     );
+    requireInvariant(
+      unresolvedBlockers.length === 0,
+      "active work without a waiting condition must not have unresolved blockers",
+    );
     return;
   }
   if (lifecycle.waiting.kind === "dependency") {
@@ -291,8 +295,7 @@ export function adoptLegacyLifecycle(
   } else if (issue.status === "deferred") {
     phase = "deferred";
   } else if (issue.status === "blocked") {
-    phase = "waiting";
-    waiting = { kind: "check" };
+    phase = "actionable";
     warnings.push("legacy blocked issue has no structured check");
   } else if (issue.status === "in_progress") {
     phase = "actionable";
@@ -585,12 +588,14 @@ export function interruptLifecycle(
     `execution belongs to session ${state.execution.sessionId}, not ${input.expectedSessionId}`,
   );
   const execution = state.execution;
+  const phase: LifecyclePhase =
+    state.waiting === null ? "actionable" : "waiting";
   return transition(
     { ...state, execution: null },
     input.operationId,
     "execution_interrupted",
     input.now,
-    "actionable",
+    phase,
     {
       sessionId: execution.sessionId,
       reason: `last activity ${execution.lastActivityAt}; observed ${input.now}`,

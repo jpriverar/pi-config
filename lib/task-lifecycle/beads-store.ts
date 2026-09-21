@@ -286,17 +286,25 @@ export function createLifecycleStore(
   async function addBlocker(
     dependentId: string,
     blockerId: string,
+    owner: LockOwner,
   ): Promise<void> {
     assertIdentifier(dependentId, "dependent issue id");
     assertIdentifier(blockerId, "blocker issue id");
-    await execute(`add blocker ${blockerId} to ${dependentId}`, [
-      "dep",
-      "add",
-      dependentId,
-      blockerId,
-      "--type",
-      "blocks",
-    ]);
+    await withFileOperationLock(
+      join(store, "pi-task-lifecycle"),
+      owner,
+      async () => {
+        await execute(`add blocker ${blockerId} to ${dependentId}`, [
+          "dep",
+          "add",
+          dependentId,
+          blockerId,
+          "--type",
+          "blocks",
+        ]);
+      },
+      lockDependencies,
+    );
   }
 
   return {

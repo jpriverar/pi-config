@@ -211,7 +211,11 @@ export interface LifecycleStore {
     owner: LockOwner,
     operation: (issue: LifecycleIssue) => Mutation,
   ): Promise<LifecycleIssue>;
-  addBlocker(dependentId: string, blockerId: string): Promise<void>;
+  addBlocker(
+    dependentId: string,
+    blockerId: string,
+    owner: LockOwner,
+  ): Promise<void>;
 }
 
 export type DecodeLifecycleResult =

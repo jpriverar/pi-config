@@ -108,6 +108,7 @@ class FakeStore implements LifecycleStore {
   comments: string[] = [];
   labelUpdates: Array<{ addLabels: string[]; removeLabels: string[] }> = [];
   mutations = 0;
+  beforeMutate?: () => void;
 
   constructor(initial: LifecycleIssue = issue()) {
     this.saved = initial;
@@ -171,6 +172,9 @@ class FakeStore implements LifecycleStore {
     operation: Parameters<LifecycleStore["mutate"]>[2],
   ): Promise<LifecycleIssue> {
     this.mutations += 1;
+    const beforeMutate = this.beforeMutate;
+    this.beforeMutate = undefined;
+    beforeMutate?.();
     const mutation = operation(this.saved);
     if (
       this.failActiveResourceOnce &&
@@ -190,7 +194,11 @@ class FakeStore implements LifecycleStore {
     return this.saved;
   }
 
-  async addBlocker(dependentId: string, blockerId: string): Promise<void> {
+  async addBlocker(
+    dependentId: string,
+    blockerId: string,
+    _owner: LockOwner,
+  ): Promise<void> {
     this.blockers.push([dependentId, blockerId]);
     this.saved = {
       ...this.saved,
@@ -300,6 +308,17 @@ test("claims a legacy task into active ownership", async () => {
     saved.lifecycle?.execution?.expiresAt,
     "2026-09-17T16:00:00.000Z",
   );
+});
+
+test("claims a legacy blocked task without inventing a structured check", async () => {
+  const store = new FakeStore({ ...issue(null), status: "blocked" });
+
+  const saved = await service(store).claim("jp-1", session("s1"), "claim-1");
+
+  assert.equal(saved.lifecycle?.phase, "active");
+  assert.equal(saved.status, "in_progress");
+  assert.equal(saved.lifecycle?.waiting, null);
+  assert.equal(saved.lifecycle?.activeCheck, null);
 });
 
 test("claims dependency-waiting work without dropping blockers", async () => {
@@ -560,6 +579,30 @@ test("blocks completed but permits cancelled with unresolved dependencies", asyn
   );
 });
 
+test("rechecks completion conditions inside the locked mutation", async () => {
+  const store = new FakeStore(activeIssue("jp-1", "s1"));
+  store.beforeMutate = () => {
+    store.saved = {
+      ...store.saved,
+      dependencies: [
+        { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+      ],
+    };
+  };
+
+  await assert.rejects(
+    service(store).close(
+      "jp-1",
+      { kind: "completed", reason: "done", evidenceArtifactIds: [] },
+      session("s1"),
+      "close-raced",
+    ),
+    /unresolved condition/,
+  );
+  assert.equal(store.saved.lifecycle?.phase, "active");
+  assert.equal(store.saved.status, "in_progress");
+});
+
 test("returns expired ownership to actionable with one idempotent event", async () => {
   const store = new FakeStore();
   const sut = service(store, { now: () => NOW_MS });
@@ -584,6 +627,67 @@ test("returns expired ownership to actionable with one idempotent event", async 
     second.lifecycle?.transitionHistory.at(-1)?.type,
     "execution_interrupted",
   );
+});
+
+test("expired retained conditions return to waiting", async (t) => {
+  for (const kind of ["dependency", "check"] as const) {
+    await t.test(kind, async () => {
+      const active = activeIssue("jp-1", "s1");
+      active.lifecycle = {
+        ...active.lifecycle!,
+        waiting: { kind },
+        activeCheck: kind === "check" ? lifecycleCheck() : null,
+      };
+      active.metadata = { piLifecycle: active.lifecycle };
+      if (kind === "dependency") {
+        active.dependencies = [
+          { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+        ];
+      }
+      const store = new FakeStore(active);
+      const sut = service(store, { now: () => NOW_MS + 60_001 });
+
+      const saved = await sut.reconcileExecutionTimeout(
+        "jp-1",
+        session("reconciler"),
+      );
+
+      assert.equal(saved.lifecycle?.phase, "waiting");
+      assert.equal(saved.lifecycle?.execution, null);
+      assert.equal(saved.status, kind === "check" ? "blocked" : "open");
+      assert.deepEqual(saved.lifecycle?.waiting, { kind });
+    });
+  }
+});
+
+test("session interruption returns retained conditions to waiting", async (t) => {
+  for (const kind of ["dependency", "check"] as const) {
+    await t.test(kind, async () => {
+      const active = activeIssue("jp-1", "s1");
+      active.lifecycle = {
+        ...active.lifecycle!,
+        waiting: { kind },
+        activeCheck: kind === "check" ? lifecycleCheck() : null,
+      };
+      active.metadata = { piLifecycle: active.lifecycle };
+      if (kind === "dependency") {
+        active.dependencies = [
+          { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+        ];
+      }
+      const store = new FakeStore(active);
+
+      const [saved] = await service(store).interruptSession(
+        session("s1"),
+        "quit",
+      );
+
+      assert.equal(saved.lifecycle?.phase, "waiting");
+      assert.equal(saved.lifecycle?.execution, null);
+      assert.equal(saved.status, kind === "check" ? "blocked" : "open");
+      assert.deepEqual(saved.lifecycle?.waiting, { kind });
+    });
+  }
 });
 
 test("deduplicates retried operations by explicit operation ID", async () => {
@@ -1497,6 +1601,31 @@ test("closes a due satisfied check and wakes action-required work exactly once",
   assert.equal(actionable.status, "open");
   assert.equal(actionable.lifecycle?.phase, "actionable");
   assert.equal(actionable.lifecycle?.checkHistory[0].state, "action_required");
+});
+
+test("does not clear a retained dependency when a blocker appears during reconciliation", async () => {
+  const active = activeIssue("jp-1", "s1");
+  active.lifecycle = {
+    ...active.lifecycle!,
+    waiting: { kind: "dependency" },
+  };
+  active.metadata = { piLifecycle: active.lifecycle };
+  const store = new FakeStore(active);
+  store.beforeMutate = () => {
+    store.saved = {
+      ...store.saved,
+      dependencies: [
+        { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+      ],
+    };
+  };
+
+  await assert.rejects(
+    service(store).reconcileTask("jp-1", session("reconciler")),
+    /active work without a waiting condition must not have unresolved blockers/,
+  );
+  assert.equal(store.saved.lifecycle?.phase, "active");
+  assert.deepEqual(store.saved.lifecycle?.waiting, { kind: "dependency" });
 });
 
 test("satisfied retained checks do not close active work", async () => {

@@ -424,7 +424,7 @@ test("adds native block edges with the dependent first", async () => {
   };
   const store = createLifecycleStore(exec, options());
 
-  await store.addBlocker("jp-dependent", "jp-blocker");
+  await store.addBlocker("jp-dependent", "jp-blocker", OWNER);
 
   assert.deepEqual(calls, [
     [
@@ -483,6 +483,39 @@ test("serializes concurrent lifecycle mutations under one store lock", async () 
     await Promise.all([
       store.mutate("jp-1", OWNER, () => mutation("op-a")),
       store.mutate("jp-1", OWNER, () => mutation("op-b")),
+    ]);
+
+    assert.equal(maxActiveExecutions, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("serializes blocker insertion with lifecycle mutations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lifecycle-blocker-"));
+  let activeExecutions = 0;
+  let maxActiveExecutions = 0;
+  let current = rawIssue();
+  const exec: BeadsExec = async (_command, args) => {
+    activeExecutions += 1;
+    maxActiveExecutions = Math.max(maxActiveExecutions, activeExecutions);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    if (args[0] === "update") {
+      current = {
+        ...current,
+        status: args[3],
+        metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+      };
+    }
+    activeExecutions -= 1;
+    return result(current);
+  };
+  try {
+    const store = createLifecycleStore(exec, options(join(root, ".beads")));
+
+    await Promise.all([
+      store.mutate("jp-1", OWNER, () => claimedMutation("op-lock")),
+      store.addBlocker("jp-1", "jp-blocker-2", OWNER),
     ]);
 
     assert.equal(maxActiveExecutions, 1);

@@ -194,6 +194,26 @@ test("rejects active state without exactly one execution lease", () => {
   );
 });
 
+test("rejects active work that drops its unresolved dependency condition", () => {
+  const claimed = claimLifecycle(baseLifecycle(), {
+    operationId: "claim-active",
+    sessionId: "session-a",
+    now: NOW,
+    expiresAt: LATER,
+    resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+  });
+  const blocker = {
+    id: "jp-blocker",
+    status: "open" as const,
+    dependencyType: "blocks",
+  };
+
+  assert.throws(
+    () => validateLifecycle(claimed, issue("in_progress", claimed, [blocker])),
+    /active work without a waiting condition must not have unresolved blockers/,
+  );
+});
+
 test("rejects each invalid waiting authority combination", () => {
   const blocker = {
     id: "jp-blocker",
@@ -327,7 +347,7 @@ test("adopts legacy issues for read-only presentation", () => {
       "blocked",
       new Set(),
       [],
-      "waiting",
+      "actionable",
       "legacy blocked issue has no structured check",
     ],
     [

@@ -224,7 +224,7 @@ export class TaskLifecycleService {
     requireCurrentOwner(taskId, lifecycle, owner);
     await this.releaseResources(taskId, lifecycle, owner, operationId);
     for (const blockerId of blockers) {
-      await this.deps.store.addBlocker(taskId, blockerId);
+      await this.deps.store.addBlocker(taskId, blockerId, owner);
     }
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
@@ -348,6 +348,11 @@ export class TaskLifecycleService {
       const latest = requireManaged(issue);
       if (latest.phase === "active") {
         requireCurrentOwner(taskId, latest, owner);
+      }
+      if (disposition.kind === "completed" && hasUnresolvedCondition(issue)) {
+        throw new Error(
+          `task ${taskId} has an unresolved condition and cannot be completed`,
+        );
       }
       const relinquished =
         latest.phase === "active" ? { ...latest, execution: null } : latest;
@@ -664,7 +669,12 @@ export class TaskLifecycleService {
             now,
             expectedSessionId: owner.sessionId,
           });
-          return this.mutation(latestIssue, operationId, "open", next);
+          return this.mutation(
+            latestIssue,
+            operationId,
+            interruptedStatus(next),
+            next,
+          );
         }),
       );
     }
@@ -1249,7 +1259,7 @@ export class TaskLifecycleService {
         now,
         expectedSessionId: execution.sessionId,
       });
-      return this.mutation(issue, operationId, "open", next);
+      return this.mutation(issue, operationId, interruptedStatus(next), next);
     });
   }
 
@@ -1306,6 +1316,12 @@ export class TaskLifecycleService {
   private nowIso(): string {
     return new Date(this.deps.now()).toISOString();
   }
+}
+
+function interruptedStatus(lifecycle: LifecycleMetadataV1): LifecycleStatus {
+  return lifecycle.phase === "waiting" && lifecycle.waiting?.kind === "check"
+    ? "blocked"
+    : "open";
 }
 
 function hasUnresolvedCondition(issue: LifecycleIssue): boolean {
