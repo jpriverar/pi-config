@@ -156,6 +156,42 @@ Kinds are `branch`, `commit`, `pull_request`, `document`, `dashboard`,
 Artifacts are durable records. Canonical `(kind, uri)` identity prevents
 retries from adding duplicates.
 
+### Automatic Git artifact observation
+
+Successful direct Bash `git commit`, `git push`, and `gh pr create` commands
+trigger post-command observation. The command is only a trigger: argv-only
+`git` or `gh` queries verify the repository, ref, commit, or pull request from
+post-command state before anything is persisted. Observation associates facts
+with the one Active task owned by the current session, regardless of whether
+the command ran in a lifecycle-managed worktree or in the task's usual
+repository.
+
+The observer stores only objective branch, commit, and pull-request facts.
+Branches and commits use deterministic repository-qualified IDs and `git://`
+URIs; pull requests use their canonical GitHub URL. Compatibility fields are
+fixed to role `evidence`, no source relationships, and no supersession. The
+lifecycle service adds the observation timestamp and producing session. A
+repeat observation deduplicates by canonical `(kind, uri)` identity, including
+a branch already recorded by worktree acquisition.
+
+Observation is passive bookkeeping. It never blocks, rewrites, or replaces a
+Bash result. Ambiguous ownership emits only a curated skip warning. Adapter or
+persistence failures emit this recovery guidance without command, task,
+stdout, stderr, credential, or provider details:
+
+```text
+Git artifact observation failed; use task_attach_artifact if needed.
+```
+
+Version 1 observes only Pi's standard Bash tool and only conservative,
+single-segment direct commands. Compound commands, pipelines, heredocs,
+command substitution, shell wrappers, dry runs, ambiguous push refspecs, and
+commands executed through other providers such as `ctx_execute` are not
+observed. Use `task_attach_artifact` for those gaps and for non-Git artifacts.
+Automatic observation does not decide whether an artifact is important,
+deliverable, completion evidence, promoted, related to another artifact, or
+superseded; those remain explicit lifecycle decisions.
+
 ### `task_wait`
 
 Required: `taskId`. Optional: `kind`, either `dependency` or `check`.
