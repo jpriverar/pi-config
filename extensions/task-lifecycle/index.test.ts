@@ -377,6 +377,50 @@ test("routes safe task mutations with strict field mappings", async () => {
   ]);
 });
 
+test("close drops irrelevant superseding placeholders", async () => {
+  const h = harness();
+  const close = h.tools.get("task_close")!;
+
+  await close.execute(
+    "close-completed",
+    {
+      taskId: "jp-1",
+      kind: "completed",
+      reason: "Done",
+      evidenceArtifactIds: ["commit:one"],
+      supersedingTaskId: ":none",
+    },
+    null,
+    null,
+    h.context,
+  );
+  await close.execute(
+    "close-superseded",
+    {
+      taskId: "jp-1",
+      kind: "superseded",
+      reason: "Replaced",
+      evidenceArtifactIds: [],
+      supersedingTaskId: "jp-2",
+    },
+    null,
+    null,
+    h.context,
+  );
+
+  assert.deepEqual(h.calls[0].args[1], {
+    kind: "completed",
+    reason: "Done",
+    evidenceArtifactIds: ["commit:one"],
+  });
+  assert.deepEqual(h.calls[1].args[1], {
+    kind: "superseded",
+    reason: "Replaced",
+    evidenceArtifactIds: [],
+    supersedingTaskId: "jp-2",
+  });
+});
+
 test("claim uses the tool call ID and current session ownership", async () => {
   const h = harness();
 

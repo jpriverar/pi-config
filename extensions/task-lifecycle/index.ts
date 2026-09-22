@@ -564,9 +564,10 @@ export function createTaskLifecycleExtension(
               kind: params.kind,
               reason: params.reason,
               evidenceArtifactIds: params.evidenceArtifactIds ?? [],
-              ...(params.supersedingTaskId === undefined
-                ? {}
-                : { supersedingTaskId: params.supersedingTaskId }),
+              ...(params.kind === "superseded" &&
+              params.supersedingTaskId !== undefined
+                ? { supersedingTaskId: params.supersedingTaskId }
+                : {}),
             },
             ownerFor(context),
             operationFor(id, params),
