@@ -214,6 +214,50 @@ export class TaskLifecycleService {
     });
   }
 
+  async recordObservedArtifacts(
+    taskId: string,
+    inputs: readonly ArtifactInput[],
+    owner: LockOwner,
+    operationId: string,
+  ): Promise<LifecycleIssue> {
+    if (inputs.length === 0) {
+      throw new Error("observed artifacts must not be empty");
+    }
+    const now = this.nowIso();
+    return this.deps.store.mutate(taskId, owner, (issue) => {
+      const lifecycle = requireManaged(issue);
+      requireCurrentOwner(taskId, lifecycle, owner);
+      if (Date.parse(lifecycle.execution!.expiresAt) <= this.deps.now()) {
+        throw new Error(
+          `task ${safeIdentifier(taskId)} execution lease has expired`,
+        );
+      }
+      if (hasOperation(lifecycle, operationId)) {
+        return this.mutation(issue, operationId, issue.status, lifecycle);
+      }
+
+      let attached = lifecycle;
+      try {
+        const artifacts = inputs.map((input) =>
+          canonicalizeArtifact(input, now, owner.sessionId),
+        );
+        for (const artifact of artifacts) {
+          attached = attachArtifactToLifecycle(attached, artifact);
+        }
+      } catch {
+        throw new Error("observed artifact batch is invalid");
+      }
+      const next = recordOperation(
+        attached,
+        operationId,
+        "observe_artifacts",
+        now,
+        owner.sessionId,
+      );
+      return this.mutation(issue, operationId, issue.status, next);
+    });
+  }
+
   async waitForDependencies(
     taskId: string,
     blockerIds: readonly string[],

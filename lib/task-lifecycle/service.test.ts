@@ -500,6 +500,166 @@ test("canonicalizes and deduplicates attached artifacts by identity", async () =
   ]);
 });
 
+test("records observed artifacts atomically and retries by operation ID", async () => {
+  const store = new FakeStore();
+  const sut = service(store);
+  await sut.claim("jp-1", session("s1"), "claim-1");
+  const sha = "a".repeat(40);
+  const inputs: ArtifactInput[] = [
+    {
+      id: "branch:example:refs/heads/topic",
+      kind: "branch",
+      uri: "git://example/refs/heads/topic",
+      title: "example topic",
+      role: "evidence",
+    },
+    {
+      id: `commit:example:${sha}`,
+      kind: "commit",
+      uri: `git://example/commit/${sha}`,
+      title: `example ${sha.slice(0, 12)}`,
+      role: "evidence",
+    },
+  ];
+
+  const saved = await sut.recordObservedArtifacts(
+    "jp-1",
+    inputs,
+    session("s1"),
+    "observe-1",
+  );
+  assert.deepEqual(
+    saved.lifecycle?.artifacts.map(({ kind, uri }) => ({ kind, uri })),
+    [
+      { kind: "branch", uri: "git://example/refs/heads/topic" },
+      { kind: "commit", uri: `git://example/commit/${sha}` },
+    ],
+  );
+  assert.equal(
+    saved.lifecycle?.transitionHistory.at(-1)?.type,
+    "observe_artifacts",
+  );
+
+  const retried = await sut.recordObservedArtifacts(
+    "jp-1",
+    inputs,
+    session("s1"),
+    "observe-1",
+  );
+  assert.equal(retried.lifecycle?.artifacts.length, 2);
+  assert.equal(retried.lifecycle?.transitionHistory.length, 2);
+});
+
+test("rejects empty, foreign, and expired observed artifact writes", async () => {
+  const store = new FakeStore(activeIssue("jp-1", "s1"));
+  const sut = service(store);
+  const input: ArtifactInput = {
+    id: "branch:example:refs/heads/topic",
+    kind: "branch",
+    uri: "git://example/refs/heads/topic",
+    title: "example topic",
+    role: "evidence",
+  };
+
+  await assert.rejects(
+    sut.recordObservedArtifacts("jp-1", [], session("s1"), "empty"),
+    /observed artifacts must not be empty/,
+  );
+  await assert.rejects(
+    sut.recordObservedArtifacts("jp-1", [input], session("s2"), "foreign"),
+    /owned by active session/,
+  );
+  store.saved.lifecycle!.execution!.expiresAt = new Date(
+    NOW_MS - 1,
+  ).toISOString();
+  await assert.rejects(
+    sut.recordObservedArtifacts("jp-1", [input], session("s1"), "expired"),
+    /execution lease has expired/,
+  );
+  assert.deepEqual(store.saved.lifecycle?.artifacts, []);
+});
+
+test("rejects an invalid observed artifact batch without partial mutation or secrets", async () => {
+  const store = new FakeStore(activeIssue("jp-1", "s1"));
+  const sut = service(store);
+  const secret = "SECRET-observed-artifact";
+  const valid: ArtifactInput = {
+    id: "branch:example:refs/heads/topic",
+    kind: "branch",
+    uri: "git://example/refs/heads/topic",
+    title: "example topic",
+    role: "evidence",
+  };
+  const malformed = {
+    id: `commit:example:${secret}`,
+    kind: "commit",
+    uri: `git://example/commit/${secret}`,
+    title: secret,
+    role: "invalid-role",
+  } as unknown as ArtifactInput;
+
+  await assert.rejects(
+    sut.recordObservedArtifacts(
+      "jp-1",
+      [valid, malformed],
+      session("s1"),
+      "invalid",
+    ),
+    (error: Error) =>
+      error.message === "observed artifact batch is invalid" &&
+      !error.message.includes(secret),
+  );
+  assert.deepEqual(store.saved.lifecycle?.artifacts, []);
+  assert.deepEqual(store.saved.lifecycle?.transitionHistory, []);
+});
+
+test("deduplicates observed branches and rejects contradictory IDs", async () => {
+  const store = new FakeStore();
+  const sut = service(store);
+  await sut.claim("jp-1", session("s1"), "claim-1");
+  const existing: ArtifactInput = {
+    id: "branch:claim-1",
+    kind: "branch",
+    uri: "git://example/refs/heads/topic",
+    title: "worktree branch",
+    role: "supporting",
+  };
+  await sut.attachArtifact("jp-1", existing, session("s1"), "attach-1");
+  await sut.recordObservedArtifacts(
+    "jp-1",
+    [
+      {
+        ...existing,
+        id: "branch:example:refs/heads/topic",
+        title: "example topic",
+        role: "evidence",
+      },
+    ],
+    session("s1"),
+    "observe-1",
+  );
+  assert.equal(store.saved.lifecycle?.artifacts.length, 1);
+  assert.equal(store.saved.lifecycle?.artifacts[0].id, "branch:claim-1");
+
+  const before = structuredClone(store.saved.lifecycle);
+  await assert.rejects(
+    sut.recordObservedArtifacts(
+      "jp-1",
+      [
+        {
+          ...existing,
+          kind: "commit",
+          uri: `git://example/commit/${"b".repeat(40)}`,
+        },
+      ],
+      session("s1"),
+      "observe-2",
+    ),
+    /observed artifact batch is invalid/,
+  );
+  assert.deepEqual(store.saved.lifecycle, before);
+});
+
 test("closes with a disposition and reopens according to native blockers", async () => {
   const store = new FakeStore();
   const sut = service(store);
