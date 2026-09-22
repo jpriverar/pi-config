@@ -137,21 +137,21 @@ function parseGit(
   let cwd = resolve(initialCwd);
   let index = 0;
   while (index < args.length) {
-    const token = args[index];
-    if (token === "-C") {
+    const argument = args[index];
+    if (argument === "-C") {
       const value = args[index + 1];
       if (!value) return null;
       cwd = resolve(cwd, value);
       index += 2;
       continue;
     }
-    if (token.startsWith("-C") && token.length > 2) {
-      cwd = resolve(cwd, token.slice(2));
+    if (argument.startsWith("-C") && argument.length > 2) {
+      cwd = resolve(cwd, argument.slice(2));
       index += 1;
       continue;
     }
-    if (token.startsWith("-")) return null;
-    return { command: token, args: args.slice(index + 1), cwd };
+    if (argument.startsWith("-")) return null;
+    return { command: argument, args: args.slice(index + 1), cwd };
   }
   return null;
 }
@@ -166,24 +166,27 @@ function pushedRef(args: readonly string[]): string | null {
   }
   const positionals: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    const token = args[index];
-    if (PUSH_FLAGS.has(token) || token.startsWith("--force-with-lease=")) {
+    const argument = args[index];
+    if (
+      PUSH_FLAGS.has(argument) ||
+      argument.startsWith("--force-with-lease=")
+    ) {
       continue;
     }
-    if (PUSH_OPTIONS_WITH_ARGUMENT.has(token)) {
+    if (PUSH_OPTIONS_WITH_ARGUMENT.has(argument)) {
       if (args[index + 1] === undefined) return null;
       index += 1;
       continue;
     }
     if (
-      token.startsWith("--receive-pack=") ||
-      token.startsWith("--exec=") ||
-      token.startsWith("--push-option=")
+      argument.startsWith("--receive-pack=") ||
+      argument.startsWith("--exec=") ||
+      argument.startsWith("--push-option=")
     ) {
       continue;
     }
-    if (token.startsWith("-")) return null;
-    positionals.push(token);
+    if (argument.startsWith("-")) return null;
+    positionals.push(argument);
   }
   if (positionals.length <= 1) return "HEAD";
   if (positionals.length !== 2 || !isSimpleRef(positionals[1])) return null;
@@ -198,37 +201,37 @@ function classifyGh(
   let repository: string | undefined;
   let head: string | undefined;
   for (let index = 2; index < args.length; index += 1) {
-    const token = args[index];
-    if (token === "--dry-run") return [];
-    if (token === "--repo" || token === "-R") {
+    const argument = args[index];
+    if (argument === "--dry-run") return [];
+    if (argument === "--repo" || argument === "-R") {
       repository = args[index + 1];
       if (!isRepositoryHint(repository)) return [];
       index += 1;
       continue;
     }
-    if (token.startsWith("--repo=")) {
-      repository = token.slice("--repo=".length);
+    if (argument.startsWith("--repo=")) {
+      repository = argument.slice("--repo=".length);
       if (!isRepositoryHint(repository)) return [];
       continue;
     }
-    if (token === "--head") {
+    if (argument === "--head") {
       head = args[index + 1];
       if (!isHeadHint(head)) return [];
       index += 1;
       continue;
     }
-    if (token.startsWith("--head=")) {
-      head = token.slice("--head=".length);
+    if (argument.startsWith("--head=")) {
+      head = argument.slice("--head=".length);
       if (!isHeadHint(head)) return [];
       continue;
     }
-    if (PR_OPTIONS_WITH_ARGUMENT.has(token)) {
+    if (PR_OPTIONS_WITH_ARGUMENT.has(argument)) {
       if (args[index + 1] === undefined) return [];
       index += 1;
       continue;
     }
-    if (PR_FLAGS.has(token)) continue;
-    if (token.startsWith("-")) return [];
+    if (PR_FLAGS.has(argument)) continue;
+    if (argument.startsWith("-")) return [];
     return [];
   }
   return [

@@ -582,7 +582,7 @@ test("rejects empty, foreign, and expired observed artifact writes", async () =>
 test("rejects an invalid observed artifact batch without partial mutation or secrets", async () => {
   const store = new FakeStore(activeIssue("jp-1", "s1"));
   const sut = service(store);
-  const secret = "SECRET-observed-artifact";
+  const sensitiveText = "SECRET-observed-artifact";
   const valid: ArtifactInput = {
     id: "branch:example:refs/heads/topic",
     kind: "branch",
@@ -591,10 +591,10 @@ test("rejects an invalid observed artifact batch without partial mutation or sec
     role: "evidence",
   };
   const malformed = {
-    id: `commit:example:${secret}`,
+    id: `commit:example:${sensitiveText}`,
     kind: "commit",
-    uri: `git://example/commit/${secret}`,
-    title: secret,
+    uri: `git://example/commit/${sensitiveText}`,
+    title: sensitiveText,
     role: "invalid-role",
   } as unknown as ArtifactInput;
 
@@ -607,7 +607,7 @@ test("rejects an invalid observed artifact batch without partial mutation or sec
     ),
     (error: Error) =>
       error.message === "observed artifact batch is invalid" &&
-      !error.message.includes(secret),
+      !error.message.includes(sensitiveText),
   );
   assert.deepEqual(store.saved.lifecycle?.artifacts, []);
   assert.deepEqual(store.saved.lifecycle?.transitionHistory, []);

@@ -25,7 +25,7 @@ test("classifies supported direct Git and GitHub artifact commands", () => {
   );
   assert.deepEqual(
     classifier.classify(
-      "GH_TOKEN=x gh pr create --repo DataDog/dd-go --head topic",
+      "GH_TOKEN=$GH_TOKEN gh pr create --repo DataDog/dd-go --head topic",
       "/repo",
     ),
     [

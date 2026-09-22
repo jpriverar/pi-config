@@ -238,11 +238,11 @@ test("rejects invalid Git state and curates executor failures", async () => {
   });
   assert.deepEqual(await observer.observe([intent]), []);
 
-  const secret = "private stdout and stderr";
+  const privateText = "private stdout and stderr";
   const throwing = createGitArtifactObserver({
     executor: {
       async run() {
-        throw new Error(secret);
+        throw new Error(privateText);
       },
     },
   });
@@ -250,7 +250,7 @@ test("rejects invalid Git state and curates executor failures", async () => {
     throwing.observe([intent]),
     (error: Error) =>
       error.message === "Git artifact observation failed" &&
-      !error.message.includes(secret),
+      !error.message.includes(privateText),
   );
 });
 
@@ -410,7 +410,7 @@ test("rejects malformed or contradictory GitHub verification", async () => {
       code: 0,
       stdout: JSON.stringify({
         number: 1,
-        url: "https://example.com/ddoghq/dd-go/pull/1",
+        url: "https://opensource.org/ddoghq/dd-go/pull/1",
         headRefName: "topic",
       }),
       stderr: "",
