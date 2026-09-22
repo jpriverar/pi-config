@@ -185,9 +185,10 @@ Git artifact observation failed; use task_attach_artifact if needed.
 
 Version 1 observes only Pi's standard Bash tool and only conservative,
 single-segment direct commands. Compound commands, pipelines, heredocs,
-command substitution, shell wrappers, dry runs, ambiguous push refspecs, and
-commands executed through other providers such as `ctx_execute` are not
-observed. Use `task_attach_artifact` for those gaps and for non-Git artifacts.
+command substitution, shell wrappers, dry runs, ambiguous push refspecs,
+repository-changing Git global options other than `-C`, and commands executed
+through other providers such as `ctx_execute` are not observed. Use
+`task_attach_artifact` for those gaps and for non-Git artifacts.
 Automatic observation does not decide whether an artifact is important,
 deliverable, completion evidence, promoted, related to another artifact, or
 superseded; those remain explicit lifecycle decisions.

@@ -254,6 +254,67 @@ test("rejects invalid Git state and curates executor failures", async () => {
   );
 });
 
+test("rejects branch changes during HEAD observation", async () => {
+  const results = new Map<string, GitArtifactExecutionResult>([
+    ["rev-parse --show-toplevel", { code: 0, stdout: "/repo\n", stderr: "" }],
+    [
+      "config --get remote.origin.url",
+      {
+        code: 0,
+        stdout: "https://github.com/DataDog/example.git\n",
+        stderr: "",
+      },
+    ],
+    [
+      "rev-parse --verify HEAD^{commit}",
+      { code: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" },
+    ],
+  ]);
+  const observer = createGitArtifactObserver({
+    executor: {
+      async run(_executable, args) {
+        return (
+          results.get(args.join(" ")) ?? {
+            code: 1,
+            stdout: "",
+            stderr: "missing",
+          }
+        );
+      },
+    },
+  });
+  const intent = {
+    kind: "git-head" as const,
+    operation: "commit" as const,
+    cwd: "/repo",
+    ref: "HEAD",
+  };
+
+  results.set("rev-parse --symbolic-full-name --verify HEAD", {
+    code: 0,
+    stdout: "refs/heads/topic\n",
+    stderr: "",
+  });
+  results.set("symbolic-ref --quiet --short HEAD", {
+    code: 0,
+    stdout: "other\n",
+    stderr: "",
+  });
+  assert.deepEqual(await observer.observe([intent]), []);
+
+  results.set("rev-parse --symbolic-full-name --verify HEAD", {
+    code: 0,
+    stdout: "HEAD\n",
+    stderr: "",
+  });
+  results.set("symbolic-ref --quiet --short HEAD", {
+    code: 0,
+    stdout: "topic\n",
+    stderr: "",
+  });
+  assert.deepEqual(await observer.observe([intent]), []);
+});
+
 test("verifies and observes a GitHub pull request and branch", async () => {
   const calls: Array<{
     executable: "git" | "gh";

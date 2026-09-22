@@ -63,6 +63,9 @@ test("classifies supported direct Git and GitHub artifact commands", () => {
 test("ignores ambiguous, dynamic, dry-run, and unrelated commands", () => {
   for (const command of [
     "git status --short",
+    "git --git-dir=/tmp/other.git commit -m ship",
+    "git --work-tree /tmp/other commit -m ship",
+    "git -c core.worktree=/tmp/other commit -m ship",
     "git commit --dry-run",
     "git push --dry-run origin topic",
     "git push origin one two",
@@ -74,6 +77,7 @@ test("ignores ambiguous, dynamic, dry-run, and unrelated commands", () => {
     "cat <<'EOF'\ngit commit -m ship\nEOF",
     "git $(printf commit) -m ship",
     "gh pr create --dry-run",
+    "gh pr create --web",
     "gh pr view 123",
   ]) {
     assert.deepEqual(classifier.classify(command, "/repo"), [], command);

@@ -93,7 +93,14 @@ async function observeGit(
       root,
     );
     const branch = successfulLine(branchResult);
-    branchRef = branch === null ? null : branchToFullRef(branch);
+    const observedBranch = branch === null ? null : branchToFullRef(branch);
+    if (
+      (symbolic === "HEAD" && observedBranch !== null) ||
+      (symbolic !== "HEAD" && observedBranch !== symbolic)
+    ) {
+      return [];
+    }
+    branchRef = observedBranch;
   } else {
     branchRef = isBranchRef(symbolic) ? symbolic : null;
     if (branchRef === null) return [];

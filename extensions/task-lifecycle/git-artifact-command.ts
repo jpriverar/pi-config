@@ -25,24 +25,6 @@ export interface GitArtifactCommandClassifier {
 }
 
 const MAX_COMMAND_LENGTH = 16_384;
-const GIT_OPTIONS_WITH_ARGUMENT = new Set([
-  "-c",
-  "--config-env",
-  "--exec-path",
-  "--git-dir",
-  "--namespace",
-  "--super-prefix",
-  "--work-tree",
-]);
-const GIT_OPTIONS_WITH_ATTACHED_ARGUMENT = [
-  "-c",
-  "--config-env=",
-  "--exec-path=",
-  "--git-dir=",
-  "--namespace=",
-  "--super-prefix=",
-  "--work-tree=",
-];
 const PUSH_FLAGS = new Set([
   "-u",
   "--set-upstream",
@@ -92,7 +74,6 @@ const PR_FLAGS = new Set([
   "--fill-first",
   "--fill-verbose",
   "--no-maintainer-edit",
-  "--web",
 ]);
 
 export function createDeterministicGitArtifactClassifier(): GitArtifactCommandClassifier {
@@ -169,23 +150,7 @@ function parseGit(
       index += 1;
       continue;
     }
-    if (GIT_OPTIONS_WITH_ARGUMENT.has(token)) {
-      if (args[index + 1] === undefined) return null;
-      index += 2;
-      continue;
-    }
-    if (
-      GIT_OPTIONS_WITH_ATTACHED_ARGUMENT.some(
-        (option) => token.startsWith(option) && token.length > option.length,
-      )
-    ) {
-      index += 1;
-      continue;
-    }
-    if (token.startsWith("-")) {
-      index += 1;
-      continue;
-    }
+    if (token.startsWith("-")) return null;
     return { command: token, args: args.slice(index + 1), cwd };
   }
   return null;

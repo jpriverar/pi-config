@@ -104,13 +104,11 @@ export function registerGitArtifactHooks(
   });
 
   pi.on("tool_result", async (event, context) => {
-    if (event?.toolName !== "bash" || typeof event?.toolCallId !== "string") {
-      return undefined;
-    }
+    if (typeof event?.toolCallId !== "string") return undefined;
     const observation = pending.get(event.toolCallId);
     if (observation === undefined) return undefined;
     pending.delete(event.toolCallId);
-    if (event.isError === true) return undefined;
+    if (event.toolName !== "bash" || event.isError === true) return undefined;
 
     try {
       const artifacts = await deps.observer.observe(observation.intents);

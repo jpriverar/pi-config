@@ -304,6 +304,28 @@ test("keeps interleaved observations bound to their call-time tasks", async () =
   );
 });
 
+test("clears a captured call when its result identity is contradictory", async () => {
+  const h = harness();
+  await h.call(
+    {
+      toolName: "bash",
+      toolCallId: "contradictory",
+      input: { command: "git commit -m ship" },
+    },
+    h.context,
+  );
+  await h.result(
+    { toolName: "read", toolCallId: "contradictory", isError: false },
+    h.context,
+  );
+  await h.result(
+    { toolName: "bash", toolCallId: "contradictory", isError: false },
+    h.context,
+  );
+  assert.equal(h.counters.observations, 0);
+  assert.deepEqual(h.records, []);
+});
+
 test("ignores unmatched results, including results seen by a fresh registrar", async () => {
   const first = harness();
   await first.call(
