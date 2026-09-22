@@ -716,6 +716,7 @@ async function createContractHarness(
       return undefined;
     },
     sessionManager: {
+      getSessionId: () => "smoke-contract-session",
       getEntries: () => entries,
       getBranch: () => [],
       getSessionName: () => pi.getSessionName(),
@@ -1057,7 +1058,7 @@ async function main() {
     assert.equal(projectRpc.projectSelection.options[0], "Global / no project");
     assert.match(
       projectRpc.selectedProject,
-      /^public — .*Ready: 1.*Waiting: 1/,
+      /^public — .*Actionable: 1.*Waiting: 1/,
     );
     assert.equal(
       projectRpc.scopedState.data.sessionName,
