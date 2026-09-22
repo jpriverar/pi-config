@@ -75,6 +75,11 @@ function harness() {
   const tools = new Map<string, Tool>();
   const entryRenderers = new Map<string, Function>();
   const calls: Array<{ name: string; args: unknown[] }> = [];
+  const execCalls: Array<{
+    executable: string;
+    args: readonly string[];
+    options: unknown;
+  }> = [];
   const guardState = {
     activeTasks: [] as LifecycleIssue[],
     activeTaskLookupError: null as Error | null,
@@ -170,6 +175,10 @@ function harness() {
       }
       return normalizedIssue();
     },
+    async recordObservedArtifacts(...args: any[]) {
+      calls.push({ name: "recordObservedArtifacts", args });
+      return normalizedIssue();
+    },
     async associatedTasksForClaim(...args: any[]) {
       calls.push({ name: "associatedTasksForClaim", args });
       if (guardState.associationLookupError !== null) {
@@ -217,7 +226,27 @@ function harness() {
     registerEntryRenderer(type: string, renderer: Function) {
       entryRenderers.set(type, renderer);
     },
-    exec: async () => ({ code: 0, stdout: "[]", stderr: "" }),
+    exec: async (
+      executable: string,
+      args: readonly string[],
+      options?: unknown,
+    ) => {
+      execCalls.push({ executable, args: [...args], options });
+      const command = args.join(" ");
+      const stdout =
+        command === "rev-parse --show-toplevel"
+          ? "/repo\n"
+          : command === "config --get remote.origin.url"
+            ? "https://github.com/DataDog/example.git\n"
+            : command === "rev-parse --symbolic-full-name --verify HEAD"
+              ? "refs/heads/topic\n"
+              : command === "symbolic-ref --quiet --short HEAD"
+                ? "topic\n"
+                : command === "rev-parse --verify HEAD^{commit}"
+                  ? `${"a".repeat(40)}\n`
+                  : "[]";
+      return { code: 0, stdout, stderr: "" };
+    },
   };
   createTaskLifecycleExtension({
     service,
@@ -230,6 +259,7 @@ function harness() {
   })(pi as any);
   return {
     calls,
+    execCalls,
     guardState,
     handlers,
     tools,
@@ -296,6 +326,49 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
   assert.deepEqual(h.tools.get("task_wait")?.parameters.required, ["taskId"]);
   assert.equal(
     h.tools.get("task_close")?.parameters.properties.reason.minLength,
+    1,
+  );
+});
+
+test("wires passive Git observation through argv-only Pi execution", async () => {
+  const h = harness();
+  h.guardState.activeTasks = [activeIssue("jp-1")];
+  const emit = async (event: "tool_call" | "tool_result", value: any) => {
+    for (const handler of h.handlers.get(event) ?? []) {
+      assert.equal(await handler(value, h.context), undefined);
+    }
+  };
+
+  await emit("tool_call", {
+    toolName: "bash",
+    toolCallId: "unrelated",
+    input: { command: "git status --short" },
+  });
+  await emit("tool_result", {
+    toolName: "bash",
+    toolCallId: "unrelated",
+    isError: false,
+  });
+  assert.deepEqual(h.execCalls, []);
+
+  await emit("tool_call", {
+    toolName: "bash",
+    toolCallId: "commit-1",
+    input: { command: "git commit -m ship" },
+  });
+  await emit("tool_result", {
+    toolName: "bash",
+    toolCallId: "commit-1",
+    isError: false,
+  });
+
+  assert.equal(h.execCalls.length, 5);
+  for (const { executable, options } of h.execCalls) {
+    assert.equal(executable, "git");
+    assert.deepEqual(options, { cwd: "/repo", timeout: 10_000 });
+  }
+  assert.equal(
+    h.calls.filter(({ name }) => name === "recordObservedArtifacts").length,
     1,
   );
 });

@@ -6,6 +6,9 @@ import { resolveBeadsDir, type BeadsExec } from "../../lib/beads.js";
 import type { AcquireResult } from "../worktree-pool/pool.js";
 import { loadWorktreePoolRuntime } from "../worktree-pool/runtime.js";
 import { registerTaskWorkState, type TaskWorkStateApi } from "./work-state.js";
+import { createDeterministicGitArtifactClassifier } from "./git-artifact-command.js";
+import { registerGitArtifactHooks } from "./git-artifact-hooks.js";
+import { createGitArtifactObserver } from "./git-artifact-observer.js";
 import { createLifecycleStore } from "../../lib/task-lifecycle/beads-store.js";
 import { createCheckAdapterRegistry } from "../../lib/task-lifecycle/checks.js";
 import { classifyTaskToolRequirement } from "../../lib/task-lifecycle/tool-guard.js";
@@ -116,6 +119,12 @@ export interface TaskLifecycleToolService {
     owner: LockOwner,
   ): Promise<LifecycleIssue>;
   activeTasksForSession(sessionId: string): Promise<LifecycleIssue[]>;
+  recordObservedArtifacts(
+    taskId: string,
+    artifacts: readonly ArtifactInput[],
+    owner: LockOwner,
+    operationId: string,
+  ): Promise<LifecycleIssue>;
 }
 
 interface ExtensionContext {
@@ -152,7 +161,11 @@ interface ExtensionApi {
     handler: (event: any, context: ExtensionContext) => unknown,
   ): void;
   registerTool(tool: ToolDefinition): void;
-  exec?: BeadsExec;
+  exec?: (
+    command: string,
+    args: readonly string[],
+    options?: { cwd?: string; timeout?: number },
+  ) => ReturnType<BeadsExec>;
 }
 
 export interface TaskLifecycleExtensionDependencies {
@@ -756,6 +769,29 @@ export function createTaskLifecycleExtension(
         return lifecycleFinalizationError("release", operation);
       }
     });
+
+    if (pi.exec !== undefined) {
+      const exec = pi.exec.bind(pi);
+      registerGitArtifactHooks(pi, {
+        service: deps.service,
+        classifier: createDeterministicGitArtifactClassifier(),
+        observer: createGitArtifactObserver({
+          executor: {
+            async run(executable, args, cwd) {
+              const result = await exec(executable, args, {
+                cwd,
+                timeout: 10_000,
+              });
+              return {
+                code: result.code,
+                stdout: result.stdout,
+                stderr: result.stderr,
+              };
+            },
+          },
+        }),
+      });
+    }
 
     registerTaskWorkState(pi);
   };
