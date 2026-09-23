@@ -154,20 +154,18 @@ Checkpoint 2 starts only after checkpoint 1 verification succeeds. The runner
 stops on the first failure and does not conceal contradictions or provider
 output in errors.
 
-## Journal and rollback
+## Journal and recovery boundary
 
 Before apply, export all issues to `before.jsonl`. The journal records the exact
 original status and metadata before each mutation, the deterministic operation
 ID, and verified after-state.
 
-Rollback is explicit. It restores exact original status and metadata from the
-journal under the lifecycle lock and removes only the blocker edge created for
-`jp-hyk8`. Rollback itself uses read-back verification and refuses unexpected
-intervening changes.
-
-The runner never automatically rolls back after a failure. Automatic
-compensation could overwrite legitimate concurrent work; the journal instead
-supports a reviewed resume or rollback decision.
+The runner does not automate rollback. Beads metadata deletion and same-state
+status writes have side effects that make generic compensating writes less safe
+than the forward migration. On partial failure, stop and inspect the completed
+prefix. Resume only after review through the same deterministic operations.
+Any restoration is a separate, explicitly approved manual recovery using the
+export and Beads history.
 
 ## Verification
 
@@ -181,7 +179,7 @@ fixture and verify:
 - all three overrides are correct;
 - rerunning after success is idempotent;
 - failure stops later writes;
-- rollback restores the exact source state.
+- the journal and export preserve the evidence needed for reviewed recovery.
 
 After each live checkpoint, reread the store and assert:
 

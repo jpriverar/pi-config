@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Safely adopt all 268 legacy Beads tasks into validated Pi lifecycle metadata through a reviewed, reversible one-off migration.
+**Goal:** Safely adopt all 268 legacy Beads tasks into validated Pi lifecycle metadata through a reviewed, journaled one-off migration.
 
 **Architecture:** A temporary TypeScript runner imports the existing lifecycle model and Beads store, builds a snapshot-bound migration plan, and applies it in two verified checkpoints. Durable repository changes are limited to this plan and its design; operational code and journals live under `~/beads/migrations/`.
 
@@ -28,7 +28,7 @@
 - A target already has lifecycle metadata: apply must reject it rather than count it as migrated.
 - A mid-checkpoint write fails: later targets must remain untouched and the journal must identify the exact completed prefix.
 - An idempotent resume sees a matching migration operation: it must verify and continue without duplicating transitions, artifacts, or checks.
-- Rollback sees intervening changes: it must refuse instead of overwriting newer task state.
+- A partial apply needs recovery: stop, preserve the exact completed prefix, and require review before deterministic resume or separate manual restoration.
 
 ---
 
@@ -253,7 +253,12 @@ after each verified mutation or failure.
 
 Expected: planner, preflight, failure-stop, and override tests all pass.
 
-### Task 4: Implement and test explicit rollback
+### Task 4: Preserve explicit recovery evidence
+
+> **Approved amendment:** Do not automate rollback. Disposable-store testing
+> showed that Beads metadata deletion and same-state status updates introduce
+> compensating-write side effects. Recovery is therefore a separate manual
+> operation, not a migration-runner mode.
 
 **Files:**
 
@@ -262,42 +267,37 @@ Expected: planner, preflight, failure-stop, and override tests all pass.
 
 **Interfaces:**
 
-- Consumes: successful journal entries and current migrated state.
-- Produces: exact source restoration or a refusal on intervening changes.
+- Consumes: verified before/after journal records and the complete pre-migration export.
+- Produces: failure-stop and deterministic-resume evidence without automated compensating writes.
 
-- [ ] **Step 1: Write failing rollback tests**
+- [ ] **Step 1: Keep failure-stop and idempotent-resume tests**
 
 ```typescript
-test("rollback restores exact source status and metadata", async () => {
-  const harness = await fixtureStore();
-  const before = await harness.snapshot();
-  await harness.applyAll();
-  await harness.rollback();
-  assert.deepEqual(await harness.snapshot(), before);
+test("stops the checkpoint after the first failed write", async () => {
+  const harness = await fixtureStore({ failAt: "jp-b" });
+  await assert.rejects(harness.applyNonClosed(), /migration write failed/);
+  assert.deepEqual(harness.mutatedIds(), ["jp-a"]);
+  assert.deepEqual(harness.journalStatuses(), ["applied", "failed"]);
 });
 
-test("rollback refuses intervening changes", async () => {
+test("idempotent resume verifies exact migrated state without another write", async () => {
   const harness = await fixtureStore();
-  await harness.applyAll();
-  await harness.changeMetadata("jp-open", { concurrent: true });
-  await assert.rejects(harness.rollback(), /rollback state changed/);
+  await harness.applyNonClosed();
+  await harness.applyNonClosed();
+  assert.deepEqual(harness.mutatedIds(), ["jp-a"]);
 });
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [ ] **Step 2: Remove rollback commands and tests**
 
-Expected: FAIL because rollback is missing.
+The CLI accepts only `--dry-run` and `--apply`. Preserve `before.jsonl`,
+`journal.jsonl`, and deterministic operation IDs as the reviewed recovery
+boundary.
 
-- [ ] **Step 3: Implement guarded rollback**
+- [ ] **Step 3: Run tests and strict TypeScript**
 
-Read journal entries in reverse. Under the same lifecycle file-operation lock,
-verify current status/metadata match the journaled after-state, write the exact
-before status/metadata, and read back. Remove the `jp-hyk8` blocker edge only if
-the journal proves this migration added it.
-
-- [ ] **Step 4: Run tests and verify GREEN**
-
-Expected: all one-off runner tests pass.
+Expected: all forward-migration tests pass and strict TypeScript reports no
+errors.
 
 ### Task 5: Generate and review the live dry-run
 
@@ -309,13 +309,13 @@ Expected: all one-off runner tests pass.
 
 **Interfaces:**
 
-- Consumes: live `~/beads/.beads/beads.db` in read-only planning mode.
+- Consumes: live `~/beads/.beads` in read-only planning mode.
 - Produces: immutable plan hash and exact mutation set for approval.
 
 - [ ] **Step 1: Export the live store before mutation**
 
 ```bash
-bd export --db ~/beads/.beads/beads.db \
+bd export --db ~/beads/.beads \
   -o ~/beads/migrations/<timestamp>/before.jsonl
 ```
 
@@ -324,7 +324,7 @@ bd export --db ~/beads/.beads/beads.db \
 ```bash
 ./node_modules/.bin/tsx \
   ~/beads/migrations/<timestamp>/migrate-lifecycle.ts \
-  --db ~/beads/.beads/beads.db \
+  --db ~/beads/.beads \
   --run-dir ~/beads/migrations/<timestamp> \
   --dry-run
 ```
@@ -358,7 +358,7 @@ Stop and request explicit approval before invoking `--apply`.
 ```bash
 ./node_modules/.bin/tsx \
   ~/beads/migrations/<timestamp>/migrate-lifecycle.ts \
-  --db ~/beads/.beads/beads.db \
+  --db ~/beads/.beads \
   --run-dir ~/beads/migrations/<timestamp> \
   --apply --checkpoint non-closed --plan-hash <approved-hash>
 ```
@@ -413,4 +413,4 @@ Use `worktree_pool release` with the acquired claim.
 
 - [ ] **Step 4: Close `jp-wskk`**
 
-Close as completed only after the live store and rollback journal are verified.
+Close as completed only after the live store, pre-migration export, and migration journal are verified.
