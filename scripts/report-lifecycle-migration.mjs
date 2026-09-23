@@ -160,6 +160,7 @@ function runJson(command, args, cwd) {
     const stdout = execFileSync(command, args, {
       cwd,
       encoding: "utf8",
+      maxBuffer: 50 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
     });
     return JSON.parse(stdout);

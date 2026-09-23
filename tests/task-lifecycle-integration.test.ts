@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chmod,
   mkdtemp,
   mkdir,
   readFile,
@@ -477,6 +478,57 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
     );
   } finally {
     assert.ok(root.startsWith(prefix));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("migration report accepts Beads output larger than the Node default buffer", async () => {
+  const root = await mkdtemp(join(tmpdir(), "migration-report-buffer-"));
+  try {
+    const bin = join(root, "bin");
+    await mkdir(bin);
+    const fakeBd = join(bin, "bd");
+    await writeFile(
+      fakeBd,
+      `#!/usr/bin/env node
+const command = process.argv[2];
+if (command === "list") {
+  console.log(JSON.stringify([{ id: "jp-large", status: "open", updated_at: "2026-09-01T00:00:00Z", description: "x".repeat(2_000_000) }]));
+} else if (command === "ready") {
+  console.log("[]");
+} else {
+  process.exitCode = 1;
+}
+`,
+    );
+    await chmod(fakeBd, 0o755);
+    const poolConfig = join(root, "pool.json");
+    await writeFile(
+      poolConfig,
+      JSON.stringify({ repositoryRoot: root, repositories: [] }),
+    );
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), "scripts", "report-lifecycle-migration.mjs"),
+        "--db",
+        join(root, ".beads"),
+        "--pool-config",
+        poolConfig,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...baseEnvironment,
+          PATH: `${bin}:${baseEnvironment.PATH ?? ""}`,
+        },
+        encoding: "utf8",
+      },
+    );
+
+    assert.match(result.stdout, /Task lifecycle migration report/);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
