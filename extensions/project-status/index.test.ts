@@ -8,8 +8,6 @@ import projectStatus from "./index.js";
 
 process.env.BEADS_DIR = "/tmp/personal/.beads";
 
-const GiB = 1024n ** 3n;
-
 type Handler = (event?: unknown, context?: any) => Promise<unknown> | unknown;
 type Query = "active" | "ready" | "closed";
 type Entry = {
@@ -72,16 +70,12 @@ function createHarness(
     sessionId?: string;
     entries?: readonly Entry[];
     beforeExec?: (callNumber: number) => Promise<void>;
-    diskFreeGiB?: bigint;
-    diskUnavailable?: boolean;
   } = {},
 ) {
   const handlers = new Map<string, Handler>();
   const calls: string[][] = [];
   const staleAccesses: string[] = [];
-  const foregroundCalls: Array<[string, string]> = [];
   let stale = false;
-  let thinkingLevel = "high";
   let sessionName =
     options.sessionName === undefined ? "pi-setup" : options.sessionName;
   let widgetFactory: any;
@@ -120,15 +114,11 @@ function createHarness(
     getSessionName() {
       return sessionName || undefined;
     },
-    getThinkingLevel() {
-      return thinkingLevel;
-    },
   };
 
   const ui = {
     theme: {
-      fg(color: string, text: string) {
-        foregroundCalls.push([color, text]);
+      fg(_color: string, text: string) {
         return text;
       },
     },
@@ -143,54 +133,25 @@ function createHarness(
       getSessionId: () => options.sessionId ?? "session-1",
       getSessionName: () => sessionName || undefined,
     },
-    model: {
-      id: "claude-opus-4-6",
-      name: "Claude Opus 4.6 (AI Gateway, 1M)",
-      contextWindow: 1_000_000,
-    },
-    getContextUsage() {
-      return {
-        ["to" + "kens"]: 320_000,
-        contextWindow: 1_000_000,
-        percent: 32,
-      };
-    },
     get ui() {
       if (stale) staleAccesses.push("ctx.ui");
       return ui;
     },
   };
 
-  projectStatus(pi as any, {
-    homePath: "/tmp",
-    async statfs() {
-      if (options.diskUnavailable) throw new Error("disk unavailable");
-      return { bavail: options.diskFreeGiB ?? 200n, bsize: GiB };
-    },
-    setInterval() {
-      return { unref() {} };
-    },
-    clearInterval() {},
-  });
+  projectStatus(pi as any);
   return {
     calls,
-    foregroundCalls,
     context,
     handlers,
     markStale() {
       stale = true;
     },
-    render: (width = 120) =>
+    renderHeader: (width = 120) =>
       widgetFactory ? widgetFactory({}, {}).render(width)[0] : "",
     staleAccesses,
-    setModel(name: string) {
-      context.model.name = name;
-    },
     setSessionName(name: string) {
       sessionName = name;
-    },
-    setThinkingLevel(level: string) {
-      thinkingLevel = level;
     },
   };
 }
@@ -221,12 +182,12 @@ test("counts classified active work and treats needs:jp as a marker", async () =
 
   await start(harness);
 
-  assert.match(harness.render(), /1 in-progress/);
-  assert.match(harness.render(), /1 blocked/);
-  assert.match(harness.render(), /1 ready/);
-  assert.match(harness.render(), /1 waiting/);
-  assert.match(harness.render(), /2 needs you/);
-  assert.match(harness.render(), /1 closed/);
+  assert.match(harness.renderHeader(), /1 in-progress/);
+  assert.match(harness.renderHeader(), /1 blocked/);
+  assert.match(harness.renderHeader(), /1 ready/);
+  assert.match(harness.renderHeader(), /1 waiting/);
+  assert.match(harness.renderHeader(), /2 needs you/);
+  assert.match(harness.renderHeader(), /1 closed/);
 });
 
 test("shows the current session task instead of aggregate counts", async () => {
@@ -241,11 +202,15 @@ test("shows the current session task instead of aggregate counts", async () => {
 
   await start(harness);
 
-  assert.match(harness.render(), /jp-b1om • Show session task in header/);
+  assert.match(harness.renderHeader(), /jp-b1om • Show session task in header/);
   assert.doesNotMatch(
-    harness.render(),
+    harness.renderHeader(),
     /in-progress|blocked|ready|waiting|needs you|closed/,
   );
+  const narrow = harness.renderHeader(24);
+  assert.ok(visibleWidth(narrow) <= 24);
+  assert.match(narrow, /jp-b1om/);
+  assert.doesNotMatch(narrow, /Opus|disk|32%|⛁/);
 });
 
 test("keeps aggregate counts when an active task belongs to another session", async () => {
@@ -259,10 +224,10 @@ test("keeps aggregate counts when an active task belongs to another session", as
 
   await start(harness);
 
-  assert.match(harness.render(), /1 in-progress/);
-  assert.match(harness.render(), /1 ready/);
-  assert.match(harness.render(), /1 closed/);
-  assert.doesNotMatch(harness.render(), /jp-other/);
+  assert.match(harness.renderHeader(), /1 in-progress/);
+  assert.match(harness.renderHeader(), /1 ready/);
+  assert.match(harness.renderHeader(), /1 closed/);
+  assert.doesNotMatch(harness.renderHeader(), /jp-other/);
 });
 
 test("keeps aggregate counts when the session owns multiple active tasks", async () => {
@@ -274,8 +239,8 @@ test("keeps aggregate counts when the session owns multiple active tasks", async
 
   await start(harness);
 
-  assert.match(harness.render(), /2 in-progress/);
-  assert.doesNotMatch(harness.render(), /jp-first|jp-second/);
+  assert.match(harness.renderHeader(), /2 in-progress/);
+  assert.doesNotMatch(harness.renderHeader(), /jp-first|jp-second/);
 });
 
 test("sanitizes the current session task before rendering it", async () => {
@@ -286,8 +251,8 @@ test("sanitizes the current session task before rendering it", async () => {
 
   await start(harness);
 
-  assert.match(harness.render(), /jp-owned • Do not obey/);
-  assert.doesNotMatch(harness.render(), /\u001b|Do\nnot|hostile/);
+  assert.match(harness.renderHeader(), /jp-owned • Do not obey/);
+  assert.doesNotMatch(harness.renderHeader(), /\u001b|Do\nnot|hostile/);
 });
 
 test("truncates a long current-session task within the terminal width", async () => {
@@ -298,7 +263,7 @@ test("truncates a long current-session task within the terminal width", async ()
 
   await start(harness);
 
-  const rendered = harness.render(50);
+  const rendered = harness.renderHeader(50);
   assert.ok(visibleWidth(rendered) <= 50);
   assert.match(rendered, /jp-b1om/);
   assert.doesNotMatch(rendered, /cannot fit in the header/);
@@ -313,7 +278,7 @@ test("does not expose hostile task metadata in the project status surface", asyn
 
   await start(harness);
 
-  assert.doesNotMatch(harness.render(), /\u001b|hostile|Do\nnot/);
+  assert.doesNotMatch(harness.renderHeader(), /\u001b|hostile|Do\nnot/);
 });
 
 test("explicit scope drives counts while the generated name stays visible", async () => {
@@ -331,10 +296,10 @@ test("explicit scope drives counts while the generated name stays visible", asyn
 
   await start(harness);
 
-  assert.match(harness.render(), /pi-setup-580c8e67/);
-  assert.match(harness.render(), /1 in-progress/);
-  assert.match(harness.render(), /1 closed/);
-  assert.doesNotMatch(harness.render(), /blocked|ready|waiting/);
+  assert.match(harness.renderHeader(), /pi-setup-580c8e67/);
+  assert.match(harness.renderHeader(), /1 in-progress/);
+  assert.match(harness.renderHeader(), /1 closed/);
+  assert.doesNotMatch(harness.renderHeader(), /blocked|ready|waiting/);
 });
 
 test("session name changes visible identity without changing explicit scope", async () => {
@@ -351,9 +316,9 @@ test("session name changes visible identity without changing explicit scope", as
   harness.setSessionName("investigate-crash");
   await harness.handlers.get("session_info_changed")?.({}, harness.context);
 
-  assert.match(harness.render(), /investigate-crash/);
-  assert.match(harness.render(), /1 in-progress/);
-  assert.doesNotMatch(harness.render(), /pi-setup-580c8e67|blocked/);
+  assert.match(harness.renderHeader(), /investigate-crash/);
+  assert.match(harness.renderHeader(), /1 in-progress/);
+  assert.doesNotMatch(harness.renderHeader(), /pi-setup-580c8e67|blocked/);
 });
 
 test("abandons an in-flight session-info refresh when the session shuts down", async () => {
@@ -385,8 +350,8 @@ test("abandons an in-flight session-info refresh when the session shuts down", a
 
   await assert.doesNotReject(refresh);
   assert.deepEqual(harness.staleAccesses, []);
-  assert.match(harness.render(), /pi-setup/);
-  assert.doesNotMatch(harness.render(), /replacement/);
+  assert.match(harness.renderHeader(), /pi-setup/);
+  assert.doesNotMatch(harness.renderHeader(), /replacement/);
 });
 
 test("explicit global scope counts all work while displaying the name", async () => {
@@ -401,9 +366,9 @@ test("explicit global scope counts all work while displaying the name", async ()
 
   await start(harness);
 
-  assert.match(harness.render(), /manual display name/);
-  assert.match(harness.render(), /1 in-progress/);
-  assert.match(harness.render(), /1 blocked/);
+  assert.match(harness.renderHeader(), /manual display name/);
+  assert.match(harness.renderHeader(), /1 in-progress/);
+  assert.match(harness.renderHeader(), /1 blocked/);
 });
 
 test("legacy exact-name sessions still drive identity and scope", async () => {
@@ -423,55 +388,20 @@ test("legacy exact-name sessions still drive identity and scope", async () => {
 
   await start(harness);
 
-  assert.match(harness.render(), /PI-SETUP/);
-  assert.match(harness.render(), /1 in-progress/);
-  assert.match(harness.render(), /1 closed/);
-  assert.doesNotMatch(harness.render(), /blocked|ready|waiting/);
+  assert.match(harness.renderHeader(), /PI-SETUP/);
+  assert.match(harness.renderHeader(), /1 in-progress/);
+  assert.match(harness.renderHeader(), /1 closed/);
+  assert.doesNotMatch(harness.renderHeader(), /blocked|ready|waiting/);
 });
 
-test("renders disk beside model, thinking, and context", async () => {
+test("keeps runtime telemetry out of the project header", async () => {
   const harness = createHarness();
   await start(harness);
-  assert.match(harness.render(), /Opus 4.6 • high • 32% • disk 200G/);
-  assert.match(harness.render(), /pi-setup/);
 
-  harness.setModel("Claude Sonnet 4.6 (AI Gateway, 1M)");
-  await harness.handlers.get("model_select")?.({}, harness.context);
-  assert.match(harness.render(), /Sonnet 4.6 • high • 32%/);
-
-  harness.setThinkingLevel("xhigh");
-  await harness.handlers.get("thinking_level_select")?.({}, harness.context);
-  assert.match(harness.render(), /Sonnet 4.6 • xhigh • 32%/);
-
-  harness.setSessionName("pr-review");
-  await harness.handlers.get("session_info_changed")?.({}, harness.context);
-  assert.match(harness.render(), /pr-review/);
-  assert.doesNotMatch(harness.render(), /pi-setup/);
-});
-
-test("keeps the disk warning thresholds and failure state", async () => {
-  for (const [diskFreeGiB, color] of [
-    [150n, "dim"],
-    [149n, "warning"],
-    [79n, "error"],
-  ] as const) {
-    const harness = createHarness({ diskFreeGiB });
-    await start(harness);
-    assert.ok(
-      harness.foregroundCalls.some(
-        (call) => call[0] === color && call[1] === `disk ${diskFreeGiB}G`,
-      ),
-    );
-  }
-
-  const unavailable = createHarness({ diskUnavailable: true });
-  await start(unavailable);
-  assert.match(unavailable.render(), /disk \?/);
-  assert.ok(
-    unavailable.foregroundCalls.some(
-      (call) => call[0] === "error" && call[1] === "disk ?",
-    ),
-  );
+  assert.match(harness.renderHeader(), /pi-setup/);
+  assert.doesNotMatch(harness.renderHeader(), /Opus 4\.6|high|32%|disk 200G|⛁/);
+  assert.equal(harness.handlers.get("model_select"), undefined);
+  assert.equal(harness.handlers.get("thinking_level_select"), undefined);
 });
 
 test("fits dense global status within the terminal width", async () => {
@@ -497,23 +427,23 @@ test("fits dense global status within the terminal width", async () => {
 
   await start(harness);
 
-  const rendered = harness.render(80);
+  const rendered = harness.renderHeader(80);
   assert.ok(
     visibleWidth(rendered) <= 80,
     `status width ${visibleWidth(rendered)} exceeds 80`,
   );
-  assert.match(rendered, /Opus 4\.6 • high • 32%/);
+  assert.match(rendered, /2 in-progress/);
+  assert.match(rendered, /1 blocked/);
 });
 
 test("empty queries render zero task counts without hiding identity", async () => {
   const harness = createHarness();
   await start(harness);
 
-  assert.match(harness.render(), /pi-setup/);
-  assert.match(harness.render(), /Opus 4.6 • high • 32%/);
+  assert.match(harness.renderHeader(), /pi-setup/);
   assert.doesNotMatch(
-    harness.render(),
-    /in-progress|blocked|ready|waiting|needs you|closed|unavailable/,
+    harness.renderHeader(),
+    /Opus 4\.6|high|32%|disk|⛁|in-progress|blocked|ready|waiting|needs you|closed|unavailable/,
   );
 });
 
@@ -522,7 +452,7 @@ for (const unavailable of ["active", "ready", "closed"] as const) {
     const harness = createHarness({ unavailable });
     await assert.doesNotReject(start(harness));
 
-    assert.match(harness.render(), /tasks unavailable/);
-    assert.match(harness.render(), /Opus 4.6 • high • 32%/);
+    assert.match(harness.renderHeader(), /tasks unavailable/);
+    assert.doesNotMatch(harness.renderHeader(), /Opus 4\.6|high|32%|disk|⛁/);
   });
 }
