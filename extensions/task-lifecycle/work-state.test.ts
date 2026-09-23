@@ -35,6 +35,15 @@ function rawIssue(issue: BeadsIssue): Record<string, unknown> {
     ...(issue.lifecycle === undefined
       ? {}
       : { metadata: { piLifecycle: issue.lifecycle } }),
+    ...(issue.blockingDependencies === undefined
+      ? {}
+      : {
+          dependencies: issue.blockingDependencies.map((dependency) => ({
+            issue_id: issue.id,
+            depends_on_id: dependency.id,
+            type: dependency.dependencyType,
+          })),
+        }),
   };
 }
 
@@ -72,6 +81,31 @@ function createHarness(
   );
 
   const defaultExec = async (command: string, args: string[]) => {
+    if (args[0] === "show") {
+      const ids = args.slice(1, args.indexOf("--json"));
+      const dependencies = issues.flatMap(
+        (issue) => issue.blockingDependencies ?? [],
+      );
+      return {
+        code: 0,
+        stdout: JSON.stringify(
+          ids.flatMap((id) => {
+            const dependency = dependencies.find((item) => item.id === id);
+            return dependency === undefined
+              ? []
+              : [
+                  {
+                    id,
+                    title: `Blocker ${id}`,
+                    status: dependency.status,
+                    labels: [],
+                  },
+                ];
+          }),
+        ),
+        stderr: "",
+      };
+    }
     if (args[0] === "dep" && args[1] === "list") {
       const target = issues.find((issue) => issue.id === args[2]);
       return {

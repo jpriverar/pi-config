@@ -5,6 +5,7 @@ import {
   classifyReadiness,
   createBeadsClient,
   lifecycleAnnotation,
+  listClassifiedIssues,
   resolveBeadsDir,
   type BeadsExec,
   type BeadsExecResult,
@@ -44,6 +45,24 @@ function issue(
     status: "open",
     labels: ["workstream:core"],
     ...overrides,
+  };
+}
+
+function managedLifecycle(phase: string, waiting: unknown = null) {
+  const enteredAt = "2026-09-16T10:00:00.000Z";
+  return {
+    version: 1,
+    phase,
+    waiting,
+    stateEnteredAt: enteredAt,
+    lastProgressAt: enteredAt,
+    execution: null,
+    artifacts: [],
+    activeCheck: null,
+    checkHistory: [],
+    transitionHistory: [],
+    resources: [],
+    disposition: null,
   };
 }
 
@@ -154,7 +173,7 @@ test("lists explicitly requested issue statuses", async () => {
   assert.deepEqual(result, { ok: true, value: [] });
 });
 
-test("ignores edge-shaped dependency summaries in issue lists", async () => {
+test("preserves blocking dependency IDs from issue-list edge summaries", async () => {
   const fake = fakeExec(
     success([
       issue({
@@ -185,6 +204,7 @@ test("ignores edge-shaped dependency summaries in issue lists", async () => {
         title: "First issue",
         status: "closed",
         labels: ["workstream:core"],
+        blockingDependencyIds: ["jp-blocker"],
       },
     ],
   });
@@ -688,6 +708,86 @@ test("lists only unresolved native blocking dependencies", async () => {
     ok: true,
     value: [{ id: "jp-open", status: "open", dependencyType: "blocks" }],
   });
+});
+
+test("classifies blocker summaries with one batched status lookup", async () => {
+  const dependent = issue({
+    id: "jp-dependent",
+    title: "Dependent",
+    metadata: { piLifecycle: managedLifecycle("actionable") },
+    dependencies: [
+      {
+        issue_id: "jp-dependent",
+        depends_on_id: "jp-blocker",
+        type: "blocks",
+        created_at: "2026-09-18T00:00:00Z",
+        created_by: "fixture",
+        metadata: "{}",
+      },
+    ],
+  });
+  const free = issue({
+    id: "jp-free",
+    title: "Free",
+    metadata: { piLifecycle: managedLifecycle("actionable") },
+  });
+  const fake = fakeExec(
+    success([dependent, free]),
+    success([dependent, free]),
+    success([
+      issue({
+        id: "jp-blocker",
+        title: "Deferred blocker",
+        status: "deferred",
+      }),
+    ]),
+  );
+  const client = createBeadsClient(fake.exec, {
+    env: { BEADS_DIR: store },
+  });
+
+  const result = await listClassifiedIssues(client);
+
+  assert.deepEqual(fake.calls, [
+    {
+      command: "bd",
+      args: [
+        "list",
+        "-s",
+        "open,in_progress,blocked",
+        "-n",
+        "0",
+        "--json",
+        "--db",
+        store,
+      ],
+    },
+    {
+      command: "bd",
+      args: ["ready", "--json", "--db", store],
+    },
+    {
+      command: "bd",
+      args: ["show", "jp-blocker", "--json", "--db", store],
+    },
+  ]);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(
+    result.value.map((item) => ({
+      id: item.id,
+      readiness: item.readiness,
+      blockingTaskIds: item.blockingTaskIds,
+    })),
+    [
+      {
+        id: "jp-dependent",
+        readiness: "waiting",
+        blockingTaskIds: ["jp-blocker"],
+      },
+      { id: "jp-free", readiness: "ready", blockingTaskIds: [] },
+    ],
+  );
 });
 
 test("classifies managed lifecycle phases and native blockers", () => {

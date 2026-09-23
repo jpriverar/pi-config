@@ -31,6 +31,7 @@ export interface BeadsIssue {
   updatedAt?: string;
   lifecycle?: LifecycleMetadataV1 | null;
   lifecycleWarning?: string;
+  blockingDependencyIds?: string[];
   blockingDependencies?: NativeDependency[];
 }
 
@@ -85,6 +86,8 @@ export interface BeadsClient {
   ): Promise<BeadsResult<BeadsIssue[]>>;
 
   listReadyIssueIds(): Promise<BeadsResult<ReadonlySet<string>>>;
+
+  showIssues(ids: readonly string[]): Promise<BeadsResult<BeadsIssue[]>>;
 
   listBlockingDependencies(
     id: string,
@@ -200,10 +203,11 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
       }
     }
   }
-  if (
-    record.dependencies !== undefined &&
-    !isDependencyEdgeSummaryList(record.dependencies)
-  ) {
+  if (isDependencyEdgeSummaryList(record.dependencies)) {
+    decoded.blockingDependencyIds = record.dependencies
+      .filter((dependency) => dependency.type === "blocks")
+      .map((dependency) => normalizeId(dependency.depends_on_id));
+  } else if (record.dependencies !== undefined) {
     decoded.blockingDependencies = decodeBlockingDependencies(
       record.dependencies,
       `issue at index ${index}`,
@@ -212,7 +216,11 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
   return decoded;
 }
 
-function isDependencyEdgeSummaryList(value: unknown): boolean {
+function isDependencyEdgeSummaryList(value: unknown): value is Array<{
+  issue_id: string;
+  depends_on_id: string;
+  type: string;
+}> {
   return (
     Array.isArray(value) &&
     value.length > 0 &&
@@ -369,6 +377,21 @@ export function createBeadsClient(
         const issues = decodeIssues(value);
         return new Set(issues.map((issue) => issue.id));
       });
+    },
+    showIssues(ids) {
+      const normalizedIds = ids.map(normalizeId);
+      return runBd(
+        "show issues",
+        ["show", ...normalizedIds, "--json"],
+        (value) => {
+          const issues = decodeIssues(value);
+          const returnedIds = new Set(issues.map((issue) => issue.id));
+          if (normalizedIds.some((id) => !returnedIds.has(id))) {
+            throw new Error("bd did not return every requested issue");
+          }
+          return issues;
+        },
+      );
     },
     listBlockingDependencies(id) {
       return runBd(
@@ -584,20 +607,27 @@ export async function listClassifiedIssues(
   const ready = await client.listReadyIssueIds();
   if (!ready.ok) return ready;
 
-  const enriched: BeadsIssue[] = [];
-  for (const issue of listed.value) {
-    const needsBlockers =
-      issue.lifecycle?.phase === "actionable" ||
-      ((issue.lifecycle?.phase === "waiting" ||
-        issue.lifecycle?.phase === "active") &&
-        issue.lifecycle.waiting?.kind === "dependency");
-    if (!needsBlockers) {
-      enriched.push(issue);
-      continue;
-    }
-    const dependencies = await client.listBlockingDependencies(issue.id);
-    if (!dependencies.ok) return dependencies;
-    enriched.push({ ...issue, blockingDependencies: dependencies.value });
+  const blockerIds = [
+    ...new Set(
+      listed.value.flatMap((issue) => issue.blockingDependencyIds ?? []),
+    ),
+  ];
+  const blockersById = new Map<string, BeadsIssue>();
+  if (blockerIds.length > 0) {
+    const blockers = await client.showIssues(blockerIds);
+    if (!blockers.ok) return blockers;
+    for (const blocker of blockers.value) blockersById.set(blocker.id, blocker);
   }
+
+  const enriched = listed.value.map((issue): BeadsIssue => {
+    if (issue.blockingDependencyIds === undefined) return issue;
+    const blockingDependencies = issue.blockingDependencyIds
+      .map((id): NativeDependency => {
+        const blocker = blockersById.get(id)!;
+        return { id, status: blocker.status, dependencyType: "blocks" };
+      })
+      .filter((dependency) => dependency.status !== "closed");
+    return { ...issue, blockingDependencies };
+  });
   return { ok: true, value: classifyReadiness(enriched, ready.value) };
 }
