@@ -23,6 +23,9 @@ const rawIssue = (issue: BeadsIssue) => ({
   title: issue.title,
   status: issue.status,
   labels: issue.labels,
+  ...(issue.lifecycle === undefined
+    ? {}
+    : { metadata: { piLifecycle: issue.lifecycle } }),
 });
 
 function issue(
@@ -33,6 +36,32 @@ function issue(
   return { id, title: `Task ${id}`, status, labels };
 }
 
+function activeLifecycle(
+  sessionId: string,
+): NonNullable<BeadsIssue["lifecycle"]> {
+  const at = "2026-09-22T12:00:00.000Z";
+  return {
+    version: 1,
+    phase: "active",
+    waiting: null,
+    stateEnteredAt: at,
+    lastProgressAt: at,
+    execution: {
+      sessionId,
+      claimedAt: at,
+      lastActivityAt: at,
+      expiresAt: "2026-09-23T12:00:00.000Z",
+      resourceSnapshot: { observedAt: at, resourceIds: [] },
+    },
+    artifacts: [],
+    activeCheck: null,
+    checkHistory: [],
+    transitionHistory: [],
+    resources: [],
+    disposition: null,
+  };
+}
+
 function createHarness(
   options: {
     issues?: BeadsIssue[];
@@ -40,6 +69,7 @@ function createHarness(
     closed?: BeadsIssue[];
     unavailable?: Query;
     sessionName?: string;
+    sessionId?: string;
     entries?: readonly Entry[];
     beforeExec?: (callNumber: number) => Promise<void>;
     diskFreeGiB?: bigint;
@@ -110,6 +140,7 @@ function createHarness(
     mode: "tui",
     sessionManager: {
       getEntries: () => options.entries ?? [],
+      getSessionId: () => options.sessionId ?? "session-1",
       getSessionName: () => sessionName || undefined,
     },
     model: {
@@ -196,6 +227,81 @@ test("counts classified active work and treats needs:jp as a marker", async () =
   assert.match(harness.render(), /1 waiting/);
   assert.match(harness.render(), /2 needs you/);
   assert.match(harness.render(), /1 closed/);
+});
+
+test("shows the current session task instead of aggregate counts", async () => {
+  const owned = issue("jp-b1om", "in_progress");
+  owned.title = "Show session task in header";
+  owned.lifecycle = activeLifecycle("session-1");
+  const harness = createHarness({
+    issues: [owned, issue("ready"), issue("waiting")],
+    readyIds: ["ready"],
+    closed: [issue("done", "closed")],
+  });
+
+  await start(harness);
+
+  assert.match(harness.render(), /jp-b1om • Show session task in header/);
+  assert.doesNotMatch(
+    harness.render(),
+    /in-progress|blocked|ready|waiting|needs you|closed/,
+  );
+});
+
+test("keeps aggregate counts when an active task belongs to another session", async () => {
+  const other = issue("jp-other", "in_progress");
+  other.lifecycle = activeLifecycle("session-2");
+  const harness = createHarness({
+    issues: [other, issue("ready")],
+    readyIds: ["ready"],
+    closed: [issue("done", "closed")],
+  });
+
+  await start(harness);
+
+  assert.match(harness.render(), /1 in-progress/);
+  assert.match(harness.render(), /1 ready/);
+  assert.match(harness.render(), /1 closed/);
+  assert.doesNotMatch(harness.render(), /jp-other/);
+});
+
+test("keeps aggregate counts when the session owns multiple active tasks", async () => {
+  const first = issue("jp-first", "in_progress");
+  first.lifecycle = activeLifecycle("session-1");
+  const second = issue("jp-second", "in_progress");
+  second.lifecycle = activeLifecycle("session-1");
+  const harness = createHarness({ issues: [first, second] });
+
+  await start(harness);
+
+  assert.match(harness.render(), /2 in-progress/);
+  assert.doesNotMatch(harness.render(), /jp-first|jp-second/);
+});
+
+test("sanitizes the current session task before rendering it", async () => {
+  const owned = issue("\u001b[31mjp-owned\u001b[0m", "in_progress");
+  owned.title = "\u001b]0;hostile\u0007Do\nnot obey";
+  owned.lifecycle = activeLifecycle("session-1");
+  const harness = createHarness({ issues: [owned] });
+
+  await start(harness);
+
+  assert.match(harness.render(), /jp-owned • Do not obey/);
+  assert.doesNotMatch(harness.render(), /\u001b|Do\nnot|hostile/);
+});
+
+test("truncates a long current-session task within the terminal width", async () => {
+  const owned = issue("jp-b1om", "in_progress");
+  owned.title = "A deliberately long task title that cannot fit in the header";
+  owned.lifecycle = activeLifecycle("session-1");
+  const harness = createHarness({ sessionName: "", issues: [owned] });
+
+  await start(harness);
+
+  const rendered = harness.render(50);
+  assert.ok(visibleWidth(rendered) <= 50);
+  assert.match(rendered, /jp-b1om/);
+  assert.doesNotMatch(rendered, /cannot fit in the header/);
 });
 
 test("does not expose hostile task metadata in the project status surface", async () => {

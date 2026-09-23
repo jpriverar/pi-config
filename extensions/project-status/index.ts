@@ -53,6 +53,7 @@ interface Counts {
   waiting: number;
   needsJp: number;
   closed: number;
+  sessionTask?: { id: string; title: string };
 }
 
 type TaskState = Counts | "unavailable";
@@ -96,6 +97,7 @@ export default function projectStatus(
 
   async function getCounts(
     project: string | undefined,
+    sessionId: string,
     generation: number,
   ): Promise<TaskState | undefined> {
     const listed = await client.listIssues();
@@ -110,6 +112,15 @@ export default function projectStatus(
     if (!isCurrentSession(generation)) return undefined;
     if (!closed.ok) return "unavailable";
 
+    const sessionTasks = listed.value.filter(
+      (issue) =>
+        issue.lifecycle?.phase === "active" &&
+        issue.lifecycle.execution?.sessionId === sessionId,
+    );
+    const sessionTask =
+      sessionTasks.length === 1
+        ? { id: sessionTasks[0].id, title: sessionTasks[0].title }
+        : undefined;
     const active = scopeIssues(
       classifyReadiness(listed.value, ready.value),
       project,
@@ -127,6 +138,7 @@ export default function projectStatus(
       waiting: active.filter((issue) => issue.readiness === "waiting").length,
       needsJp: active.filter((issue) => issue.needsJp).length,
       closed: historical.length,
+      ...(sessionTask === undefined ? {} : { sessionTask }),
     };
   }
 
@@ -141,6 +153,12 @@ export default function projectStatus(
 
     if (taskState === "unavailable") {
       leftParts.push(theme.fg("muted", "tasks unavailable"));
+    } else if (taskState.sessionTask) {
+      leftParts.push(
+        theme.fg("warning", taskState.sessionTask.id) +
+          theme.fg("dim", " • ") +
+          theme.fg("dim", taskState.sessionTask.title),
+      );
     } else {
       const segments: string[] = [];
       if (taskState.inProgress > 0) {
@@ -234,7 +252,11 @@ export default function projectStatus(
   ): Promise<void> {
     const sessionName = pi.getSessionName() ?? undefined;
     const project = resolveSessionProject(ctx.sessionManager).workstream;
-    const taskState = await getCounts(project, generation);
+    const taskState = await getCounts(
+      project,
+      ctx.sessionManager.getSessionId(),
+      generation,
+    );
     if (taskState === undefined || !isCurrentSession(generation)) return;
 
     currentSessionName = sessionName;
