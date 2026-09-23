@@ -257,7 +257,8 @@ test("formats editor-owned runtime state", async () => {
   );
 
   const rendered = stripTerminalSequences(editor.render(80).join("\n"));
-  assert.match(rendered, /Opus 4\.6 • HIGH • 44% \(440k\/1M\) • ⛁ 200G/);
+  assert.match(rendered, /Opus 4\.6 • HIGH \| 44% \(440k\/1M\) \| ⛁ 200G/);
+  assert.equal(rendered.match(/•/g)?.length, 1);
 });
 
 test("formats compact context token counts without redundant zero fractions", async () => {
@@ -334,7 +335,8 @@ test("keeps runtime rows bounded and preserves trailing health at narrow widths"
 
   const narrow = stripTerminalSequences(editor.render(32).join("\n"));
   assert.doesNotMatch(narrow, /Opus 4\.6/);
-  assert.match(narrow, /44%.*⛁ 200G/);
+  assert.match(narrow, /… \| 44%.*\| ⛁ 200G/);
+  assert.doesNotMatch(narrow, /•/);
 });
 
 test("keeps autocomplete outside both prompt backgrounds", async () => {
@@ -379,10 +381,11 @@ test("shows a plain runtime footer while the styled prompt is disabled", async (
   await prompt.handler("off", harness.context);
 
   const rendered = stripTerminalSequences(harness.renderFooter(80).join("\n"));
-  assert.match(rendered, /Opus 4\.6 • HIGH • 44% \(440k\/1M\) • ⛁ 200G/);
-  assert.ok(harness.renderFooter(24).every((line) => visibleWidth(line) <= 24));
-
+  const narrow = harness.renderFooter(24);
   await prompt.handler("on", harness.context);
+
+  assert.match(rendered, /Opus 4\.6 • HIGH \| 44% \(440k\/1M\) \| ⛁ 200G/);
+  assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
 });
 
 test("keeps disk warning thresholds and failure state", async () => {

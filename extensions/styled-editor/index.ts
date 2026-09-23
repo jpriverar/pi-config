@@ -33,8 +33,12 @@ type DiskSpaceDependencies = {
   clearInterval(handle: unknown): void;
 };
 
-type RuntimeStatusSegment = { color: ThemeColor; text: string };
-type DiskStatus = RuntimeStatusSegment;
+type RuntimeStatusSegment = {
+  color: ThemeColor;
+  text: string;
+  separatorBefore?: "bullet" | "bar";
+};
+type DiskStatus = { color: ThemeColor; text: string };
 
 const PROMPT_RAIL = "█";
 const PROMPT_RAIL_RIGHT_PADDING = 1;
@@ -154,7 +158,11 @@ function buildRuntimeStatus(
 
   const effort = sanitizeInlineStatus(pi.getThinkingLevel() || "");
   if (effort && effort !== "off") {
-    segments.push({ color: "dim", text: effort.toUpperCase() });
+    segments.push({
+      color: "dim",
+      text: effort.toUpperCase(),
+      separatorBefore: "bullet",
+    });
   }
 
   const usage = ctx.getContextUsage();
@@ -173,17 +181,30 @@ function buildRuntimeStatus(
     segments.push({
       color: rounded > 90 ? "error" : rounded > 70 ? "warning" : "dim",
       text: `${rounded}%${detail}`,
+      separatorBefore: "bar",
     });
   }
 
-  if (diskStatus) segments.push(diskStatus);
+  if (diskStatus) {
+    segments.push({ ...diskStatus, separatorBefore: "bar" });
+  }
   return segments;
+}
+
+function runtimeStatusSeparator(
+  segment: RuntimeStatusSegment,
+  index: number,
+): string {
+  if (index === 0) return "";
+  return segment.separatorBefore === "bullet" ? " • " : " | ";
 }
 
 function runtimeStatusWidth(segments: RuntimeStatusSegment[]): number {
   return segments.reduce(
     (total, segment, index) =>
-      total + visibleWidth(segment.text) + (index === 0 ? 0 : 3),
+      total +
+      visibleWidth(runtimeStatusSeparator(segment, index)) +
+      visibleWidth(segment.text),
     0,
   );
 }
@@ -206,7 +227,7 @@ function fitRuntimeStatus(
 
   for (let start = 0; start < segments.length; start++) {
     const suffix = segments.slice(start);
-    const markerWidth = start === 0 ? 0 : visibleWidth("… • ");
+    const markerWidth = start === 0 ? 0 : visibleWidth("… | ");
     if (markerWidth + runtimeStatusWidth(suffix) <= maxWidth) {
       return { omitted: start > 0, segments: suffix };
     }
@@ -228,9 +249,13 @@ function renderRuntimeContent(
 ): string {
   const fitted = fitRuntimeStatus(segments, maxWidth);
   const renderedSegments = fitted.segments
-    .map((segment) => theme.fg(segment.color, segment.text))
-    .join(theme.fg("dim", " • "));
-  return `${fitted.omitted ? theme.fg("dim", "… • ") : ""}${renderedSegments}`;
+    .map(
+      (segment, index) =>
+        theme.fg("dim", runtimeStatusSeparator(segment, index)) +
+        theme.fg(segment.color, segment.text),
+    )
+    .join("");
+  return `${fitted.omitted ? theme.fg("dim", "… | ") : ""}${renderedSegments}`;
 }
 
 function renderRuntimeStatusLine(
