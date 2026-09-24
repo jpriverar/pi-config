@@ -266,8 +266,10 @@ async function waitForProcessGroupExit(
     try {
       process.kill(-pid, 0);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
-      throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ESRCH") return true;
+      // Darwin can report EPERM for zombie-only groups until they are reaped.
+      if (code !== "EPERM") throw error;
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
   }
@@ -1122,7 +1124,7 @@ if (
   fileURLToPath(import.meta.url) === resolve(process.argv[1])
 ) {
   main().catch((error) => {
-    console.error(error.stack ?? error.message);
+    console.error(error);
     process.exitCode = 1;
   });
 }
