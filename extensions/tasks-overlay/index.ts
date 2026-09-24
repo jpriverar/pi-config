@@ -202,12 +202,19 @@ export default function tasksOverlay(pi: ExtensionAPI) {
         let maxVerticalOffset = 0;
         let maxHorizontalOffset = 0;
         const terminalRows = process.stdout.rows || 40;
-        const viewport = Math.max(8, Math.floor(terminalRows * 0.4) - 2);
+        const maxOverlayRows = Math.max(
+          table.headerLines + 3,
+          Math.floor(terminalRows * 0.85),
+        );
+        const maxBodyViewport = Math.max(
+          1,
+          maxOverlayRows - table.headerLines - 2,
+        );
 
         return {
           render(width: number) {
             const innerWidth = Math.max(1, width - 4);
-            bodyViewport = Math.max(1, viewport - table.headerLines);
+            bodyViewport = Math.min(rows.length, maxBodyViewport);
             maxVerticalOffset = Math.max(0, rows.length - bodyViewport);
             maxHorizontalOffset = Math.max(0, table.width - innerWidth);
             verticalOffset = Math.min(verticalOffset, maxVerticalOffset);
@@ -227,10 +234,6 @@ export default function tasksOverlay(pi: ExtensionAPI) {
               const padding = Math.max(0, innerWidth - visibleWidth(sliced));
               return `${side} ${sliced}${" ".repeat(padding)} ${side}`;
             });
-            while (body.length < viewport) {
-              body.push(`${side} ${" ".repeat(innerWidth)} ${side}`);
-            }
-
             const rowEnd = Math.min(verticalOffset + bodyViewport, rows.length);
             const scrollInfo = ` [rows ${rows.length === 0 ? 0 : verticalOffset + 1}-${rowEnd}/${rows.length} • cols ${horizontalOffset + 1}-${Math.min(horizontalOffset + innerWidth, table.width)}/${table.width}]`;
             const helpText = `↑↓←→ scroll • pgup/pgdn • home/end • esc close${scrollInfo}`;

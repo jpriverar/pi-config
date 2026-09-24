@@ -1288,6 +1288,32 @@ test("renders one multiline table row with artifacts and blockers", async () => 
   assert.match(harness.render(), /jp-blocker/);
 });
 
+test("hugs short table content without filler rows", async () => {
+  const harness = createHarness({ issues: [issue("compact", "in_progress")] });
+
+  await show(harness);
+
+  const lines = harness.render().split("\n");
+  assert.equal(lines.length, 5);
+  assert.match(lines.at(-2) ?? "", /Task compact/);
+  assert.match(lines.at(-1) ?? "", /^└─/);
+});
+
+test("fills the 85 percent height cap before scrolling", async () => {
+  const harness = createHarness({
+    issues: Array.from({ length: 18 }, (_, index) =>
+      issue(`task-${String(index).padStart(2, "0")}`, "in_progress"),
+    ),
+  });
+
+  await show(harness);
+
+  assert.equal(
+    harness.render().split("\n").length,
+    Math.floor((process.stdout.rows || 40) * 0.85),
+  );
+});
+
 test("keeps the table header fixed while the body scrolls vertically", async () => {
   const harness = createHarness({
     issues: Array.from({ length: 18 }, (_, index) =>
