@@ -76,8 +76,9 @@ read-only migration report.
 
 The package manifest loads:
 
-- nine extensions for compact built-in tools, safe force pushes, permission
-  gates, plan and spec progress, the styled editor, Herdr blocked-state mapping,
+- extensions for compact built-in tools, safe force pushes, permission
+  gates, plan and spec progress, the styled editor, Herdr blocked-state mapping
+  and conversation cloning,
   bounded worktree allocation, lifecycle-safe task mutation and presentation,
   project status, and `/tasks`;
 - four skill roots: critical review, collaborative thinking, handoffs, and the
@@ -86,6 +87,35 @@ The package manifest loads:
 
 Use `pi config` to enable or disable individual package resources after
 installation.
+
+## Clone into a Herdr pane
+
+Use `/herdr-clone` from an idle, saved Pi conversation inside Herdr:
+
+| Command                                       | New pane                              |
+| --------------------------------------------- | ------------------------------------- |
+| `/herdr-clone`                                | Side by side (default)                |
+| `/herdr-clone vertical` or `/herdr-clone v`   | Side by side, like Herdr's `prefix+v` |
+| `/herdr-clone horizontal` or `/herdr-clone h` | Stacked, like Herdr's `prefix+-`      |
+
+The command copies the active conversation branch into a new session, opens
+and focuses the new pane, and starts Pi with the same working directory,
+model, and thinking level. The new agent waits for your next instruction;
+the original session is unchanged. Compaction records are preserved, so this
+separates future conversation growth but does not shrink inherited context.
+The new process loads its normal Pi configuration, not the source process's
+in-memory extension state or one-off CLI overrides.
+
+Cloning does not copy files, create a worktree, or transfer task/worktree
+ownership. Agents editing concurrently must use separate worktrees.
+Ephemeral sessions, branches without an assistant response, busy agents, and
+queued messages are rejected. Requires Herdr on `PATH` with `pane split` and
+`agent start` support (verified against Herdr 0.8.0).
+
+A failed launch reports the saved session path and pane ID when known. It does
+not retry or delete anything automatically: a timed-out request may have
+succeeded. Inspect Herdr before retrying. To recover a saved clone manually,
+run `pi --session <reported-session-file>` from the intended working directory.
 
 ## Worktree pool
 

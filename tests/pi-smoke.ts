@@ -38,6 +38,7 @@ const publicManifest = {
     "./extensions/plan-progress/index.ts",
     "./extensions/styled-editor/index.ts",
     "./extensions/herdr-ask-user-bridge/index.ts",
+    "./extensions/herdr-clone/index.ts",
     "./extensions/session-clear/index.ts",
     "./extensions/worktree-pool/index.ts",
     "./extensions/task-lifecycle/index.ts",
@@ -505,6 +506,7 @@ async function runRpc(
       const entries = await request({ type: "get_entries" });
       const invoked: RpcRow[] = [];
       for (const command of [
+        "herdr-clone",
         "tasks",
         "plan-view",
         "spec-view",
@@ -1020,6 +1022,7 @@ async function main() {
     const commandNames = registered.map((command: any) => command.name);
     assert.equal(new Set(commandNames).size, commandNames.length);
     for (const command of [
+      "herdr-clone",
       "tasks",
       "project",
       "plan-view",
