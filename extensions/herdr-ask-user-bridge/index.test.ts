@@ -66,6 +66,18 @@ test("reports force-push waits as Herdr blocked state", () => {
   ]);
 });
 
+test("reports APM Recommendations insert approval as Herdr blocked state", () => {
+  const { events, reports } = setupBridge();
+
+  events.emit("apm-recs:blocked", { active: true });
+  events.emit("apm-recs:blocked", { active: false });
+
+  assert.deepEqual(reports, [
+    { active: true, label: "Waiting for APM Recommendations insert approval" },
+    { active: false },
+  ]);
+});
+
 test("aggregates auth challenges by challenge ID", () => {
   const { events, reports } = setupBridge();
 
@@ -180,6 +192,8 @@ test("ignores malformed blocked-state payloads", () => {
   events.emit("research-web:blocked", null);
   events.emit("research-web:blocked", { active: "yes" });
   events.emit("force-push:blocked", null);
+  events.emit("apm-recs:blocked", null);
+  events.emit("apm-recs:blocked", { active: "yes" });
 
   assert.deepEqual(reports, []);
 });
