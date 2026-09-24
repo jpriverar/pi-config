@@ -1,19 +1,17 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
-  Theme,
-  ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import {
   Key,
   matchesKey,
+  sliceByColumn,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 
 import {
   createBeadsClient,
-  lifecycleAnnotation,
   listClassifiedIssues,
   normalizeBeadsLabel,
   type ClassifiedIssue,
@@ -31,13 +29,8 @@ import {
   resolveSessionProject,
   type SessionProjectWriter,
 } from "../../lib/session-project.js";
+import { renderTaskTable } from "../shared/task-table.js";
 
-const STATUS_ICON: Record<Readiness, string> = {
-  in_progress: "◐",
-  blocked: "●",
-  ready: "○",
-  waiting: "◌",
-};
 const ALL_ISSUE_STATUSES = [
   "open",
   "in_progress",
@@ -196,88 +189,62 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       return;
     }
 
-    const groups: Array<{
-      label: string;
-      items: ClassifiedIssue[];
-      color: ThemeColor;
-    }> = [
-      {
-        label: "◐ Active",
-        items: issues.filter((issue) => issue.readiness === "in_progress"),
-        color: "warning",
-      },
-      {
-        label: "○ Actionable",
-        items: issues.filter((issue) => issue.readiness === "ready"),
-        color: "text",
-      },
-      {
-        label: "◌ Waiting",
-        items: issues.filter(
-          (issue) =>
-            issue.readiness === "waiting" || issue.readiness === "blocked",
-        ),
-        color: "muted",
-      },
-    ];
     const title = project ? `Tasks — ${project}` : "Tasks";
-
-    function buildLines(theme: Theme): string[] {
-      const lines: string[] = [];
-      for (const group of groups) {
-        if (group.items.length === 0) continue;
-        lines.push("");
-        lines.push(
-          theme.fg(
-            group.color,
-            theme.bold(`${group.label} (${group.items.length})`),
-          ),
-        );
-        for (const issue of group.items) {
-          const marker = issue.needsJp ? theme.fg("warning", " ← you") : "";
-          lines.push(
-            `  ${theme.fg(group.color, STATUS_ICON[issue.readiness])} ${theme.fg("dim", issue.id)} ${issue.title}${lifecycleAnnotation(issue)}${marker}`,
-          );
-        }
-      }
-      return lines;
-    }
 
     await ctx.ui.custom(
       (tui, theme, _kb, done) => {
-        const allLines = buildLines(theme);
-        let scrollOffset = 0;
+        const table = renderTaskTable(issues, theme);
+        const header = table.lines.slice(0, table.headerLines);
+        const rows = table.lines.slice(table.headerLines);
+        let verticalOffset = 0;
+        let horizontalOffset = 0;
+        let bodyViewport = 1;
+        let maxVerticalOffset = 0;
+        let maxHorizontalOffset = 0;
         const terminalRows = process.stdout.rows || 40;
         const viewport = Math.max(8, Math.floor(terminalRows * 0.4) - 2);
 
         return {
           render(width: number) {
-            const innerWidth = width - 4;
-            const maxScroll = Math.max(0, allLines.length - viewport);
-            scrollOffset = Math.min(scrollOffset, maxScroll);
-            const visible = allLines.slice(
-              scrollOffset,
-              scrollOffset + viewport,
-            );
+            const innerWidth = Math.max(1, width - 4);
+            bodyViewport = Math.max(1, viewport - table.headerLines);
+            maxVerticalOffset = Math.max(0, rows.length - bodyViewport);
+            maxHorizontalOffset = Math.max(0, table.width - innerWidth);
+            verticalOffset = Math.min(verticalOffset, maxVerticalOffset);
+            horizontalOffset = Math.min(horizontalOffset, maxHorizontalOffset);
+            const visible = [
+              ...header,
+              ...rows.slice(verticalOffset, verticalOffset + bodyViewport),
+            ];
             const side = theme.fg("border", "│");
             const body = visible.map((line) => {
-              const truncated = truncateToWidth(line, innerWidth);
-              const padding = Math.max(0, innerWidth - visibleWidth(truncated));
-              return `${side} ${truncated}${" ".repeat(padding)} ${side}`;
+              const sliced = sliceByColumn(
+                line,
+                horizontalOffset,
+                innerWidth,
+                true,
+              );
+              const padding = Math.max(0, innerWidth - visibleWidth(sliced));
+              return `${side} ${sliced}${" ".repeat(padding)} ${side}`;
             });
             while (body.length < viewport) {
               body.push(`${side} ${" ".repeat(innerWidth)} ${side}`);
             }
 
-            const scrollInfo =
-              allLines.length > viewport
-                ? ` [${scrollOffset + 1}-${Math.min(scrollOffset + viewport, allLines.length)}/${allLines.length}]`
-                : "";
-            const helpText = `↑↓ scroll • esc close${scrollInfo}`;
+            const rowEnd = Math.min(verticalOffset + bodyViewport, rows.length);
+            const scrollInfo = ` [rows ${rows.length === 0 ? 0 : verticalOffset + 1}-${rowEnd}/${rows.length} • cols ${horizontalOffset + 1}-${Math.min(horizontalOffset + innerWidth, table.width)}/${table.width}]`;
+            const helpText = `↑↓←→ scroll • pgup/pgdn • home/end • esc close${scrollInfo}`;
             const topFill = Math.max(0, width - 5 - visibleWidth(title));
-            const bottomFill = Math.max(0, width - 5 - visibleWidth(helpText));
+            const visibleHelp = truncateToWidth(
+              helpText,
+              Math.max(1, width - 5),
+            );
+            const bottomFill = Math.max(
+              0,
+              width - 5 - visibleWidth(visibleHelp),
+            );
             const topLine = `${theme.fg("border", "┌─")} ${theme.fg("accent", theme.bold(title))} ${theme.fg("border", "─".repeat(topFill) + "┐")}`;
-            const bottomLine = `${theme.fg("border", "└─")} ${theme.fg("dim", helpText)} ${theme.fg("border", "─".repeat(bottomFill) + "┘")}`;
+            const bottomLine = `${theme.fg("border", "└─")} ${theme.fg("dim", visibleHelp)} ${theme.fg("border", "─".repeat(bottomFill) + "┘")}`;
             return [topLine, ...body, bottomLine];
           },
           invalidate() {},
@@ -285,10 +252,34 @@ export default function tasksOverlay(pi: ExtensionAPI) {
             if (matchesKey(data, Key.escape) || matchesKey(data, "q")) {
               done(null);
             } else if (matchesKey(data, Key.up)) {
-              scrollOffset = Math.max(0, scrollOffset - 1);
+              verticalOffset = Math.max(0, verticalOffset - 1);
               tui.requestRender();
             } else if (matchesKey(data, Key.down)) {
-              scrollOffset++;
+              verticalOffset = Math.min(maxVerticalOffset, verticalOffset + 1);
+              tui.requestRender();
+            } else if (matchesKey(data, Key.left)) {
+              horizontalOffset = Math.max(0, horizontalOffset - 4);
+              tui.requestRender();
+            } else if (matchesKey(data, Key.right)) {
+              horizontalOffset = Math.min(
+                maxHorizontalOffset,
+                horizontalOffset + 4,
+              );
+              tui.requestRender();
+            } else if (matchesKey(data, Key.pageUp)) {
+              verticalOffset = Math.max(0, verticalOffset - bodyViewport);
+              tui.requestRender();
+            } else if (matchesKey(data, Key.pageDown)) {
+              verticalOffset = Math.min(
+                maxVerticalOffset,
+                verticalOffset + bodyViewport,
+              );
+              tui.requestRender();
+            } else if (matchesKey(data, Key.home)) {
+              verticalOffset = 0;
+              tui.requestRender();
+            } else if (matchesKey(data, Key.end)) {
+              verticalOffset = maxVerticalOffset;
               tui.requestRender();
             }
           },
@@ -296,7 +287,7 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       },
       {
         overlay: true,
-        overlayOptions: { anchor: "center", width: "70%", maxHeight: "80%" },
+        overlayOptions: { anchor: "center", width: "90%", maxHeight: "85%" },
       },
     );
   }

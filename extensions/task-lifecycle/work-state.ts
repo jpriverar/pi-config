@@ -1,8 +1,4 @@
-import {
-  getMarkdownTheme,
-  type Theme,
-  type ThemeColor,
-} from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   Markdown,
   truncateToWidth,
@@ -20,6 +16,11 @@ import {
   type ClassifiedIssue,
 } from "../../lib/beads.js";
 import { resolveSessionProject } from "../../lib/session-project.js";
+import {
+  renderTaskTable,
+  sortTaskTableIssues,
+  taskTableCells,
+} from "../shared/task-table.js";
 
 const READY_CAP = 5;
 const SCOPED_READY_CAP = 8;
@@ -81,26 +82,6 @@ interface StartupWorkEntry {
   state?: State;
   markdown?: string;
 }
-
-type StartupStatus = ClassifiedIssue["readiness"];
-
-interface StartupTask {
-  issue: ClassifiedIssue;
-  status: StartupStatus;
-}
-
-interface ProjectGroup {
-  label: string;
-  tasks: StartupTask[];
-  color: ThemeColor;
-}
-
-const statusRank: Record<StartupStatus, number> = {
-  in_progress: 0,
-  blocked: 1,
-  waiting: 2,
-  ready: 3,
-};
 
 function primaryWorkstream(issue: ClassifiedIssue): string | undefined {
   return issue.workstreams[0];
@@ -237,20 +218,7 @@ function renderHiddenState(state: State): string {
   return `${rendered.slice(0, Math.max(0, lineBoundary))}${suffix}`;
 }
 
-function sortTasks(tasks: StartupTask[]): StartupTask[] {
-  return [...tasks].sort(
-    (left, right) =>
-      statusRank[left.status] - statusRank[right.status] ||
-      Number(!left.issue.needsJp) - Number(!right.issue.needsJp) ||
-      left.issue.id.localeCompare(right.issue.id),
-  );
-}
-
-function groupPriority(group: ProjectGroup): number {
-  return Math.min(...group.tasks.map((task) => statusRank[task.status]));
-}
-
-function projectGroups(state: State): ProjectGroup[] {
+function stateIssues(state: State): ClassifiedIssue[] {
   const candidates = state.active ?? [
     ...state.inProgress,
     ...state.blocked,
@@ -262,47 +230,10 @@ function projectGroups(state: State): ProjectGroup[] {
   const unique = [
     ...new Map(candidates.map((issue) => [issue.id, issue])).values(),
   ];
-  const readyIds = new Set(state.ready.map((issue) => issue.id));
-  const tasks = classifyReadiness(unique, readyIds).map((issue) => ({
-    issue,
-    status: issue.readiness,
-  }));
-
-  if (state.project) {
-    return tasks.length === 0
-      ? []
-      : [
-          {
-            label: state.project.replace(/[-_]+/g, " "),
-            tasks: sortTasks(tasks),
-            color: "accent",
-          },
-        ];
-  }
-
-  const grouped = new Map<string, StartupTask[]>();
-  for (const task of tasks) {
-    const key = primaryWorkstream(task.issue) ?? "";
-    const group = grouped.get(key) ?? [];
-    group.push(task);
-    grouped.set(key, group);
-  }
-
-  return [...grouped.entries()]
-    .map(([workstream, workstreamTasks]) => ({
-      label: workstream
-        ? workstream.replace(/[-_]+/g, " ")
-        : "Inbox • no project",
-      tasks: sortTasks(workstreamTasks),
-      color: workstream ? ("accent" as ThemeColor) : ("muted" as ThemeColor),
-    }))
-    .sort((left, right) => {
-      const leftIsInbox = left.label.startsWith("Inbox");
-      const rightIsInbox = right.label.startsWith("Inbox");
-      if (leftIsInbox !== rightIsInbox) return leftIsInbox ? 1 : -1;
-      const priority = groupPriority(left) - groupPriority(right);
-      return priority !== 0 ? priority : left.label.localeCompare(right.label);
-    });
+  return classifyReadiness(
+    unique,
+    new Set(state.ready.map((issue) => issue.id)),
+  );
 }
 
 class StartupWorkTable implements Component {
@@ -331,9 +262,9 @@ class StartupWorkTable implements Component {
     const lines = [
       `${outerBorder("╭─")} ${this.theme.fg("accent", this.theme.bold(title))} ${outerBorder(`${"─".repeat(topFill)}╮`)}`,
     ];
-    const groups = projectGroups(this.state);
+    const issues = sortTaskTableIssues(stateIssues(this.state));
 
-    if (groups.length === 0) {
+    if (issues.length === 0) {
       const empty = this.state.project
         ? `No tracked work for project '${this.state.project}'.${
             this.state.knownProjects.length
@@ -351,37 +282,21 @@ class StartupWorkTable implements Component {
       return this.finish(lines, margin, boxWidth);
     }
 
-    const tasks = groups.flatMap((group) => group.tasks);
-    const projectWidth = Math.min(
-      28,
-      Math.max(
-        visibleWidth("PROJECT"),
-        ...groups.map((group) => visibleWidth(this.projectLabel(group))),
-      ),
-    );
-    const statusWidth = visibleWidth("IN PROGRESS");
-    const idWidth = Math.min(
-      10,
-      Math.max(...tasks.map((task) => visibleWidth(task.issue.id))),
-    );
-    const taskWidth = boxWidth - projectWidth - statusWidth - idWidth - 13;
-    const useColumns = taskWidth >= 24;
-    const columnWidths = [projectWidth, statusWidth, idWidth, taskWidth];
-
-    if (useColumns) {
-      this.renderColumns(lines, groups, columnWidths, outerBorder, grid);
+    const table = renderTaskTable(issues, this.theme);
+    if (boxWidth >= 80 && table.width <= contentWidth) {
+      lines.push(...table.lines.map(fullRow));
     } else {
-      this.renderStacked(lines, groups, contentWidth, fullDivider, fullRow);
+      this.renderArtifactStacked(
+        lines,
+        issues,
+        contentWidth,
+        fullDivider,
+        fullRow,
+      );
     }
 
     if (this.state.stale.length > 0) {
-      if (useColumns) {
-        lines.push(
-          this.columnDivider(columnWidths, "├", "┴", "┤", outerBorder, grid),
-        );
-      } else {
-        lines.push(fullDivider());
-      }
+      lines.push(fullDivider());
       const ids = this.state.stale
         .slice(0, STALE_SHOW_CAP)
         .map((issue) => issue.id);
@@ -394,168 +309,46 @@ class StartupWorkTable implements Component {
       )) {
         lines.push(fullRow(wrapped));
       }
-      lines.push(fullDivider("╰", "╯"));
-    } else if (useColumns) {
-      lines.push(
-        this.columnDivider(columnWidths, "╰", "┴", "╯", outerBorder, grid),
-      );
-    } else {
-      lines.push(fullDivider("╰", "╯"));
     }
+    lines.push(fullDivider("╰", "╯"));
 
     return this.finish(lines, margin, boxWidth);
   }
 
-  private renderColumns(
+  private renderArtifactStacked(
     lines: string[],
-    groups: ProjectGroup[],
-    widths: number[],
-    outerBorder: (text: string) => string,
-    grid: (text: string) => string,
-  ) {
-    const headers = ["PROJECT", "STATUS", "ID", "TASK"];
-    const taskWidth = widths[3] ?? 0;
-
-    lines.push(
-      this.columnRow(
-        headers.map((header) => this.theme.fg("dim", this.theme.bold(header))),
-        widths,
-        outerBorder,
-        grid,
-      ),
-    );
-    lines.push(this.columnDivider(widths, "├", "┼", "┤", outerBorder, grid));
-
-    groups.forEach((group, groupIndex) => {
-      if (groupIndex > 0) {
-        lines.push(
-          this.columnDivider(widths, "├", "┼", "┤", outerBorder, grid),
-        );
-      }
-      let projectPending = true;
-
-      for (const task of group.tasks) {
-        const title = `${task.issue.title}${lifecycleAnnotation(task.issue)}${needsJpTag(task.issue)}`;
-        const titleLines = wrapTextWithAnsi(
-          this.theme.fg("text", title),
-          taskWidth,
-        );
-        titleLines.forEach((titleLine, lineIndex) => {
-          lines.push(
-            this.columnRow(
-              [
-                projectPending ? this.styledProject(group, widths[0] ?? 0) : "",
-                lineIndex === 0 ? this.styledStatus(task.status) : "",
-                lineIndex === 0 ? this.theme.fg("muted", task.issue.id) : "",
-                titleLine,
-              ],
-              widths,
-              outerBorder,
-              grid,
-            ),
-          );
-          projectPending = false;
-        });
-      }
-    });
-  }
-
-  private renderStacked(
-    lines: string[],
-    groups: ProjectGroup[],
+    issues: ClassifiedIssue[],
     contentWidth: number,
     fullDivider: (left?: string, right?: string) => string,
     fullRow: (content: string) => string,
   ) {
-    groups.forEach((group, groupIndex) => {
-      if (groupIndex > 0) lines.push(fullDivider());
-      lines.push(fullRow(this.groupHeading(group)));
-      lines.push(fullDivider());
-      for (const task of group.tasks) {
-        const meta = `${this.statusLabel(task.status)} · ${task.issue.id}`;
-        lines.push(
-          fullRow(
-            this.theme.fg(this.statusColor(task.status), this.theme.bold(meta)),
-          ),
-        );
-        const title = `${task.issue.title}${lifecycleAnnotation(task.issue)}${needsJpTag(task.issue)}`;
-        for (const wrapped of wrapTextWithAnsi(
-          this.theme.fg("text", title),
-          Math.max(1, contentWidth - 2),
-        )) {
-          lines.push(fullRow(`  ${wrapped}`));
-        }
+    issues.forEach((issue, issueIndex) => {
+      if (issueIndex > 0) lines.push(fullDivider());
+      const cells = taskTableCells(issue, this.theme);
+      const fields: Array<[string, string[]]> = [
+        ["ID", cells.id],
+        ["STATE", cells.state],
+        ["TASK", cells.task],
+        ["ARTIFACTS", cells.artifacts],
+        ["BLOCKERS", cells.blockers],
+      ];
+      for (const [label, values] of fields) {
+        const prefix = `${this.theme.fg("dim", this.theme.bold(label))} · `;
+        const indent = " ".repeat(visibleWidth(`${label} · `));
+        values.forEach((value, valueIndex) => {
+          const visiblePrefix = valueIndex === 0 ? prefix : indent;
+          const wrapped = wrapTextWithAnsi(
+            value,
+            Math.max(1, contentWidth - visibleWidth(visiblePrefix)),
+          );
+          wrapped.forEach((line, lineIndex) =>
+            lines.push(
+              fullRow(`${lineIndex === 0 ? visiblePrefix : indent}${line}`),
+            ),
+          );
+        });
       }
     });
-  }
-
-  private projectLabel(group: ProjectGroup): string {
-    return `${group.label.toUpperCase()} · ${group.tasks.length}`;
-  }
-
-  private styledProject(group: ProjectGroup, width: number): string {
-    const count = `· ${group.tasks.length}`;
-    const nameWidth = Math.max(1, width - visibleWidth(count) - 1);
-    const name = truncateToWidth(
-      group.label.toUpperCase(),
-      nameWidth,
-      "…",
-      true,
-    );
-    return `${this.theme.fg(group.color, this.theme.bold(name))} ${this.theme.fg("dim", count)}`;
-  }
-
-  private groupHeading(group: ProjectGroup): string {
-    return this.theme.fg(
-      group.color,
-      this.theme.bold(`${group.label.toUpperCase()} — ${group.tasks.length}`),
-    );
-  }
-
-  private statusLabel(status: StartupStatus): string {
-    if (status === "in_progress") return "ACTIVE";
-    if (status === "ready") return "ACTIONABLE";
-    return "WAITING";
-  }
-
-  private statusColor(status: StartupStatus): ThemeColor {
-    if (status === "in_progress") return "warning";
-    if (status === "blocked") return "error";
-    if (status === "ready") return "success";
-    return "muted";
-  }
-
-  private styledStatus(status: StartupStatus): string {
-    return this.theme.fg(
-      this.statusColor(status),
-      this.theme.bold(this.statusLabel(status)),
-    );
-  }
-
-  private columnRow(
-    cells: string[],
-    widths: number[],
-    outerBorder: (text: string) => string,
-    grid: (text: string) => string,
-  ): string {
-    return `${outerBorder("│")} ${cells
-      .map((cell, index) =>
-        truncateToWidth(cell, widths[index] ?? 0, "…", true),
-      )
-      .join(` ${grid("│")} `)} ${outerBorder("│")}`;
-  }
-
-  private columnDivider(
-    widths: number[],
-    left: string,
-    joiner: string,
-    right: string,
-    outerBorder: (text: string) => string,
-    grid: (text: string) => string,
-  ): string {
-    return `${outerBorder(left)}${grid(
-      widths.map((width) => "─".repeat(width + 2)).join(joiner),
-    )}${outerBorder(right)}`;
   }
 
   private finish(lines: string[], margin: string, boxWidth: number): string[] {

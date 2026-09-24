@@ -120,7 +120,7 @@ const TITLE_LIMIT = 500;
 const LABEL_LIMIT = 128;
 const UPDATED_AT_LIMIT = 128;
 
-function normalizeMetadata(value: string, limit: number): string {
+export function normalizeMetadata(value: string, limit: number): string {
   const withoutTerminalSequences = value
     .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, "")
     .replace(/\u001b[P^_][\s\S]*?\u001b\\/g, "")

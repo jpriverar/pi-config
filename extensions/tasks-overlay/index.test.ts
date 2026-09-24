@@ -66,6 +66,7 @@ function createHarness(
     registrySetMutates?: boolean;
     select?: (items: string[]) => string | undefined;
     customInputs?: string[];
+    renderWidth?: number;
     input?: (title: string, placeholder?: string) => string | undefined;
     confirm?: (title: string, message: string) => boolean;
   } = {},
@@ -282,7 +283,7 @@ function createHarness(
         let result: unknown;
         let component: any;
         const render = () => {
-          rendered = component.render(100).join("\n");
+          rendered = component.render(options.renderWidth ?? 100).join("\n");
           renders.push(rendered);
         };
         component = factory(
@@ -1222,11 +1223,97 @@ test("renders every classified status and leaves needs:jp as a marker", async ()
 
   await show(harness);
 
-  assert.match(harness.render(), /Active \(1\)/);
-  assert.match(harness.render(), /Actionable \(1\)/);
-  assert.match(harness.render(), /Waiting \(2\)/);
+  assert.match(harness.render(), /ID\s+│\s+STATE\s+│\s+TASK/);
+  assert.equal((harness.render().match(/ACTIVE/g) ?? []).length, 1);
+  assert.equal((harness.render().match(/ACTIONABLE/g) ?? []).length, 1);
+  assert.equal((harness.render().match(/WAITING/g) ?? []).length, 2);
   assert.match(harness.render(), /Task doing ← you/);
   assert.match(harness.render(), /Task waiting ← you/);
+});
+
+test("renders one multiline table row with artifacts and blockers", async () => {
+  const task = issue("jp-table", "open");
+  task.title = "Show lifecycle outputs";
+  task.lifecycle = {
+    version: 1,
+    phase: "waiting",
+    waiting: { kind: "dependency" },
+    stateEnteredAt: "2026-09-20T12:00:00.000Z",
+    lastProgressAt: "2026-09-20T12:00:00.000Z",
+    execution: null,
+    artifacts: [
+      {
+        id: "pr:42",
+        kind: "pull_request",
+        uri: "https://github.com/jpriverar/pi-config/pull/42",
+        title: "PR #42",
+        role: "deliverable",
+        sourceArtifactIds: ["branch:table"],
+        producedAt: "2026-09-20T13:00:00.000Z",
+        supersededAt: null,
+      },
+      {
+        id: "branch:table",
+        kind: "branch",
+        uri: "git://github.com/jpriverar/pi-config/refs/heads/jpriverar/table",
+        title: "jpriverar/table",
+        role: "supporting",
+        sourceArtifactIds: [],
+        producedAt: "2026-09-20T12:30:00.000Z",
+        supersededAt: null,
+      },
+    ],
+    activeCheck: null,
+    checkHistory: [],
+    transitionHistory: [],
+    resources: [],
+    disposition: null,
+  };
+  task.blockingDependencies = [
+    { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+  ];
+  const harness = createHarness({ issues: [task] });
+
+  await show(harness);
+
+  assert.match(
+    harness.render(),
+    /ID\s+│\s+STATE\s+│\s+TASK\s+│\s+ARTIFACTS\s+│\s+BLOCKERS/,
+  );
+  assert.match(harness.render(), /jp-table/);
+  assert.match(harness.render(), /WAITING/);
+  assert.match(harness.render(), /Show lifecycle outputs/);
+  assert.match(harness.render(), /pull request · PR #42/);
+  assert.match(harness.render(), /branch · jpriverar\/table/);
+  assert.match(harness.render(), /jp-blocker/);
+});
+
+test("keeps the table header fixed while the body scrolls vertically", async () => {
+  const harness = createHarness({
+    issues: Array.from({ length: 18 }, (_, index) =>
+      issue(`task-${String(index).padStart(2, "0")}`, "in_progress"),
+    ),
+    customInputs: Array(20).fill("\u001b[B"),
+  });
+
+  await show(harness);
+
+  assert.match(harness.render(), /ID\s+│\s+STATE\s+│\s+TASK/);
+  assert.doesNotMatch(harness.render(), /Task task-00/);
+  assert.match(harness.render(), /Task task-1[0-7]/);
+});
+
+test("scrolls horizontally to later table columns", async () => {
+  const harness = createHarness({
+    issues: [issue("wide-task", "in_progress")],
+    renderWidth: 52,
+    customInputs: ["\u001b[C", "\u001b[C", "\u001b[C", "\u001b[C"],
+  });
+
+  await show(harness);
+
+  assert.notEqual(harness.renders.at(-1), harness.renders[0]);
+  assert.match(harness.render(), /ARTIFACTS|BLOCKERS/);
 });
 
 test("renders normalized task metadata without terminal controls or raw newlines", async () => {
@@ -1364,7 +1451,7 @@ for (const unavailable of ["active", "ready"] as const) {
   });
 }
 
-test("renders managed dependency waits once with inline authority", async () => {
+test("renders managed dependency waits once in the state and blocker columns", async () => {
   const enteredAt = new Date(Date.now() - 86_400_000).toISOString();
   const waiting = issue("jp-654", "open", ["workstream:pi-setup"]);
   waiting.title = "Roll out migration";
@@ -1389,11 +1476,10 @@ test("renders managed dependency waits once with inline authority", async () => 
 
   await show(harness);
 
-  assert.match(harness.render(), /Waiting \(1\)/);
-  assert.match(
-    harness.render(),
-    /jp-654 Roll out migration · blocked by jp-600 · waiting 1d/,
-  );
-  assert.doesNotMatch(harness.render(), /(Ready|Actionable) \(1\)/);
+  assert.match(harness.render(), /WAITING · 1d/);
+  assert.match(harness.render(), /jp-654/);
+  assert.match(harness.render(), /Roll out migration/);
+  assert.match(harness.render(), /jp-600/);
+  assert.doesNotMatch(harness.render(), /ACTIONABLE/);
   assert.equal((harness.render().match(/jp-654/g) ?? []).length, 1);
 });

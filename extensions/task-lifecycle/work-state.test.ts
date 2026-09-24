@@ -365,7 +365,88 @@ test("malformed explicit metadata does not fall back to the display name", async
   assert.doesNotMatch(hidden.message.content, /Work state — alpha/);
 });
 
-test("visible startup table contains every active task exactly once and puts inbox last", async () => {
+test("wide startup table shows the artifact schema with multiline task rows", async () => {
+  const task = issue(
+    "jp-output",
+    "open",
+    ["workstream:alpha"],
+    "Show lifecycle outputs",
+  );
+  task.lifecycle = lifecycle(
+    "waiting",
+    new Date(Date.now() - 86_400_000).toISOString(),
+  );
+  task.lifecycle!.artifacts = [
+    {
+      id: "pr:42",
+      kind: "pull_request",
+      uri: "https://github.com/jpriverar/pi-config/pull/42",
+      title: "PR #42",
+      role: "deliverable",
+      sourceArtifactIds: ["branch:table"],
+      producedAt: "2026-09-20T13:00:00.000Z",
+      supersededAt: null,
+    },
+    {
+      id: "branch:table",
+      kind: "branch",
+      uri: "git://github.com/jpriverar/pi-config/refs/heads/jpriverar/table",
+      title: "jpriverar/table",
+      role: "supporting",
+      sourceArtifactIds: [],
+      producedAt: "2026-09-20T12:30:00.000Z",
+      supersededAt: null,
+    },
+  ];
+  task.blockingDependencies = [
+    { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+  ];
+  const harness = createHarness({ issues: [task], readyIds: [] });
+
+  await start(harness);
+  const output = renderCard(harness, 140);
+
+  assert.match(
+    output,
+    /ID\s+│\s+STATE\s+│\s+TASK\s+│\s+ARTIFACTS\s+│\s+BLOCKERS/,
+  );
+  assert.match(output, /jp-output/);
+  assert.match(output, /WAITING · 1d/);
+  assert.match(output, /Show lifecycle outputs/);
+  assert.match(output, /pull request · PR #42/);
+  assert.match(output, /branch · jpriverar\/table/);
+  assert.match(output, /jp-blocker/);
+});
+
+test("narrow startup table stacks every artifact-schema field", async () => {
+  const task = issue("jp-narrow", "open", [], "Narrow task");
+  task.lifecycle = lifecycle("actionable", "2026-09-20T12:00:00.000Z");
+  task.lifecycle!.artifacts = [
+    {
+      id: "doc:design",
+      kind: "document",
+      uri: "file:///tmp/design.md",
+      title: "design.md",
+      role: "supporting",
+      sourceArtifactIds: [],
+      producedAt: "2026-09-20T12:30:00.000Z",
+      supersededAt: null,
+    },
+  ];
+  const harness = createHarness({ issues: [task] });
+
+  await start(harness);
+  const output = renderCard(harness, 50);
+
+  assert.match(output, /ID · jp-narrow/);
+  assert.match(output, /STATE · ACTIONABLE/);
+  assert.match(output, /TASK · Narrow task/);
+  assert.match(output, /ARTIFACTS/);
+  assert.match(output, /document · design.md/);
+  assert.match(output, /BLOCKERS · —/);
+});
+
+test("visible startup table contains every active task exactly once", async () => {
   const issues = [
     issue("jp-doing", "in_progress", ["workstream:alpha"]),
     issue("jp-wait", "open", ["workstream:beta"]),
@@ -383,15 +464,9 @@ test("visible startup table contains every active task exactly once and puts inb
   assert.match(output, /ACTIVE/);
   assert.match(output, /WAITING/);
   assert.match(output, /ACTIONABLE/);
-  assert.ok(
-    output.indexOf("ALPHA · 2") < output.indexOf("INBOX • NO PROJECT · 1"),
-  );
-  assert.ok(
-    output.indexOf("BETA · 1") < output.indexOf("INBOX • NO PROJECT · 1"),
-  );
 });
 
-test("wide startup table uses one global header and visually spanning project cells", async () => {
+test("wide startup table uses one global artifact-schema header", async () => {
   const harness = createHarness({
     issues: [
       issue("jp-doing", "in_progress", ["workstream:alpha"]),
@@ -403,19 +478,16 @@ test("wide startup table uses one global header and visually spanning project ce
 
   await start(harness);
   const output = renderCard(harness, 120);
-  const headerIndex = output.indexOf("PROJECT");
-  const alphaIndex = output.indexOf("ALPHA · 2");
 
-  assert.ok(headerIndex >= 0, "global PROJECT header is visible");
-  assert.ok(headerIndex < alphaIndex, "global header precedes project rows");
-  assert.match(output, /PROJECT\s+│ STATUS\s+│ ID\s+│ TASK/);
-  assert.match(output, /│ ALPHA · 2\s+│ ACTIVE\s+│ jp-doing\s+│/);
-  assert.match(output, /│\s+│ ACTIONABLE\s+│ jp-ready\s+│/);
-  assert.equal(output.match(/ALPHA · 2/g)?.length, 1);
-  assert.doesNotMatch(output, /ALPHA — 2/);
+  assert.match(
+    output,
+    /ID\s+│\s+STATE\s+│\s+TASK\s+│\s+ARTIFACTS\s+│\s+BLOCKERS/,
+  );
+  assert.ok(output.indexOf("ACTIVE") < output.indexOf("ACTIONABLE"));
+  assert.equal(output.match(/ARTIFACTS/g)?.length, 1);
 });
 
-test("wide project cells remain visually spanning when task titles wrap", async () => {
+test("wide task cells wrap without repeating task metadata", async () => {
   const harness = createHarness({
     issues: [
       issue(
@@ -431,16 +503,13 @@ test("wide project cells remain visually spanning when task titles wrap", async 
   await start(harness);
   const output = renderCard(harness, 90);
 
-  assert.equal(output.match(/ALPHA · 2/g)?.length, 1);
+  assert.equal(output.match(/jp-wrap/g)?.length, 1);
   assert.match(output, /recommendation endpoint persistence/);
-  assert.match(
-    output,
-    /│\s+│\s+│\s+│ across every canonical distribution and service/,
-  );
-  assert.match(output, /│\s+│\s+│\s+│ boundary/);
+  assert.match(output, /persistence across every canonical/);
+  assert.match(output, /distribution and service boundary/);
 });
 
-test("narrow startup tables retain stacked project headings", async () => {
+test("narrow startup tables retain stacked artifact fields", async () => {
   const harness = createHarness({
     issues: [issue("jp-ready", "open", ["workstream:alpha"])],
   });
@@ -448,48 +517,14 @@ test("narrow startup tables retain stacked project headings", async () => {
   await start(harness);
   const output = renderCard(harness, 50);
 
-  assert.match(output, /ALPHA — 1/);
-  assert.match(output, /ACTIONABLE · jp-ready/);
-  assert.doesNotMatch(output, /PROJECT\s+│ STATUS/);
+  assert.match(output, /ID · jp-ready/);
+  assert.match(output, /STATE · ACTIONABLE/);
+  assert.match(output, /ARTIFACTS · —/);
+  assert.match(output, /BLOCKERS · —/);
+  assert.doesNotMatch(output, /ID\s+│\s+STATE/);
 });
 
-test("long project names preserve their dimmed task count", async () => {
-  const calls: Array<{ color: string; text: string }> = [];
-  const recordingTheme = {
-    fg(color: string, text: string) {
-      calls.push({ color, text });
-      return text;
-    },
-    bold(text: string) {
-      return text;
-    },
-  };
-  const harness = createHarness({
-    issues: [
-      issue("jp-one", "open", [
-        "workstream:recommendations-endpoint-processor",
-      ]),
-      issue("jp-two", "open", [
-        "workstream:recommendations-endpoint-processor",
-      ]),
-    ],
-  });
-
-  await start(harness);
-  const output = renderCard(harness, 120, recordingTheme).replace(
-    /\u001b\[[0-9;]*m/g,
-    "",
-  );
-
-  assert.match(output, /RECOMMENDATIONS ENDPOIN… · 2/);
-  assert.equal(output.match(/· 2/g)?.length, 1);
-  assert.ok(
-    calls.some(({ color, text }) => color === "dim" && text === "· 2"),
-    "the preserved count retains its subdued style",
-  );
-});
-
-test("wide ANSI tables preserve line widths and four-column stale joins", async () => {
+test("wide ANSI artifact tables preserve line widths", async () => {
   const ansiTheme = {
     fg(_color: string, text: string) {
       return `\u001b[38;5;250m${text}\u001b[39m`;
@@ -521,21 +556,21 @@ test("wide ANSI tables preserve line widths and four-column stale joins", async 
     line.includes("Stale inbox"),
   );
   assert.ok(staleIndex > 0, "stale footer is visible");
-  assert.equal(plainLines[staleIndex - 1]?.match(/┴/g)?.length, 3);
+  assert.match(output, /ID.*STATE.*TASK.*ARTIFACTS.*BLOCKERS/);
 });
 
-test("wide columns begin exactly when 24 task cells remain", async () => {
+test("wide artifact columns begin at the static table threshold", async () => {
   const harness = createHarness({
     issues: [issue("jp-ready", "open", ["workstream:alpha"])],
   });
 
   await start(harness);
 
-  assert.doesNotMatch(renderCard(harness, 66), /PROJECT\s+│ STATUS/);
-  assert.match(renderCard(harness, 67), /PROJECT\s+│ STATUS/);
+  assert.doesNotMatch(renderCard(harness, 81), /ID\s+│\s+STATE/);
+  assert.match(renderCard(harness, 82), /ID\s+│\s+STATE/);
 });
 
-test("wide scoped startup table names the project column from the active scope", async () => {
+test("wide scoped startup table keeps scope in the title", async () => {
   const harness = createHarness({
     sessionName: "alpha",
     issues: [issue("jp-alpha", "open", ["workstream:alpha"])],
@@ -545,11 +580,11 @@ test("wide scoped startup table names the project column from the active scope",
   const output = renderCard(harness, 120);
 
   assert.match(output, /WORK STATE • alpha/);
-  assert.match(output, /│ ALPHA · 1\s+│ ACTIONABLE\s+│ jp-alpha\s+│/);
-  assert.doesNotMatch(output, /│ TASKS · 1\s+│/);
+  assert.match(output, /ID\s+│\s+STATE\s+│\s+TASK/);
+  assert.match(output, /jp-alpha/);
 });
 
-test("wide startup table reserves gold for projects and mutes its grid and IDs", async () => {
+test("wide startup table accents its title and mutes its grid and IDs", async () => {
   const calls: Array<{ color: string; text: string }> = [];
   const recordingTheme = {
     fg(color: string, text: string) {
@@ -568,8 +603,10 @@ test("wide startup table reserves gold for projects and mutes its grid and IDs",
   renderCard(harness, 120, recordingTheme);
 
   assert.ok(
-    calls.some(({ color, text }) => color === "accent" && text === "ALPHA"),
-    "project names retain the Gold Rush accent",
+    calls.some(
+      ({ color, text }) => color === "accent" && text === "WORK STATE",
+    ),
+    "the work-state title retains the Gold Rush accent",
   );
   assert.ok(
     calls.some(({ color, text }) => color === "muted" && text === "jp-ready"),
@@ -605,7 +642,7 @@ test("hidden context remains capped while the visible table remains complete", a
 
   assert.match(hidden.message.content, /Actionable \(12, showing 5\)/);
   assert.doesNotMatch(hidden.message.content, /jp-11/);
-  assert.match(visible, /CORE · 12/);
+  assert.match(visible, /ID\s+│\s+STATE\s+│\s+TASK/);
   assert.match(visible, /jp-11/);
 });
 
@@ -719,8 +756,7 @@ test("multiple workstream labels preserve source order and the first controls sc
     global.context,
   );
 
-  assert.match(renderCard(global), /ZETA · 1/);
-  assert.doesNotMatch(renderCard(global), /ALPHA · 1/);
+  assert.match(renderCard(global), /jp-cross/);
   assert.match(hidden.message.content, /\[zeta,alpha\]/);
   assert.match(renderCard(scoped), /No tracked work for project 'alpha'/);
 });
@@ -753,7 +789,7 @@ test("renders deduplicated durable entries written before active was stored", ()
   );
   const output = component.render(100).join("\n");
 
-  assert.match(output, /PR REVIEW · 1/);
+  assert.match(output, /ID\s+│\s+STATE\s+│\s+TASK/);
   assert.match(output, /ACTIONABLE/);
   assert.equal(output.match(/jp-legacy/g)?.length, 1);
 });
