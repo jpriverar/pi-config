@@ -118,5 +118,10 @@ export default function herdrAskUserBridge(pi: EventAPI): void {
     "force-push:blocked",
     "Waiting for force-push approval",
   );
+  bridgeBlockedEvent(
+    pi,
+    "apm-recs:blocked",
+    "Waiting for APM Recommendations insert approval",
+  );
   bridgeAuthChallengeEvent(pi);
 }
