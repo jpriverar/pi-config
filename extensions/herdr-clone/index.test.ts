@@ -10,6 +10,7 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 
+import { resolveSessionProject } from "../../lib/session-project.js";
 import herdrCloneExtension from "./index.js";
 
 type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
@@ -202,6 +203,71 @@ for (const [argument, direction] of [
     assert.equal(h.sm.getLeafId(), sourceLeaf);
     assert.equal(readFileSync(sourceFile, "utf8"), sourceBytes);
     assert.equal(h.notifications.at(-1)?.level, "info");
+  });
+}
+
+for (const scenario of [
+  {
+    label: "project-scoped",
+    scope: "pi-setup",
+    sourceName: "pi-setup-parent123",
+    baseName: "pi-setup",
+    expectedProject: "pi-setup",
+  },
+  {
+    label: "legacy project",
+    scope: undefined,
+    sourceName: "legacy-project",
+    baseName: "legacy-project",
+    expectedProject: "legacy-project",
+  },
+  {
+    label: "explicitly global",
+    scope: null,
+    sourceName: "Investigation",
+    baseName: "Investigation",
+    expectedProject: undefined,
+  },
+]) {
+  test(`refreshes a ${scenario.label} clone name without changing its project or source`, async (t) => {
+    const h = harness(t);
+    if (scenario.scope !== undefined) {
+      h.sm.appendCustomEntry("jp-project-scope", {
+        version: 1,
+        workstream: scenario.scope,
+      });
+    }
+    h.sm.appendSessionInfo(scenario.sourceName);
+    const sourceFile = h.sm.getSessionFile()!;
+    const sourceBytes = readFileSync(sourceFile, "utf8");
+    const sourceLeaf = h.sm.getLeafId();
+    const sourceMessages = h.sm.buildSessionContext().messages;
+    const names: string[] = [];
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await h.clone();
+      assert.equal(h.notifications.at(-1)!.level, "info");
+      const launch = h.calls.at(-1)!;
+      const file = launch.args[launch.args.indexOf("--session") + 1];
+      const clone = SessionManager.open(file);
+      const name = clone.getSessionName()!;
+      assert.equal(
+        name,
+        `${scenario.baseName}-${clone.getSessionId().replaceAll("-", "").slice(-8)}`,
+      );
+      assert.notEqual(name, scenario.sourceName);
+      assert.equal(
+        resolveSessionProject(clone).workstream,
+        scenario.expectedProject,
+      );
+      assert.deepEqual(clone.buildSessionContext().messages, sourceMessages);
+      assert.equal(clone.getHeader()!.parentSession, sourceFile);
+      names.push(name);
+    }
+    assert.notEqual(names[0], names[1]);
+    assert.equal(h.sm.getSessionName(), scenario.sourceName);
+    assert.equal(h.sm.getLeafId(), sourceLeaf);
+    assert.equal(readFileSync(sourceFile, "utf8"), sourceBytes);
   });
 }
 

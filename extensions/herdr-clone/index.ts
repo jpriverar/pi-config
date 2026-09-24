@@ -5,6 +5,12 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 
+import {
+  generateSessionProjectName,
+  persistSessionProject,
+  resolveSessionProject,
+} from "../../lib/session-project.js";
+
 const USAGE = "Usage: /herdr-clone [vertical|v|horizontal|h]";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -127,6 +133,15 @@ export default function herdrCloneExtension(pi: ExtensionAPI): void {
         sessionFile = clone.createBranchedSession(leaf);
         if (!sessionFile || !existsSync(sessionFile)) {
           throw new Error(`Could not save a clone of ${sourceFile}`);
+        }
+        const project = resolveSessionProject(clone);
+        const nameBase = project.workstream ?? clone.getSessionName();
+        if (nameBase) {
+          // Legacy names double as project scope; pin it before renaming.
+          if (project.source === "legacy-display-name") {
+            persistSessionProject(clone, project.workstream ?? null);
+          }
+          clone.appendSessionInfo(generateSessionProjectName(clone, nameBase));
         }
 
         const split = await herdr(

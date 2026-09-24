@@ -101,7 +101,9 @@ Use `/herdr-clone` from an idle, saved Pi conversation inside Herdr:
 The command copies the active conversation branch into a new session, opens
 and focuses the new pane, and starts Pi with the same working directory,
 model, and thinking level. The new agent waits for your next instruction;
-the original session is unchanged. Compaction records are preserved, so this
+the original session is unchanged. A named clone gets a fresh display name
+using its project (or existing name) and the new session ID's suffix, while
+keeping the same project scope. Compaction records are preserved, so this
 separates future conversation growth but does not shrink inherited context.
 The new process loads its normal Pi configuration, not the source process's
 in-memory extension state or one-off CLI overrides.
