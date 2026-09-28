@@ -4,9 +4,9 @@
 
 **Task:** `jp-nqwc` — Move automatic task reconciliation to a local daemon
 
-**Status:** Proposed written design; conversational sections approved, written review pending.
+**Status:** Approved for implementation planning on 2026-09-28, including the practical trade-offs and opt-in packaging contract. Implementation-plan review and service activation remain separate gates.
 
-**Baseline:** `pi-config` at `a655fa6`. This document does not authorize implementation or installation.
+**Baseline:** Initial design inspected `pi-config` at `a655fa6`; implementation planning is based on `cf230ef`. This document does not authorize installation or activation.
 
 ## Goal
 
@@ -17,7 +17,8 @@ Success means one local reconciler, bounded asynchronous checks, safe lifecycle 
 ## Approved product contract
 
 - Full unattended reconciliation, including configured automatic closure and safe expired-execution/worktree cleanup.
-- One daemon per local Beads store, supervised as a macOS user LaunchAgent, starting at login after explicit installation.
+- One daemon per local Beads store, supervised as a macOS user LaunchAgent, starting at login after explicit installation and enablement.
+- The daemon, shared code, and administration commands ship in the same `pi-config` package as `task-lifecycle`. Package installation/update and extension loading must not install, enable, or start a background service.
 - Pi sessions retain ordinary task mutations, execution-lease renewal, and direct reads of Beads. They stop performing automatic startup reconciliation at cutover.
 - Explicit `task_reconcile` requests also use the daemon, not an independent in-session execution path.
 - Results and important failures appear in Pi on subsequent interaction. No desktop notifications, automatic model turns, or agent launches.
@@ -133,7 +134,9 @@ Normal Pi tools and the daemon still share the lifecycle write lock. The singlet
 
 Provide a standalone Node ESM entry point built from the shared TypeScript modules. Explicit service install/update builds and verifies its runtime and required config assets. The service must not rely on a developer worktree, a global `tsx`, an AI provider, or a running Pi process. Source and built-runtime identity appear in health output.
 
-The proposed administration surface is `task-reconciler install|start|stop|status|update|uninstall`, with a foreground `run` mode for temporary integration tests. Commands resolve one explicit store and report the affected paths and service identity before mutations. Installation does not modify Beads task state as a setup step.
+The administration surface is `task-reconciler install|start|stop|status|update|uninstall`, with a foreground `run` mode for temporary integration tests. A Pi command can invoke the same bundled CLI by absolute path; a Git-installed Pi package must not assume its own executable is globally on `PATH`. Commands resolve one explicit store and report the affected paths and service identity before mutations.
+
+`install` prepares and verifies the runtime, configuration, and LaunchAgent template without registering an enabled service, starting a process, or modifying Beads tasks. `start` explicitly registers/enables the service, starts it now, and enables future login startup. `stop` unloads/disables it until another explicit start. Merely updating or reloading the Pi package does none of these operations.
 
 The LaunchAgent uses absolute executable/config paths, a controlled environment, continuous supervision, and a finite shutdown deadline. Its restart behavior is subject to launchd throttling; do not promise immediate restart or execution while logged out. Do not detach command children or set `AbandonProcessGroup`: launchd's normal process-group cleanup is part of crash recovery. `stop` unloads the service so supervision does not immediately restart it. Uninstall removes only verified service-owned registrations/runtime files, never the Beads database, worktrees, or task history.
 
@@ -143,7 +146,7 @@ Authentication is noninteractive. Use the correct configured GitHub account for 
 
 On graceful shutdown: stop admissions and scans, cancel observations, finish or safely abort/reap in-flight commands, and only then release the socket/singleton. Work interrupted before a durable transition is reconstructed from Beads on restart. Partial worktree operations retain their existing recovery evidence.
 
-Updates are explicit, not a side effect of `/reload`. Stop/drain the old service before changing its runtime, build and verify the replacement, then start and check its health. Preserve the prior runtime for explicit rollback. A failed update remains stopped with a clear error; do not silently resume obsolete policy or fallback reconciliation in Pi. Surface protocol/runtime mismatch to the user.
+Updates are explicit, not a side effect of `/reload`. Stop/drain the old service before changing its runtime, build and verify the replacement, then restart and check its health only if it was enabled before the update. Updating a stopped service leaves it stopped. Preserve the prior runtime for explicit rollback. A failed update remains stopped with a clear error; do not silently resume obsolete policy or fallback reconciliation in Pi. Surface protocol/runtime mismatch to the user.
 
 ## Health and Pi-only notices
 
