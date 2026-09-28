@@ -4,6 +4,7 @@ import type { OwnerIdentity } from "../../extensions/worktree-pool/operation-loc
 import {
   nextCheckBackoffMs,
   type CheckAdapterRegistry,
+  type CheckObservation,
   type ObserveCheckInput,
 } from "./checks.js";
 import type {
@@ -30,6 +31,15 @@ import {
   validateLifecycle,
   waitLifecycle,
 } from "./model.js";
+import {
+  fingerprintCheck,
+  reconciliationAlreadyApplied,
+  reconciliationOperationId,
+  type PreparedCheck,
+  type ReconcileRequest,
+  type ReconcileResult,
+  type ReconciliationPreparation,
+} from "./reconciliation.js";
 import type {
   ArtifactInput,
   CreateTaskInput,
@@ -444,43 +454,121 @@ export class TaskLifecycleService {
     owner: LockOwner,
     input: ObserveCheckInput = {},
   ): Promise<LifecycleIssue> {
+    const request: ReconcileRequest = { taskId, requestId: this.deps.uuid() };
+    if (input.manualOutcome !== undefined) {
+      request.manualOutcome = input.manualOutcome;
+      request.expectedCheckFingerprint =
+        fingerprintCheck(await this.deps.store.show(taskId)) ?? undefined;
+    }
+    const result = await this.prepareReconciliation(request, owner);
+    if (result.kind === "complete") return result.issue;
+    if (this.deps.checkAdapters === undefined) {
+      throw new Error("check reconciliation requires configured adapters");
+    }
+    const observation = await this.deps.checkAdapters.observe(
+      result.prepared.check,
+      result.prepared.artifacts,
+      input,
+    );
+    return (await this.applyReconciliation(result.prepared, observation, owner))
+      .issue;
+  }
+
+  async prepareReconciliation(
+    request: ReconcileRequest,
+    owner: LockOwner,
+  ): Promise<ReconciliationPreparation> {
+    const operationId = reconciliationOperationId(request);
+    const taskId = request.taskId;
     let current = await this.deps.store.show(taskId);
+    let didLocalWork = false;
+    const complete = (
+      issue: LifecycleIssue,
+      outcome: ReconcileResult["outcome"] = didLocalWork
+        ? "applied"
+        : "unchanged",
+    ): ReconciliationPreparation => ({ kind: "complete", issue, outcome });
+    if (reconciliationAlreadyApplied(current, operationId))
+      return complete(current, "already_applied");
+    const validateManual = (issue: LifecycleIssue): void => {
+      if (request.manualOutcome === undefined) return;
+      if (
+        issue.lifecycle?.activeCheck?.kind !== "manual" ||
+        issue.lifecycle.waiting?.kind !== "check"
+      ) {
+        throw new Error(`task ${taskId} does not retain a manual check`);
+      }
+      if (request.expectedCheckFingerprint === undefined)
+        throw new Error(
+          `task ${taskId} manual outcome requires a check fingerprint`,
+        );
+      if (fingerprintCheck(issue) !== request.expectedCheckFingerprint)
+        throw new Error(`task ${taskId} check changed before reconciliation`);
+    };
+    validateManual(current);
     let lifecycle = current.lifecycle;
-    if (lifecycle === null) return current;
+    if (lifecycle === null) return complete(current);
     if (lifecycle.phase === "active") {
-      current = await this.reconcileWorktreeResources(
-        taskId,
-        current,
-        lifecycle,
-        owner,
-      );
-      current = await this.reconcileExecutionTimeout(taskId, owner);
+      if (
+        lifecycle.resources.some(
+          (resource) =>
+            resource.cleanupState === "acquiring" ||
+            resource.cleanupState === "release_pending",
+        )
+      ) {
+        current = await this.reconcileWorktreeResources(
+          taskId,
+          current,
+          lifecycle,
+          owner,
+        );
+        didLocalWork = true;
+      }
+      const execution = current.lifecycle?.execution;
+      if (
+        execution != null &&
+        Date.parse(execution.expiresAt) <= this.deps.now()
+      ) {
+        current = await this.reconcileExecutionTimeout(taskId, owner);
+        if (current.lifecycle?.phase !== "active")
+          return complete(current, "applied");
+      }
       lifecycle = current.lifecycle;
-      if (lifecycle?.phase !== "active") return current;
+      if (lifecycle === null) return complete(current, "stale");
     }
     if (
       (lifecycle.phase !== "waiting" && lifecycle.phase !== "active") ||
       lifecycle.waiting === null
-    ) {
-      return current;
-    }
-    const now = this.nowIso();
+    )
+      return complete(current);
     if (lifecycle.waiting.kind === "dependency") {
-      const unresolved = current.dependencies.some(
-        (dependency) =>
-          dependency.dependencyType === "blocks" &&
-          dependency.status !== "closed",
-      );
-      if (unresolved) return current;
-      const operationId = `dependencies-satisfied:${lifecycle.stateEnteredAt}`;
-      return this.deps.store.mutate(taskId, owner, (issue) => {
-        const latest = requireManaged(issue);
-        if (
-          (latest.phase !== "waiting" && latest.phase !== "active") ||
-          latest.waiting?.kind !== "dependency"
-        ) {
-          return unchangedMutation(issue, operationId);
+      if (
+        current.dependencies.some(
+          (dependency) =>
+            dependency.dependencyType === "blocks" &&
+            dependency.status !== "closed",
+        )
+      )
+        return complete(current);
+      let outcome: ReconcileResult["outcome"] = "stale";
+      const updated = await this.deps.store.mutate(taskId, owner, (issue) => {
+        if (reconciliationAlreadyApplied(issue, operationId)) {
+          outcome = "already_applied";
+          return null;
         }
+        const latest = issue.lifecycle;
+        if (
+          latest === null ||
+          (latest.phase !== "waiting" && latest.phase !== "active") ||
+          latest.waiting?.kind !== "dependency" ||
+          issue.dependencies.some(
+            (dependency) =>
+              dependency.dependencyType === "blocks" &&
+              dependency.status !== "closed",
+          )
+        )
+          return null;
+        const now = this.nowIso();
         const next =
           latest.phase === "active"
             ? finishActiveWaiting(
@@ -497,6 +585,7 @@ export class TaskLifecycleService {
                 now,
                 null,
               );
+        outcome = "applied";
         return this.mutation(
           issue,
           operationId,
@@ -504,36 +593,63 @@ export class TaskLifecycleService {
           next,
         );
       });
+      return complete(updated, outcome);
     }
-
-    const activeCheck = lifecycle.activeCheck;
-    if (activeCheck === null) return current;
-    const explicitlyReconciled = input.manualOutcome !== undefined;
+    const check = lifecycle.activeCheck;
+    if (check === null) return complete(current);
     if (
-      !explicitlyReconciled &&
-      activeCheck.nextCheckAt !== null &&
-      Date.parse(activeCheck.nextCheckAt) > this.deps.now()
-    ) {
-      return current;
-    }
-    if (this.deps.checkAdapters === undefined) {
-      throw new Error("check reconciliation requires configured adapters");
-    }
-    const observation = await this.deps.checkAdapters.observe(
-      activeCheck,
-      lifecycle.artifacts,
-      input,
-    );
-    const operationId = `check-observation:${activeCheck.id}:${now}`;
-    return this.deps.store.mutate(taskId, owner, (issue) => {
-      const latest = requireManaged(issue);
+      request.manualOutcome === undefined &&
+      check.nextCheckAt !== null &&
+      Date.parse(check.nextCheckAt) > this.deps.now()
+    )
+      return complete(current);
+    validateManual(current);
+    return {
+      kind: "observe",
+      prepared: {
+        taskId,
+        operationId,
+        fingerprint: fingerprintCheck(current)!,
+        check: structuredClone(check),
+        artifacts: structuredClone(lifecycle.artifacts),
+        ...(request.manualOutcome === undefined
+          ? {}
+          : { manualOutcome: request.manualOutcome }),
+      },
+    };
+  }
+
+  async applyReconciliation(
+    prepared: PreparedCheck,
+    observation: CheckObservation,
+    owner: LockOwner,
+  ): Promise<ReconcileResult> {
+    const { taskId, operationId } = prepared;
+    let outcome: ReconcileResult["outcome"] = "stale";
+    const updated = await this.deps.store.mutate(taskId, owner, (issue) => {
+      if (reconciliationAlreadyApplied(issue, operationId)) {
+        outcome = "already_applied";
+        return null;
+      }
+      const latest = issue.lifecycle;
       if (
+        latest === null ||
         (latest.phase !== "waiting" && latest.phase !== "active") ||
         latest.waiting?.kind !== "check" ||
-        latest.activeCheck?.id !== activeCheck.id
+        latest.activeCheck === null ||
+        fingerprintCheck(issue) !== prepared.fingerprint
+      )
+        return null;
+      if (
+        prepared.manualOutcome !== undefined &&
+        observation.outcome !== prepared.manualOutcome
       ) {
-        return unchangedMutation(issue, operationId);
+        throw new Error(
+          `task ${taskId} observation does not match the explicit manual outcome`,
+        );
       }
+      const now = this.nowIso();
+      outcome = "applied";
       const check = {
         ...latest.activeCheck,
         state: observation.outcome,
@@ -614,6 +730,7 @@ export class TaskLifecycleService {
       const next = finishWaiting(latest, operationId, type, now, check);
       return this.mutation(issue, operationId, "open", next);
     });
+    return { outcome, issue: updated };
   }
 
   async reconcileDue(

@@ -431,3 +431,38 @@ test("showMany rejects records for unrequested targets", async () => {
   );
   await assert.rejects(store.showMany(["expected"]), /unexpected issue/);
 });
+
+test("check fingerprints are stable across process locales", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const issue = checkTask("locale");
+  issue.lifecycle!.activeCheck!.predicate = {
+    reviewAt: BEFORE,
+    ä: 1,
+    z: 2,
+    a: 3,
+  };
+  const hashes: string[] = [];
+  for (const locale of ["en_US.UTF-8", "sv_SE.UTF-8"]) {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `import {fingerprintCheck} from './lib/task-lifecycle/reconciliation.ts'; console.log(fingerprintCheck(${JSON.stringify(issue)}));`,
+      ],
+      {
+        cwd: fileURLToPath(new URL("../../", import.meta.url)),
+        env: { ...process.env, LANG: locale, LC_ALL: locale },
+        encoding: "utf8",
+        timeout: 10_000,
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    hashes.push(result.stdout.trim());
+  }
+  assert.match(hashes[0], /^[a-f0-9]{64}$/);
+  assert.equal(hashes[0], hashes[1]);
+});

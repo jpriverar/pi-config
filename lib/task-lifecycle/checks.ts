@@ -8,6 +8,7 @@ export interface GitHubExecutionResult {
 
 export type GitHubExecutor = (
   args: readonly string[],
+  options?: { signal?: AbortSignal },
 ) => Promise<GitHubExecutionResult>;
 
 export type CheckOutcome =
@@ -23,6 +24,7 @@ export interface CheckObservation {
 
 export interface ObserveCheckInput {
   manualOutcome?: "satisfied" | "action_required";
+  signal?: AbortSignal;
 }
 
 export interface CheckAdapterRegistry {
@@ -52,7 +54,7 @@ export function createCheckAdapterRegistry(
   return {
     async observe(check, artifacts, input = {}) {
       if (check.kind === "github_pull_request") {
-        return observePullRequests(check, artifacts, deps.execGh);
+        return observePullRequests(check, artifacts, deps.execGh, input.signal);
       }
       if (check.kind === "time") {
         const at = timestampPredicate(check.predicate, "at");
@@ -95,6 +97,7 @@ async function observePullRequests(
   check: LifecycleCheck,
   artifacts: readonly Artifact[],
   execGh: GitHubExecutor,
+  signal?: AbortSignal,
 ): Promise<CheckObservation> {
   if (check.targetArtifactIds.length === 0) {
     return {
@@ -117,13 +120,16 @@ async function observePullRequests(
 
   const observations: CheckObservation[] = [];
   for (const target of targets) {
-    const result = await execGh([
-      "pr",
-      "view",
-      target.uri,
-      "--json",
-      "state,reviewDecision,mergeStateStatus,mergedAt",
-    ]);
+    const result = await execGh(
+      [
+        "pr",
+        "view",
+        target.uri,
+        "--json",
+        "state,reviewDecision,mergeStateStatus,mergedAt",
+      ],
+      { signal },
+    );
     if (result.code !== 0) {
       return {
         outcome: "error",

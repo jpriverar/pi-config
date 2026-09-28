@@ -96,7 +96,11 @@ interface PreparedCheck {
   manualOutcome?: "satisfied" | "action_required";
 }
 type ReconciliationPreparation =
-  | { kind: "complete"; issue: LifecycleIssue }
+  | {
+      kind: "complete";
+      issue: LifecycleIssue;
+      outcome: ReconcileResult["outcome"];
+    }
   | { kind: "observe"; prepared: PreparedCheck };
 interface ReconcileResult {
   outcome: "applied" | "unchanged" | "already_applied" | "stale";
@@ -134,7 +138,7 @@ interface ReconcileResult {
 
 **Files:** Modify `lib/task-lifecycle/service.ts`, `checks.ts`, `beads-store.ts`, and their tests. Extend `reconciliation.ts`/test. Avoid a general service-class refactor.
 
-**Interfaces:** Export `fingerprintCheck(issue: LifecycleIssue): string | null`. Add service methods `prepareReconciliation(request: ReconcileRequest, owner: LockOwner): Promise<ReconciliationPreparation>` and `applyReconciliation(prepared: PreparedCheck, observation: CheckObservation, owner: LockOwner): Promise<ReconcileResult>`. Preserve `reconcileTask` temporarily as a compatibility wrapper over the same methods; do not keep a second implementation. Extend `ObserveCheckInput` with `signal?: AbortSignal` and define `GitHubExecutor(args: readonly string[], options?: { signal?: AbortSignal }): Promise<GitHubExecutionResult>`, preserving call sites that omit options.
+**Interfaces:** Export `fingerprintCheck(issue: LifecycleIssue): string | null`. Add service methods `prepareReconciliation(request: ReconcileRequest, owner: LockOwner): Promise<ReconciliationPreparation>` and `applyReconciliation(prepared: PreparedCheck, observation: CheckObservation, owner: LockOwner): Promise<ReconcileResult>`. Preserve `reconcileTask` temporarily as a compatibility wrapper over the same methods; do not keep a second implementation. Extend the locked store mutation callback to return `Mutation | null`, where null explicitly abstains without a write or a fabricated transition. Extend `ObserveCheckInput` with `signal?: AbortSignal` and define `GitHubExecutor(args: readonly string[], options?: { signal?: AbortSignal }): Promise<GitHubExecutionResult>`, preserving call sites that omit options.
 
 - [ ] **1. Write failing race/idempotence tests.** Pause an observation, change each relevant predicate/target/URI/policy/check field, then apply. Also edit a title or renew a valid lease. Cover a superseding observation, manual replacement-check retry, wrong-kind manual input, Active retained-check satisfaction, and expiry-renewal races:
 

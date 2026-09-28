@@ -548,3 +548,34 @@ test("ready IDs ignore Beads edge-shaped dependency summaries", async () => {
 
   assert.deepEqual([...(await store.readyIds())], ["jp-1"]);
 });
+
+test("locked reconciliation can abstain without writing or inventing an operation", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "lifecycle-abstain-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const calls: string[] = [];
+  const raw = rawIssue();
+  const store = createLifecycleStore(async (_command, args) => {
+    calls.push(args[0]);
+    return result(raw);
+  }, options(root));
+  const current = await store.mutate("jp-1", OWNER, () => null);
+  assert.equal(current.status, "open");
+  assert.deepEqual(calls, ["show"]);
+  assert.deepEqual(current.metadata, raw.metadata);
+});
+
+test("replayed identical metadata does not issue another Beads update", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "lifecycle-unchanged-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const calls: string[] = [];
+  const mutation = claimedMutation();
+  const raw = rawIssue(mutation.lifecycle);
+  raw.status = mutation.status;
+  raw.metadata = { unrelated: { keep: true }, piLifecycle: mutation.lifecycle };
+  const store = createLifecycleStore(async (_command, args) => {
+    calls.push(args[0]);
+    return result(raw);
+  }, options(root));
+  await store.mutate("jp-1", OWNER, () => mutation);
+  assert.deepEqual(calls, ["show"]);
+});

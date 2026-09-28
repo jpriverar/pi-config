@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto";
+
 import type {
+  Artifact,
+  LifecycleCheck,
   LifecycleIssue,
   LifecycleStatus,
   LifecycleStore,
@@ -158,4 +162,105 @@ export async function scanReconciliation(
     candidates: selectDueCandidates(issues, statuses, nowMs),
     diagnostics,
   };
+}
+
+export interface ReconcileRequest {
+  requestId: string;
+  taskId: string;
+  manualOutcome?: "satisfied" | "action_required";
+  expectedCheckFingerprint?: string;
+}
+
+export interface PreparedCheck {
+  taskId: string;
+  operationId: string;
+  fingerprint: string;
+  check: LifecycleCheck;
+  artifacts: readonly Artifact[];
+  manualOutcome?: "satisfied" | "action_required";
+}
+
+export interface ReconcileResult {
+  outcome: "applied" | "unchanged" | "already_applied" | "stale";
+  issue: LifecycleIssue;
+}
+
+export type ReconciliationPreparation =
+  | {
+      kind: "complete";
+      issue: LifecycleIssue;
+      outcome: ReconcileResult["outcome"];
+    }
+  | { kind: "observe"; prepared: PreparedCheck };
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, item]) => [key, canonicalValue(item)]),
+    );
+  }
+  return value;
+}
+
+function digest(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalValue(value)))
+    .digest("hex");
+}
+
+export function fingerprintCheck(issue: LifecycleIssue): string | null {
+  const lifecycle = issue.lifecycle;
+  const check = lifecycle?.activeCheck;
+  if (check === null || check === undefined) return null;
+  const artifacts = new Map(
+    lifecycle!.artifacts.map((artifact) => [artifact.id, artifact]),
+  );
+  const targets = check.targetArtifactIds.map((id) => {
+    const artifact = artifacts.get(id);
+    return artifact === undefined
+      ? null
+      : {
+          id: artifact.id,
+          kind: artifact.kind,
+          uri: artifact.uri,
+          supersededAt: artifact.supersededAt,
+        };
+  });
+  return digest({ taskId: issue.id, check, targets });
+}
+
+export function reconciliationOperationId(request: ReconcileRequest): string {
+  if (
+    typeof request.requestId !== "string" ||
+    request.requestId.trim().length === 0 ||
+    request.requestId.length > 256 ||
+    /[\u0000-\u001f\u007f]/.test(request.requestId)
+  ) {
+    throw new Error("reconciliation requestId is invalid");
+  }
+  if (
+    request.manualOutcome !== undefined &&
+    request.manualOutcome !== "satisfied" &&
+    request.manualOutcome !== "action_required"
+  ) {
+    throw new Error("reconciliation manualOutcome is invalid");
+  }
+  return `reconcile:${digest(request.requestId)}:${digest({ taskId: request.taskId, manualOutcome: request.manualOutcome ?? null, fingerprint: request.expectedCheckFingerprint ?? null })}`;
+}
+
+export function reconciliationAlreadyApplied(
+  issue: LifecycleIssue,
+  operationId: string,
+): boolean {
+  const prefix = operationId.slice(0, operationId.lastIndexOf(":") + 1);
+  const recorded = issue.lifecycle?.transitionHistory.find((transition) =>
+    transition.operationId.startsWith(prefix),
+  );
+  if (recorded === undefined) return false;
+  if (recorded.operationId !== operationId)
+    throw new Error(`conflicting reconciliation request for task ${issue.id}`);
+  return true;
 }

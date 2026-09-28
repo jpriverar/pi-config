@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { isDeepStrictEqual } from "node:util";
+
+import { fingerprintCheck } from "./reconciliation.js";
 
 import type { OwnerIdentity } from "../../extensions/worktree-pool/operation-lock.js";
 import type {
@@ -108,6 +111,7 @@ class FakeStore implements LifecycleStore {
   comments: string[] = [];
   labelUpdates: Array<{ addLabels: string[]; removeLabels: string[] }> = [];
   mutations = 0;
+  writes = 0;
   beforeMutate?: () => void;
   afterMutate?: (mutationCount: number) => void | Promise<void>;
 
@@ -183,6 +187,7 @@ class FakeStore implements LifecycleStore {
     this.beforeMutate = undefined;
     beforeMutate?.();
     const mutation = operation(this.saved);
+    if (mutation === null) return this.saved;
     if (
       this.failActiveResourceOnce &&
       mutation.lifecycle.resources.some(
@@ -192,6 +197,11 @@ class FakeStore implements LifecycleStore {
       this.failActiveResourceOnce = false;
       throw new Error("simulated finalization failure");
     }
+    if (
+      this.saved.status !== mutation.status ||
+      !isDeepStrictEqual(this.saved.lifecycle, mutation.lifecycle)
+    )
+      this.writes += 1;
     this.saved = {
       ...this.saved,
       status: mutation.status,
@@ -2049,10 +2059,12 @@ test("does not clear a retained dependency when a blocker appears during reconci
     };
   };
 
-  await assert.rejects(
-    service(store).reconcileTask("jp-1", session("reconciler")),
-    /active work without a waiting condition must not have unresolved blockers/,
+  const saved = await service(store).reconcileTask(
+    "jp-1",
+    session("reconciler"),
   );
+  assert.equal(saved.lifecycle?.phase, "active");
+  assert.equal(store.writes, 0);
   assert.equal(store.saved.lifecycle?.phase, "active");
   assert.deepEqual(store.saved.lifecycle?.waiting, { kind: "dependency" });
 });
@@ -2230,4 +2242,288 @@ test("preserves release-pending when the pool refuses release", async () => {
     "release_pending",
   );
   assert.equal(pool.entries.has(claimId), true);
+});
+
+function observationFixture(
+  kind: "manual" | "github_pull_request" = "github_pull_request",
+) {
+  const state = waitingLifecycle(
+    "check",
+    lifecycleCheck({
+      kind,
+      targetArtifactIds: kind === "manual" ? [] : ["pr-1"],
+      predicate: kind === "manual" ? { reviewAt: NOW } : { mode: "all" },
+    }),
+  );
+  state.artifacts = [
+    {
+      id: "pr-1",
+      kind: "pull_request",
+      uri: "https://github.com/example/repo/pull/1",
+      title: "PR",
+      role: "deliverable",
+      sourceArtifactIds: [],
+      producedAt: NOW,
+      supersededAt: null,
+    },
+  ];
+  const store = new FakeStore({ ...issue(state), status: "blocked" });
+  const sut = service(store);
+  return { store, sut };
+}
+
+test("prepared check inputs are detached and preparation never observes remotely", async () => {
+  const { store } = observationFixture();
+  let observations = 0;
+  const sut = service(store, {
+    checkAdapters: {
+      observe: async () => {
+        observations += 1;
+        return { outcome: "satisfied", observation: "merged" };
+      },
+    },
+  });
+  const prepared = await sut.prepareReconciliation(
+    { requestId: "r1", taskId: "jp-1" },
+    session("reconciler"),
+  );
+  assert.equal(prepared.kind, "observe");
+  if (prepared.kind !== "observe") return;
+  store.saved.lifecycle!.activeCheck!.predicate.mode = "any";
+  store.saved.lifecycle!.artifacts[0].uri =
+    "https://github.com/example/repo/pull/2";
+  assert.deepEqual(prepared.prepared.check.predicate, { mode: "all" });
+  assert.equal(
+    prepared.prepared.artifacts[0].uri,
+    "https://github.com/example/repo/pull/1",
+  );
+  assert.equal(observations, 0);
+  assert.equal(store.writes, 0);
+});
+
+test("rejects stale observation inputs inside the mutation lock", async (t) => {
+  const changes: Record<string, (state: LifecycleMetadataV1) => void> = {
+    predicate: (s) => {
+      s.activeCheck!.predicate = { mode: "any" };
+    },
+    target: (s) => {
+      s.activeCheck!.targetArtifactIds = ["other"];
+    },
+    uri: (s) => {
+      s.artifacts[0].uri = "https://github.com/example/repo/pull/2";
+    },
+    policy: (s) => {
+      s.activeCheck!.onSatisfied = "close";
+    },
+    check: (s) => {
+      s.activeCheck!.id = "replacement";
+    },
+    observation: (s) => {
+      s.activeCheck!.lastCheckedAt = NOW;
+      s.activeCheck!.nextCheckAt = "2026-09-17T11:00:00Z";
+    },
+    cancelled: (s) => {
+      s.phase = "deferred";
+      s.waiting = null;
+      s.activeCheck = null;
+    },
+  };
+  for (const [name, change] of Object.entries(changes)) {
+    await t.test(name, async () => {
+      const { store, sut } = observationFixture();
+      const prepared = await sut.prepareReconciliation(
+        { requestId: "r1", taskId: "jp-1" },
+        session("reconciler"),
+      );
+      assert.equal(prepared.kind, "observe");
+      if (prepared.kind !== "observe") return;
+      store.beforeMutate = () => change(store.saved.lifecycle!);
+      const result = await sut.applyReconciliation(
+        prepared.prepared,
+        { outcome: "satisfied", observation: "merged" },
+        session("reconciler"),
+      );
+      assert.equal(result.outcome, "stale");
+      assert.equal(store.writes, 0);
+      assert.equal(store.saved.lifecycle!.transitionHistory.length, 0);
+    });
+  }
+});
+
+test("title and execution renewal do not invalidate a retained check", async () => {
+  const { store, sut } = observationFixture();
+  const active = activeIssue("jp-1", "owner");
+  store.saved = {
+    ...store.saved,
+    status: "in_progress",
+    lifecycle: {
+      ...store.saved.lifecycle!,
+      phase: "active",
+      execution: active.lifecycle!.execution,
+    },
+  };
+  store.saved.metadata.piLifecycle = store.saved.lifecycle;
+  store.saved.lifecycle!.activeCheck!.onSatisfied = "close";
+  const prepared = await sut.prepareReconciliation(
+    { requestId: "r1", taskId: "jp-1" },
+    session("reconciler"),
+  );
+  assert.equal(prepared.kind, "observe");
+  if (prepared.kind !== "observe") return;
+  store.beforeMutate = () => {
+    store.saved.title = "Renamed";
+    store.saved.lifecycle!.execution!.expiresAt = "2026-09-17T17:00:00Z";
+    store.saved.lifecycle!.artifacts[0].title = "Renamed PR";
+  };
+  const result = await sut.applyReconciliation(
+    prepared.prepared,
+    { outcome: "satisfied", observation: "merged" },
+    session("reconciler"),
+  );
+  assert.equal(result.outcome, "applied");
+  assert.equal(result.issue.lifecycle?.phase, "active");
+  assert.equal(result.issue.lifecycle?.activeCheck, null);
+  assert.equal(
+    result.issue.lifecycle?.execution?.expiresAt,
+    "2026-09-17T17:00:00Z",
+  );
+  assert.equal(result.issue.title, "Renamed");
+});
+
+test("manual retries recognize the completed binding before inspecting a cleared check", async () => {
+  const { store, sut } = observationFixture("manual");
+  const fingerprint = fingerprintCheck(store.saved);
+  assert.ok(fingerprint);
+  const request = {
+    requestId: "manual-1",
+    taskId: "jp-1",
+    manualOutcome: "satisfied" as const,
+    expectedCheckFingerprint: fingerprint,
+  };
+  const prepared = await sut.prepareReconciliation(
+    request,
+    session("reconciler"),
+  );
+  assert.equal(prepared.kind, "observe");
+  if (prepared.kind !== "observe") return;
+  const first = await sut.applyReconciliation(
+    prepared.prepared,
+    { outcome: "satisfied", observation: "manual input" },
+    session("reconciler"),
+  );
+  assert.equal(first.outcome, "applied");
+  assert.equal(store.writes, 1);
+  const replay = await sut.applyReconciliation(
+    prepared.prepared,
+    { outcome: "satisfied", observation: "manual input" },
+    session("reconciler"),
+  );
+  assert.equal(replay.outcome, "already_applied");
+  assert.equal(store.writes, 1);
+  const retry = await sut.prepareReconciliation(request, session("reconciler"));
+  assert.equal(retry.kind, "complete");
+  if (retry.kind === "complete") assert.equal(retry.outcome, "already_applied");
+  await assert.rejects(
+    sut.prepareReconciliation(
+      { ...request, manualOutcome: "action_required" },
+      session("reconciler"),
+    ),
+    /conflicting reconciliation request/,
+  );
+});
+
+test("manual outcomes cannot target missing, nonmanual, or replaced checks", async () => {
+  const { store, sut } = observationFixture("manual");
+  const request = {
+    requestId: "manual-1",
+    taskId: "jp-1",
+    manualOutcome: "satisfied" as const,
+    expectedCheckFingerprint: fingerprintCheck(store.saved)!,
+  };
+  await assert.rejects(
+    sut.prepareReconciliation(
+      { ...request, expectedCheckFingerprint: undefined },
+      session("reconciler"),
+    ),
+    /fingerprint/,
+  );
+  const prepared = await sut.prepareReconciliation(
+    request,
+    session("reconciler"),
+  );
+  assert.equal(prepared.kind, "observe");
+  if (prepared.kind !== "observe") return;
+  store.saved.lifecycle!.activeCheck!.id = "replacement";
+  assert.equal(
+    (
+      await sut.applyReconciliation(
+        prepared.prepared,
+        { outcome: "satisfied", observation: "manual input" },
+        session("reconciler"),
+      )
+    ).outcome,
+    "stale",
+  );
+  await assert.rejects(
+    sut.prepareReconciliation(request, session("reconciler")),
+    /check changed/,
+  );
+  const remote = observationFixture();
+  await assert.rejects(
+    remote.sut.prepareReconciliation(
+      {
+        ...request,
+        expectedCheckFingerprint: fingerprintCheck(remote.store.saved)!,
+      },
+      session("reconciler"),
+    ),
+    /manual check/,
+  );
+  assert.equal(store.writes, 0);
+  assert.equal(remote.store.writes, 0);
+});
+
+test("check fingerprints ignore object-key order and unrelated artifacts", () => {
+  const { store } = observationFixture();
+  store.saved.lifecycle!.activeCheck!.predicate = {
+    mode: "all",
+    nested: { b: 2, a: 1 },
+  };
+  const first = fingerprintCheck(store.saved);
+  store.saved.lifecycle!.activeCheck!.predicate = {
+    nested: { a: 1, b: 2 },
+    mode: "all",
+  };
+  store.saved.lifecycle!.artifacts.push({
+    ...store.saved.lifecycle!.artifacts[0],
+    id: "unrelated",
+    uri: "https://github.com/example/repo/pull/99",
+  });
+  assert.equal(fingerprintCheck(store.saved), first);
+  store.saved.lifecycle!.activeCheck!.predicate.mode = "any";
+  assert.notEqual(fingerprintCheck(store.saved), first);
+});
+
+test("an explicit manual outcome cannot be recorded as a different adapter outcome", async () => {
+  const { store, sut } = observationFixture("manual");
+  const prepared = await sut.prepareReconciliation(
+    {
+      requestId: "manual-1",
+      taskId: "jp-1",
+      manualOutcome: "satisfied",
+      expectedCheckFingerprint: fingerprintCheck(store.saved)!,
+    },
+    session("reconciler"),
+  );
+  assert.equal(prepared.kind, "observe");
+  if (prepared.kind !== "observe") return;
+  await assert.rejects(
+    sut.applyReconciliation(
+      prepared.prepared,
+      { outcome: "pending", observation: "wrong adapter path" },
+      session("reconciler"),
+    ),
+    /explicit manual outcome/,
+  );
+  assert.equal(store.writes, 0);
 });

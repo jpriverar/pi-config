@@ -253,3 +253,34 @@ test("returns curated adapter errors and bounded exponential backoff", async () 
   assert.equal(nextCheckBackoffMs(2, 1_000, 8_000), 2_000);
   assert.equal(nextCheckBackoffMs(20, 1_000, 8_000), 8_000);
 });
+
+test("GitHub observation forwards its cancellation signal to the executor", async () => {
+  const controller = new AbortController();
+  const sut = createCheckAdapterRegistry({
+    now: () => NOW_MS,
+    prPollIntervalMs: 900_000,
+    execGh: async (_args, options) => {
+      assert.equal(options?.signal, controller.signal);
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          state: "OPEN",
+          reviewDecision: "",
+          mergeStateStatus: "CLEAN",
+          mergedAt: null,
+        }),
+        stderr: "",
+      };
+    },
+  });
+  assert.equal(
+    (
+      await sut.observe(
+        check("github_pull_request", { mode: "all" }, ["pr"]),
+        [artifact("pr", 1)],
+        { signal: controller.signal },
+      )
+    ).outcome,
+    "pending",
+  );
+});

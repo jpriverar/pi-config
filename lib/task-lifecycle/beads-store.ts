@@ -281,7 +281,7 @@ export function createLifecycleStore(
   async function mutate(
     id: string,
     owner: Parameters<LifecycleStore["mutate"]>[1],
-    operation: (issue: LifecycleIssue) => Mutation,
+    operation: (issue: LifecycleIssue) => Mutation | null,
   ): Promise<LifecycleIssue> {
     assertIdentifier(id, "issue id");
     return withFileOperationLock(
@@ -290,11 +290,18 @@ export function createLifecycleStore(
       async () => {
         const current = await readOne(id, `read issue ${id}`);
         const mutation = operation(current.issue);
+        if (mutation === null) return current.issue;
         validateMutation(mutation, id, store);
         const mergedMetadata = mergeLifecycleMetadata(
           current.rawMetadata,
           mutation.lifecycle,
         );
+        if (
+          mutation.status === current.issue.status &&
+          isDeepStrictEqual(mergedMetadata, current.rawMetadata)
+        ) {
+          return current.issue;
+        }
         await execute(`write mutation ${id}`, [
           "update",
           id,
