@@ -133,7 +133,7 @@ export interface Disposition {
 
 export interface NativeDependency {
   id: string;
-  status: LifecycleStatus;
+  status: LifecycleStatus | "unknown";
   dependencyType: string;
 }
 
@@ -188,6 +188,7 @@ export interface LifecycleIssue {
 
 export interface LifecycleStore {
   show(id: string): Promise<LifecycleIssue>;
+  showMany(ids: readonly string[]): Promise<LifecycleIssue[]>;
   list(statuses: readonly LifecycleStatus[]): Promise<LifecycleIssue[]>;
   readyIds(): Promise<ReadonlySet<string>>;
   create(

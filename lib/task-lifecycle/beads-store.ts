@@ -104,6 +104,35 @@ export function createLifecycleStore(
     return (await readOne(id, `read issue ${id}`)).issue;
   }
 
+  async function showMany(ids: readonly string[]): Promise<LifecycleIssue[]> {
+    const requested = new Set(ids);
+    for (const id of requested) {
+      assertIdentifier(id, "issue id");
+      if (id.startsWith("-")) throw new Error("issue id must not be an option");
+    }
+    if (requested.size === 0) return [];
+    const operation = "read issues";
+    const value = await executeJson(operation, [
+      "show",
+      ...requested,
+      "--long",
+      "--json",
+    ]);
+    const seen = new Set<string>();
+    return decodeEnvelope(value, operation, store).map((record) => {
+      const issue = decodeIssue(record, undefined, operation, store).issue;
+      if (!requested.has(issue.id) || seen.has(issue.id)) {
+        throw lifecycleStoreError(
+          operation,
+          store,
+          "unexpected issue in bulk response",
+        );
+      }
+      seen.add(issue.id);
+      return issue;
+    });
+  }
+
   async function list(
     statuses: readonly LifecycleStatus[],
   ): Promise<LifecycleIssue[]> {
@@ -309,6 +338,7 @@ export function createLifecycleStore(
 
   return {
     show,
+    showMany,
     list,
     readyIds,
     create,
@@ -369,7 +399,7 @@ function decodeIssue(
       decodedLifecycle === null || !decodedLifecycle.ok
         ? null
         : decodedLifecycle.value;
-    const dependencies = decodeDependencies(record.dependencies);
+    const dependencies = decodeDependencies(record.dependencies, record.id);
     const issue: LifecycleIssue = {
       id: record.id,
       title: record.title,
@@ -384,14 +414,32 @@ function decodeIssue(
   }
 }
 
-function decodeDependencies(value: unknown): NativeDependency[] {
-  if (value === undefined || isDependencyEdgeSummaryList(value)) return [];
+function decodeDependencies(
+  value: unknown,
+  issueId: string,
+): NativeDependency[] {
+  if (value === undefined) return [];
   if (!Array.isArray(value)) {
     throw new Error("invalid native dependencies: expected an array");
   }
   return value.map((item, index) => {
     try {
       const record = requireRecord(item, "native dependency");
+      if ("depends_on_id" in record) {
+        assertIdentifier(record.depends_on_id, "native dependency id");
+        if (
+          record.issue_id !== issueId ||
+          typeof record.type !== "string" ||
+          record.type.length === 0
+        ) {
+          throw new Error("invalid dependency edge summary");
+        }
+        return {
+          id: record.depends_on_id,
+          status: "unknown",
+          dependencyType: record.type,
+        };
+      }
       assertIdentifier(record.id, "native dependency id");
       assertStatus(record.status, "native dependency status");
       if (
@@ -411,22 +459,6 @@ function decodeDependencies(value: unknown): NativeDependency[] {
       );
     }
   });
-}
-
-function isDependencyEdgeSummaryList(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.every(
-      (item) =>
-        typeof item === "object" &&
-        item !== null &&
-        !Array.isArray(item) &&
-        typeof (item as Record<string, unknown>).issue_id === "string" &&
-        typeof (item as Record<string, unknown>).depends_on_id === "string" &&
-        typeof (item as Record<string, unknown>).type === "string",
-    )
-  );
 }
 
 function validateMutation(

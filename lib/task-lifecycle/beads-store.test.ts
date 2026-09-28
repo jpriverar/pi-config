@@ -263,7 +263,7 @@ test("revalidates ownership under lock before appending a comment", async () => 
   );
 });
 
-test("list ignores Beads edge-shaped dependency summaries", async () => {
+test("list preserves Beads edge summaries with unknown target status", async () => {
   const calls: Array<[string, readonly string[]]> = [];
   const raw = rawIssue();
   raw.dependencies = [
@@ -282,7 +282,9 @@ test("list ignores Beads edge-shaped dependency summaries", async () => {
 
   const [listed] = await store.list(["open"]);
 
-  assert.deepEqual(listed.dependencies, []);
+  assert.deepEqual(listed.dependencies, [
+    { id: "jp-blocker", status: "unknown", dependencyType: "blocks" },
+  ]);
   assert.deepEqual(calls, [
     ["bd", ["list", "-s", "open", "-n", "0", "--json", "--db", STORE]],
   ]);

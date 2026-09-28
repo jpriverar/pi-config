@@ -119,6 +119,12 @@ class FakeStore implements LifecycleStore {
     return this.saved;
   }
 
+  async showMany(ids: readonly string[]): Promise<LifecycleIssue[]> {
+    return (this.listed ?? [this.saved]).filter((issue) =>
+      ids.includes(issue.id),
+    );
+  }
+
   async list(_statuses: readonly LifecycleStatus[]): Promise<LifecycleIssue[]> {
     return this.listed ?? [this.saved];
   }
