@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { loadLifecycleConfig } from "../../lib/task-lifecycle/config.js";
 import { hostname as readHostname } from "node:os";
 
 import { resolveBeadsDir, type BeadsExec } from "../../lib/beads.js";
@@ -176,17 +178,6 @@ export interface TaskLifecycleExtensionDependencies {
   activityWriteIntervalMs: number;
   sessionReconcileLimit: number;
   sessionPrCheckLimit: number;
-}
-
-interface LifecycleConfig {
-  version: 1;
-  executionTimeoutMs: number;
-  activityWriteIntervalMs: number;
-  sessionReconcileLimit: number;
-  sessionPrCheckLimit: number;
-  prPollIntervalMs: number;
-  maxBackoffMs: number;
-  warningErrorCount: number;
 }
 
 const taskIdProperty = {
@@ -988,49 +979,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function loadConfig(): LifecycleConfig {
-  const value: unknown = JSON.parse(
-    readFileSync(new URL("./config.json", import.meta.url), "utf8"),
-  );
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("task lifecycle config must be an object");
-  }
-  const record = value as Record<string, unknown>;
-  const keys: Array<keyof LifecycleConfig> = [
-    "version",
-    "executionTimeoutMs",
-    "activityWriteIntervalMs",
-    "sessionReconcileLimit",
-    "sessionPrCheckLimit",
-    "prPollIntervalMs",
-    "maxBackoffMs",
-    "warningErrorCount",
-  ];
-  if (record.version !== 1) {
-    throw new Error("task lifecycle config version must be 1");
-  }
-  for (const key of keys.slice(1)) {
-    if (!Number.isInteger(record[key]) || (record[key] as number) <= 0) {
-      throw new Error(
-        `task lifecycle config ${key} must be a positive integer`,
-      );
-    }
-  }
-  for (const key of Object.keys(record)) {
-    if (!keys.includes(key as keyof LifecycleConfig)) {
-      throw new Error(`task lifecycle config has unknown field ${key}`);
-    }
-  }
-  return record as unknown as LifecycleConfig;
-}
-
 export default function taskLifecycle(
   pi: ExtensionApi & TaskWorkStateApi,
 ): void {
   if (pi.exec === undefined) {
     throw new Error("task lifecycle requires Pi command execution");
   }
-  const config = loadConfig();
+  const config = loadLifecycleConfig(
+    fileURLToPath(new URL("./config.json", import.meta.url)),
+  );
   const store = createLifecycleStore(pi.exec.bind(pi), {
     store: resolveBeadsDir(),
   });
