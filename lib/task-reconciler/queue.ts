@@ -16,6 +16,20 @@ import type { TaskLifecycleService } from "../task-lifecycle/service.js";
 import type { LifecycleStore, LockOwner } from "../task-lifecycle/types.js";
 import type { DaemonConfig } from "./config.js";
 
+export class ReconciliationQueueError extends Error {
+  constructor(
+    readonly code:
+      | "queue_full"
+      | "not_running"
+      | "stopped"
+      | "execution_failed",
+    message: string,
+    readonly outcomeUnknown = false,
+  ) {
+    super(message);
+  }
+}
+
 export interface QueueDiagnostic {
   taskId?: string;
   code: string;
@@ -160,14 +174,22 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
     requests.delete(job.current.request.requestId);
     if (error || stopping)
       job.current.reject(
-        error ?? new Error("reconciler stopped; result may be unknown"),
+        error ??
+          new ReconciliationQueueError(
+            "stopped",
+            "reconciler stopped; result may be unknown",
+            true,
+          ),
       );
     else job.current.resolve(result!);
     if (stopping) {
       for (const pending of job.pending) {
         requests.delete(pending.request.requestId);
         pending.reject(
-          new Error("reconciler stopped before request completion"),
+          new ReconciliationQueueError(
+            "stopped",
+            "reconciler stopped before request completion",
+          ),
         );
       }
       jobs.delete(job.taskId);
@@ -201,10 +223,12 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
     finish(
       job,
       undefined,
-      new Error(
+      new ReconciliationQueueError(
+        stopping ? "stopped" : "execution_failed",
         stopping
           ? "reconciler stopped; result may be unknown"
           : "local reconciliation failed; inspect daemon health",
+        true,
       ),
     );
   }
@@ -420,7 +444,10 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
     },
     async reconcile(request) {
       if (!started || stopping)
-        throw new Error("reconciler is not running or is stopping");
+        throw new ReconciliationQueueError(
+          "not_running",
+          "reconciler is not running or is stopping",
+        );
       if (
         typeof request.taskId !== "string" ||
         request.taskId.length === 0 ||
@@ -428,12 +455,18 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
         request.taskId.startsWith("-") ||
         /[\u0000-\u001f\u007f]/.test(request.taskId)
       )
-        throw new Error("invalid reconciliation taskId");
+        throw new ReconciliationRequestError(
+          "invalid_request",
+          "invalid reconciliation taskId",
+        );
       const binding = reconciliationOperationId(request);
       const existing = requests.get(request.requestId);
       if (existing) {
         if (existing.binding !== binding)
-          throw new Error("conflicting reconciliation request");
+          throw new ReconciliationRequestError(
+            "request_conflict",
+            "conflicting reconciliation request",
+          );
         return existing.promise;
       }
       const job = jobs.get(request.taskId);
@@ -446,9 +479,15 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
             e.request.manualOutcome !== request.manualOutcome,
         )
       )
-        throw new Error("conflicting manual reconciliation outcomes");
+        throw new ReconciliationRequestError(
+          "request_conflict",
+          "conflicting manual reconciliation outcomes",
+        );
       if (requests.size >= limits.maxQueuedTasks)
-        throw new Error("reconciliation queue is full");
+        throw new ReconciliationQueueError(
+          "queue_full",
+          "reconciliation queue is full",
+        );
       const pending = entry(request, "explicit");
       backlog.delete(request.taskId);
       if (job) job.pending.push(pending);

@@ -33,6 +33,7 @@ type LockObservation =
 
 type ReclaimResult = {
   observation: LockObservation;
+  reclaimed?: boolean;
 };
 
 const RETRY_INTERVAL_MS = 25;
@@ -57,6 +58,7 @@ export async function withFileOperationLock<T>(
   await waitForStableContainer(lockPath, deadline, deps);
 
   let acquired = false;
+  let retriedAfterReclaim = false;
   let lastObservation: LockObservation = { kind: "unreadable" };
   while (!acquired) {
     try {
@@ -79,6 +81,10 @@ export async function withFileOperationLock<T>(
 
       const result = await observeAndReclaimDeadLocalLock(heldPath, deps);
       lastObservation = result.observation;
+      if (result.reclaimed && !retriedAfterReclaim) {
+        retriedAfterReclaim = true;
+        continue;
+      }
       await waitOrTimeout(lockPath, lastObservation, deadline, deps);
     }
   }
@@ -175,6 +181,7 @@ async function observeAndReclaimDeadLocalLock(
   }
   try {
     await rmdir(heldPath);
+    return { observation, reclaimed: true };
   } catch {
     // A non-empty replacement is not the dead lock this invocation verified.
   }

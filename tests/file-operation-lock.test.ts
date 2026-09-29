@@ -137,3 +137,22 @@ test("fails closed for remote and unreadable owner records", async (t) => {
     );
   }
 });
+
+test("zero-wait acquisition retries once after confirmed dead-owner cleanup", async () => {
+  await withRoot(async (root) => {
+    await seedOwner(root, owner);
+    const result = await withFileOperationLock(
+      root,
+      { ...owner, pid: 43 },
+      async () => "acquired",
+      dependencies({
+        timeoutMs: 0,
+        isPidAlive: () => "dead",
+        sleep: async () => {
+          throw new Error("nonwaiting acquisition must not sleep");
+        },
+      }),
+    );
+    assert.equal(result, "acquired");
+  });
+});

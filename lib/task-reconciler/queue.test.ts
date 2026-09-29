@@ -277,7 +277,12 @@ test("rejects excess explicit requests instead of growing waiter lists", async (
     await until(() => h.external === 1);
     await assert.rejects(
       h.sut.reconcile({ requestId: "extra", taskId: "a" }),
-      /full/,
+      (error: unknown) =>
+        error instanceof Error &&
+        (error as Error & { code?: string; outcomeUnknown?: boolean }).code ===
+          "queue_full" &&
+        (error as Error & { outcomeUnknown?: boolean }).outcomeUnknown ===
+          false,
     );
     assert.ok(h.sut.snapshot().externalRunning <= 1);
   } finally {
