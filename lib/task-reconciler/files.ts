@@ -66,6 +66,30 @@ async function privateDirectory(path: string, create: boolean): Promise<void> {
 export async function verifyPrivateSocket(path: string): Promise<void> {
   verifyPrivate(path, await lstat(path), "socket");
 }
+async function verifyParents(base: string): Promise<void> {
+  for (let parent = dirname(base); ; parent = dirname(parent)) {
+    const info = await lstat(parent);
+    if (
+      (info.uid !== process.getuid?.() && info.uid !== 0) ||
+      ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0)
+    )
+      throw new RuntimeBoundaryError(
+        "unsafe_parent",
+        `runtime parent is writable by another owner: ${JSON.stringify(parent)}`,
+      );
+    if (parent === dirname(parent)) break;
+  }
+}
+export async function resolveDaemonLock(
+  store: string,
+  create: boolean,
+): Promise<string> {
+  const canonical = await realpath(store);
+  const path = join(canonical, "pi-task-reconciler");
+  await verifyParents(path);
+  await privateDirectory(path, create);
+  return path;
+}
 
 export async function resolveRuntimePaths(
   config: DaemonConfig,
@@ -88,18 +112,7 @@ export async function resolveRuntimePaths(
     );
   await privateDirectory(config.runtimeRoot, create);
   const base = await realpath(config.runtimeRoot);
-  for (let parent = dirname(base); ; parent = dirname(parent)) {
-    const info = await lstat(parent);
-    if (
-      (info.uid !== process.getuid?.() && info.uid !== 0) ||
-      ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0)
-    )
-      throw new RuntimeBoundaryError(
-        "unsafe_parent",
-        `runtime parent is writable by another owner: ${JSON.stringify(parent)}`,
-      );
-    if (parent === dirname(parent)) break;
-  }
+  await verifyParents(base);
   const storeKey = createHash("sha256")
     .update(store)
     .digest("hex")
@@ -118,8 +131,7 @@ export async function resolveRuntimePaths(
       `socket path exceeds platform limit: ${JSON.stringify(socket)}`,
     );
   await privateDirectory(root, create);
-  const lockRoot = join(root, "singleton");
-  await privateDirectory(lockRoot, create);
+  const lockRoot = await resolveDaemonLock(store, create);
   return {
     store,
     storeKey,

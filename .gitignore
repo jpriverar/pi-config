@@ -1,5 +1,6 @@
 node_modules/
 coverage/
+.reconciler-build/
 *.log
 .DS_Store
 .pi/

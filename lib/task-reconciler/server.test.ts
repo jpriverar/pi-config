@@ -11,7 +11,8 @@ import {
 import { join } from "node:path";
 import { createConnection } from "node:net";
 import { test } from "node:test";
-import { hostFixture } from "./host-fixtures.js";
+import { hostFixture, waitUntil } from "./host-fixtures.js";
+import { readDaemonHealth } from "./health.js";
 import { serveReconciler } from "./server.js";
 import { resolveRuntimePaths } from "./files.js";
 import { encodeFrame, MAX_FRAME_BYTES } from "./protocol.js";
@@ -276,5 +277,31 @@ test("shutdown keeps ownership until work drains and handles rejected-client wri
   } finally {
     release();
     await host.done;
+  }
+});
+
+test("one canonical store cannot host two daemons with different runtime roots", async (t) => {
+  const f = await hostFixture(t);
+  await f.start();
+  const { dirname, join } = await import("node:path");
+  const alternate = {
+    ...f.config,
+    runtimeRoot: join(dirname(f.config.runtimeRoot), "alternate"),
+  };
+  const controller = new AbortController();
+  let rejected = false;
+  const done = serveReconciler(alternate, f.runner, f.owner, controller.signal);
+  void done.catch(() => {
+    rejected = true;
+  });
+  try {
+    await waitUntil(
+      async () =>
+        rejected || (await readDaemonHealth(alternate)).state === "available",
+    );
+    assert.equal(rejected, true);
+  } finally {
+    controller.abort();
+    await done.catch(() => undefined);
   }
 });

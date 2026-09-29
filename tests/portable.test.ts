@@ -97,7 +97,7 @@ test("package scripts cover the bootstrap release gates", () => {
   );
   assert.equal(
     pkg.scripts["format:check"],
-    "prettier --check package.json tsconfig.json 'extensions/**/*.ts' 'lib/**/*.ts' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md skills/thermo-nuclear-code-quality-review/SKILL.md 'prompts/*.md' 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
+    "prettier --check package.json tsconfig*.json 'bin/**/*.mjs' 'extensions/**/*.ts' 'lib/**/*.{ts,mjs}' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md skills/thermo-nuclear-code-quality-review/SKILL.md 'prompts/*.md' 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
   );
   assert.match(pkg.scripts["verify:skills"], /--mode baseline/);
   assert.match(pkg.scripts["verify:skills"], /--mode package/);
@@ -536,5 +536,31 @@ test("rejects missing manifest resources and unknown top-level paths", async (t)
   });
   await t.test("unknown root", () => {
     assertRejected({ "private/file.txt": "not public\n" });
+  });
+});
+
+test("accepts inline credential references but rejects inline literal payloads", () => {
+  const key = ["GH", "TOKEN"].join("_");
+  const fixture = createFixture({
+    "lib/transport.ts": `const env = { ...base, ${key}: selectedValue };\n`,
+  });
+  assert.equal(fixture.run().status, 0);
+  assertRejected({
+    "lib/transport.ts": `const env = { ...base, ${key}: "not-a-placeholder-secret" };\n`,
+  });
+});
+
+test("accepts only the reviewed reconciler launcher and build config", () => {
+  const fixture = createFixture({
+    "bin/task-reconciler.mjs": "#!/usr/bin/env node\n",
+    "tsconfig.reconciler.json": "{}\n",
+  });
+  chmodSync(join(fixture.root, "bin/task-reconciler.mjs"), 0o755);
+  execFileSync("git", ["add", "."], { cwd: fixture.root });
+  const result = fixture.run();
+  assert.equal(result.status, 0, String(result.stderr));
+  assertRejected({ "bin/unreviewed.mjs": "#!/usr/bin/env node\n" }, (root) => {
+    chmodSync(join(root, "bin/unreviewed.mjs"), 0o755);
+    execFileSync("git", ["add", "."], { cwd: root });
   });
 });

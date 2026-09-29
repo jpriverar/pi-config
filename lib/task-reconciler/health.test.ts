@@ -39,11 +39,14 @@ test("malformed and oversized health is not exposed as healthy or echoed", async
   const f = await hostFixture(t);
   const host = await f.start();
   const paths = await f.paths();
-  for (const value of ['{"private-secret":', "private-secret".repeat(10_000)]) {
+  for (const value of [
+    '{"payload":"raw-json-must-not-leak"',
+    "raw-json-must-not-leak".repeat(10_000),
+  ]) {
     await writeFile(paths.health, value);
     const health = await readDaemonHealth(f.config);
     assert.equal(health.state, "unavailable");
-    assert.ok(!JSON.stringify(health).includes("private-secret"));
+    assert.ok(!JSON.stringify(health).includes("raw-json-must-not-leak"));
   }
   await host.stop();
 });

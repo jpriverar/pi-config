@@ -74,7 +74,10 @@ async function existing(
   }
 }
 
-export async function loadDaemonConfig(path: string): Promise<DaemonConfig> {
+export async function loadDaemonConfig(
+  path: string,
+  options: { allowMissingExecutables?: boolean } = {},
+): Promise<DaemonConfig> {
   absolute(path, "daemon config path");
   let value: unknown;
   try {
@@ -133,6 +136,10 @@ export async function loadDaemonConfig(path: string): Promise<DaemonConfig> {
     throw new Error("localFailureMaxMs must be at least localFailureBaseMs");
   if (limits.heartbeatStaleMs <= limits.heartbeatIntervalMs)
     throw new Error("heartbeatStaleMs must exceed heartbeatIntervalMs");
+  const executable = (value: unknown, label: string) =>
+    options.allowMissingExecutables
+      ? absolute(value, label)
+      : existing(value, label, false, true);
   return {
     version: 1,
     store: await existing(config.store, "store", true),
@@ -148,10 +155,10 @@ export async function loadDaemonConfig(path: string): Promise<DaemonConfig> {
     ),
     runtimeRoot: absolute(config.runtimeRoot, "runtimeRoot"),
     executables: {
-      node: await existing(paths.node, "executables.node", false, true),
-      bd: await existing(paths.bd, "executables.bd", false, true),
-      git: await existing(paths.git, "executables.git", false, true),
-      gh: await existing(paths.gh, "executables.gh", false, true),
+      node: await executable(paths.node, "executables.node"),
+      bd: await executable(paths.bd, "executables.bd"),
+      git: await executable(paths.git, "executables.git"),
+      gh: await executable(paths.gh, "executables.gh"),
     },
     githubAccounts: { ...accounts },
     limits,

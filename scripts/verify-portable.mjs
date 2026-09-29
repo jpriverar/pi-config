@@ -5,7 +5,10 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const authoredExecutables = new Set(["scripts/bootstrap-macos.sh"]);
+const authoredExecutables = new Set([
+  "scripts/bootstrap-macos.sh",
+  "bin/task-reconciler.mjs",
+]);
 const approvedRootFiles = new Set([
   ".gitignore",
   ".prettierignore",
@@ -15,9 +18,11 @@ const approvedRootFiles = new Set([
   "package-lock.json",
   "package.json",
   "tsconfig.json",
+  "tsconfig.reconciler.json",
 ]);
 const approvedRootDirectories = new Set([
   ".github",
+  "bin",
   "docs",
   "extensions",
   "lib",
@@ -33,6 +38,7 @@ const allowedUrlHosts = new Set([
   "registry.npmjs.org",
   "opensource.org",
   "protesilaos.com",
+  "www.apple.com",
 ]);
 const bootstrapArtifacts = new Set(["README.md", "scripts/bootstrap-macos.sh"]);
 const forbiddenWorkMarker = ["data", "dog"].join("");
@@ -167,7 +173,7 @@ function isPlaceholder(value) {
   }
 
   if (["env", "file", "generated-fallback"].includes(normalized)) return true;
-  return /^(?:[A-Za-z_$][\w$]*)(?:(?:\.[A-Za-z_$][\w$]*)|(?:\[[^\r\n\]]+\]))*(?:\([^\r\n]*\))?(?:\s*(?:\|\||\?\?)\s*(?:null|undefined))?$/.test(
+  return /^(?:[A-Za-z_$][\w$]*)(?:(?:\.[A-Za-z_$][\w$]*)|(?:\[[^\r\n\]]+\]))*(?:\([^\r\n]*\))?(?:\s*(?:\|\||\?\?)\s*(?:null|undefined))?(?:\s*})*$/.test(
     unquoted,
   );
 }

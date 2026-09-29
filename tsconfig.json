@@ -12,6 +12,7 @@
     "types": ["node"]
   },
   "include": [
+    "bin/**/*.mjs",
     "extensions/**/*.ts",
     "lib/**/*.ts",
     "tests/**/*.ts",

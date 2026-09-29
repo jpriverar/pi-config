@@ -95,7 +95,7 @@ test("missing mappings and noncanonical hosts never cause credential access", as
   const adapters = createDaemonCheckAdapters(f.config);
   for (const uri of [
     "https://github.com/Unconfigured/repo/pull/1",
-    "https://elsewhere.example/Example/repo/pull/1",
+    "https://opensource.org/Example/repo/pull/1",
     "https://user:secret@github.com/Example/repo/pull/1",
     "https://github.com/Example/repo/pull/1?secret=value",
   ]) {

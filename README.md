@@ -72,6 +72,105 @@ See [Task lifecycle](docs/task-lifecycle.md) for tool schemas, Beads mappings,
 artifact and worktree identity, reconciliation behavior, verification, and the
 read-only migration report.
 
+## Optional task reconciliation daemon
+
+Package installation, package updates, extension loading, and `/reload` never
+install or start this service. Installation and activation are separate,
+explicit operations. The daemon runs the existing reconciliation policy; it
+cannot claim tasks, launch agents, merge pull requests, or supply manual outcomes.
+
+Use Node >=22.19 and an existing Beads store. Create a private configuration file
+outside the package checkout (for example `~/.pi/task-reconciler/config.json`,
+mode `0600`). Replace every placeholder below with a real absolute path; JSON
+paths do not expand `~` or shell variables. Choose a short runtime root because
+Unix socket paths have a platform byte limit.
+
+```json
+{
+  "version": 1,
+  "store": "/absolute/user-home/beads/.beads",
+  "poolConfigPath": "/absolute/package/extensions/worktree-pool/config.json",
+  "lifecycleConfigPath": "/absolute/package/extensions/task-lifecycle/config.json",
+  "runtimeRoot": "/absolute/user-home/.pi/run/tasks",
+  "executables": {
+    "node": "/absolute/path/to/node",
+    "bd": "/absolute/path/to/bd",
+    "git": "/absolute/path/to/git",
+    "gh": "/absolute/path/to/gh"
+  },
+  "githubAccounts": {
+    "example-org": "your-github-account"
+  }
+}
+```
+
+Account mappings are explicit and case-normalized by GitHub owner. Authenticate
+those accounts with `gh` yourself; never put tokens in the configuration. The
+daemon retrieves credentials noninteractively per observation and never changes
+the globally selected account.
+
+From the package checkout:
+
+```sh
+npm ci --ignore-scripts
+cfg="$HOME/.pi/task-reconciler/config.json"
+node bin/task-reconciler.mjs install --config "$cfg"
+```
+
+`install` builds and verifies Node-only ESM, copies configuration assets into a
+private runtime, and prepares an inactive LaunchAgent template. It does not call
+`launchctl`, run reconciliation, or publish a login agent. The installed runtime
+needs neither this checkout nor `node_modules` to run.
+
+Before first activation, reload or close **every older Pi process** that still
+contains in-process automatic reconciliation. `/reload` alone does not activate
+the service. After explicitly approving that cutover, use the relevant command:
+
+| Operation                           | Command                                                          |
+| ----------------------------------- | ---------------------------------------------------------------- |
+| Enable now and at login             | `node bin/task-reconciler.mjs start --config "$cfg"`             |
+| Read status and health              | `node bin/task-reconciler.mjs status --config "$cfg"`            |
+| Explicitly update runtime/config    | `node bin/task-reconciler.mjs update --config "$cfg"`            |
+| Restore the previous runtime/config | `node bin/task-reconciler.mjs update --rollback --config "$cfg"` |
+| Disable and unload                  | `node bin/task-reconciler.mjs stop --config "$cfg"`              |
+| Remove verified service-owned files | `node bin/task-reconciler.mjs uninstall --config "$cfg"`         |
+
+Updates drain before compiling/replacing the runtime. Updating an unloaded or
+disabled service does not start it; an enabled, loaded service is restarted only
+after the replacement is verified. Failed updates remain stopped rather than
+automatically resuming an old policy. The previous immutable runtime and copied
+configuration remain available for explicit rollback. A stable installed admin
+entry point keeps stop/update available when a package update removes generated
+files from the package checkout. Uninstall never deletes Beads data, source
+configuration, worktrees, or unrecognized files.
+
+Service files live under `~/.pi/task-reconciler/services/<canonical-store-key>`.
+The user LaunchAgent label is `com.pi.task-reconciler.<canonical-store-key>`;
+only explicit start publishes its plist under `~/Library/LaunchAgents`. The
+singleton lock lives at `<canonical-store>/pi-task-reconciler`, so changing the
+socket directory cannot create a second daemon for that store. This is a
+single-host service, not distributed coordination.
+
+Status parsing fails closed when launchd output or ownership cannot be verified.
+Administrative tests inject launchctl; they do not load a real agent. A live
+LaunchAgent validation is a separate approval step. Health is private and bounded;
+stdout/stderr are discarded by launchd rather than becoming unbounded logs. For
+startup diagnosis, stop the managed service and explicitly run the foreground
+mode instead.
+
+For isolated foreground tests, run `npm run build:reconciler`, then use the
+runtime directory printed by the builder:
+
+```sh
+node /printed/runtime/lib/task-reconciler/cli.js --runtime-info
+node /printed/runtime/lib/task-reconciler/cli.js run --config /absolute/test-config.json
+```
+
+Foreground `run` performs real reconciliation for the configured store; use a
+temporary store for tests. SIGINT/SIGTERM drain owned work. Treat a timed-out or
+interrupted management command as uncertain and read status before retrying;
+unverifiable process ownership is never force-cleared.
+
 ## Resources
 
 The package manifest loads:

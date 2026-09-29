@@ -30,11 +30,8 @@ import {
 import { ReconciliationQueueError, type Reconciler } from "./queue.js";
 import { ProtocolError, record } from "./schema.js";
 
-declare const __TASK_RECONCILER_VERSION__: string;
-export const RUNTIME_VERSION =
-  typeof __TASK_RECONCILER_VERSION__ === "string"
-    ? __TASK_RECONCILER_VERSION__
-    : "source-unbuilt";
+import { RUNTIME_VERSION } from "./build-info.js";
+export { RUNTIME_VERSION } from "./build-info.js";
 const MAX_CLIENTS = 100;
 
 async function exists(path: string): Promise<boolean> {
