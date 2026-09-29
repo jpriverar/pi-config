@@ -8,6 +8,7 @@ import type {
 import {
   createTaskLifecycleExtension,
   type TaskLifecycleToolService,
+  type TaskLifecycleExtensionDependencies,
 } from "./index.js";
 
 const NOW = 1_789_636_800_000;
@@ -55,7 +56,13 @@ function activeIssue(id: string): LifecycleIssue {
 type Handler = (event: any, ctx: Context) => Promise<unknown> | unknown;
 type Context = {
   cwd: string;
-  sessionManager: { getSessionId(): string };
+  sessionManager: {
+    getSessionId(): string;
+    getBranch(): unknown[];
+    getEntries(): unknown[];
+    getSessionName(): undefined;
+  };
+  ui?: { notify(message: string, level: string): void };
 };
 type Tool = {
   name: string;
@@ -70,10 +77,11 @@ type Tool = {
   ): Promise<any>;
 };
 
-function harness() {
+function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
   const handlers = new Map<string, Handler[]>();
   const tools = new Map<string, Tool>();
   const entryRenderers = new Map<string, Function>();
+  const commands = new Map<string, any>();
   const calls: Array<{ name: string; args: unknown[] }> = [];
   const execCalls: Array<{
     executable: string;
@@ -223,6 +231,11 @@ function harness() {
     registerTool(tool: Tool) {
       tools.set(tool.name, tool);
     },
+    registerCommand(name: string, command: unknown) {
+      commands.set(name, command);
+    },
+    appendEntry() {},
+    sendMessage() {},
     registerEntryRenderer(type: string, renderer: Function) {
       entryRenderers.set(type, renderer);
     },
@@ -256,6 +269,7 @@ function harness() {
     activityWriteIntervalMs: 300_000,
     sessionReconcileLimit: 10,
     sessionPrCheckLimit: 5,
+    ...overrides,
   })(pi as any);
   return {
     calls,
@@ -264,9 +278,16 @@ function harness() {
     handlers,
     tools,
     entryRenderers,
+    commands,
     context: {
       cwd: "/repo",
-      sessionManager: { getSessionId: () => "session-1" },
+      sessionManager: {
+        getSessionId: () => "session-1",
+        getBranch: () => [{ type: "message" }],
+        getEntries: () => [],
+        getSessionName: () => undefined,
+      },
+      ui: { notify() {} },
     } satisfies Context,
   };
 }
@@ -292,7 +313,6 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
   assert.deepEqual(
     [...h.handlers.keys()],
     [
-      "session_start",
       "session_shutdown",
       "turn_start",
       "tool_execution_start",
@@ -300,6 +320,7 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
       "before_agent_start",
       "tool_call",
       "tool_result",
+      "session_start",
       "session_compact",
     ],
   );
@@ -1044,23 +1065,12 @@ test("returns a curated error when pool result finalization fails", async () => 
   assert.doesNotMatch(JSON.stringify(result), /private task data|raw stderr/);
 });
 
-test("session and activity hooks reconcile synchronously without timers", async () => {
+test("activity and shutdown stay local without automatic reconciliation", async () => {
   const h = harness();
   const handler = (name: string) => h.handlers.get(name)![0];
 
   await handler("session_start")({ reason: "startup" }, h.context);
-  assert.deepEqual(h.calls.at(-1), {
-    name: "reconcileDue",
-    args: [
-      {
-        pid: 4242,
-        sessionId: "session-1",
-        host: "host",
-        started: NOW,
-      },
-      { taskLimit: 10, checkLimit: 5 },
-    ],
-  });
+  assert.equal(h.calls.length, 0);
 
   await handler("turn_start")({}, h.context);
   await handler("tool_execution_start")({}, h.context);
@@ -1090,8 +1100,28 @@ test("session and activity hooks reconcile synchronously without timers", async 
   });
 });
 
-test("task_reconcile passes explicit manual outcomes", async () => {
-  const h = harness();
+test("task_reconcile passes explicit manual outcomes to the daemon", async () => {
+  const { waitingTask } = await import(
+    "../../lib/task-reconciler/test-fixtures.js"
+  );
+  const issue = waitingTask("jp-1", "manual");
+  const { fingerprintCheck } = await import(
+    "../../lib/task-lifecycle/reconciliation.js"
+  );
+  const requests: unknown[] = [];
+  const h = harness({
+    reconciliation: {
+      issue: async () => issue,
+      request: async (request) => {
+        requests.push(request);
+        return {
+          requestId: request.requestId,
+          outcome: "applied",
+          task: { id: "jp-1", phase: "actionable", status: "open" },
+        };
+      },
+    },
+  });
 
   await h.tools
     .get("task_reconcile")!
@@ -1103,17 +1133,139 @@ test("task_reconcile passes explicit manual outcomes", async () => {
       h.context,
     );
 
-  assert.deepEqual(h.calls.at(-1), {
-    name: "reconcileTask",
-    args: [
-      "jp-1",
-      {
-        pid: 4242,
-        sessionId: "session-1",
-        host: "host",
-        started: NOW,
+  assert.deepEqual(requests, [
+    {
+      requestId: "reconcile-call",
+      taskId: "jp-1",
+      manualOutcome: "action_required",
+      expectedCheckFingerprint: fingerprintCheck(issue),
+    },
+  ]);
+  assert.equal(h.calls.length, 0);
+});
+
+test("startup and reload never reconcile or administer the service", async () => {
+  const h = harness();
+  for (const reason of ["startup", "reload"])
+    for (const handler of h.handlers.get("session_start") ?? [])
+      await handler({ reason }, h.context);
+  assert.ok(
+    !h.calls.some(
+      (c) => c.name === "reconcileDue" || c.name === "reconcileTask",
+    ),
+  );
+  assert.ok(
+    !h.execCalls.some((c) =>
+      c.args.some((arg) => arg.includes("task-reconciler")),
+    ),
+  );
+});
+
+test("manual timeout returns a binding and retry does not recapture a replaced check", async () => {
+  const { waitingTask } = await import(
+    "../../lib/task-reconciler/test-fixtures.js"
+  );
+  const { fingerprintCheck } = await import(
+    "../../lib/task-lifecycle/reconciliation.js"
+  );
+  const { ReconciliationUnknownResultError } = await import(
+    "../../lib/task-reconciler/client.js"
+  );
+  const issue = waitingTask("jp-1", "manual");
+  let reads = 0;
+  const requests: any[] = [];
+  const fingerprint = fingerprintCheck(issue);
+  const h = harness({
+    reconciliation: {
+      issue: async () => {
+        reads += 1;
+        return issue;
       },
-      { manualOutcome: "action_required" },
-    ],
+      request: async (request) => {
+        requests.push(request);
+        throw new ReconciliationUnknownResultError(
+          request,
+          "fixture_lost_response",
+        );
+      },
+    },
   });
+  const tool = h.tools.get("task_reconcile")!;
+  const first = await tool.execute(
+    "first",
+    { taskId: "jp-1", manualOutcome: "satisfied" },
+    undefined,
+    undefined,
+    h.context,
+  );
+  assert.equal(first.isError, true);
+  assert.equal(first.details.outcome, "unknown");
+  assert.equal(first.details.retry.expectedCheckFingerprint, fingerprint);
+  issue.lifecycle!.activeCheck!.id = "replacement";
+  await tool.execute(
+    "second",
+    first.details.retry,
+    undefined,
+    undefined,
+    h.context,
+  );
+  assert.equal(reads, 1);
+  assert.deepEqual(requests[0], requests[1]);
+  assert.ok(!h.calls.some((c) => c.name === "reconcileTask"));
+});
+
+test("unavailable daemon and incomplete manual retry fail without local fallback", async () => {
+  const { ReconciliationClientError } = await import(
+    "../../lib/task-reconciler/client.js"
+  );
+  const h = harness({
+    reconciliation: {
+      issue: async () => {
+        throw new Error("must not read a replacement check");
+      },
+      request: async () => {
+        throw new ReconciliationClientError(
+          "incompatible",
+          "protocol incompatible",
+        );
+      },
+    },
+  });
+  const tool = h.tools.get("task_reconcile")!;
+  const unavailable = await tool.execute(
+    "request",
+    { taskId: "jp-1" },
+    undefined,
+    undefined,
+    h.context,
+  );
+  assert.equal(unavailable.isError, true);
+  assert.match(unavailable.content[0].text, /incompatible/);
+  const incomplete = await tool.execute(
+    "retry",
+    { taskId: "jp-1", requestId: "old", manualOutcome: "satisfied" },
+    undefined,
+    undefined,
+    h.context,
+  );
+  assert.equal(incomplete.isError, true);
+  assert.match(incomplete.content[0].text, /fingerprint|binding/i);
+  assert.ok(!h.calls.some((c) => c.name === "reconcileTask"));
+});
+
+test("administration requires explicit allowlisted invocation and uses an absolute launcher", async () => {
+  const h = harness();
+  const command = h.commands.get("task-reconciler");
+  assert.ok(command);
+  const ctx = { ...h.context, cwd: "/unrelated", ui: { notify() {} } };
+  await command.handler("status", ctx);
+  const call = h.execCalls.at(-1)!;
+  assert.equal(call.executable, process.execPath);
+  assert.ok(call.args[0].startsWith("/"));
+  assert.ok(call.args[0].endsWith("/bin/task-reconciler.mjs"));
+  assert.equal(call.args[1], "status");
+  assert.equal(call.args[2], "--config");
+  const count = h.execCalls.length;
+  await command.handler("start; echo unsafe", ctx);
+  assert.equal(h.execCalls.length, count);
 });

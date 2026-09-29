@@ -247,7 +247,8 @@ Active task to Deferred. Cleanup refusal leaves the task Active.
 ### `task_reconcile`
 
 Required: `taskId`. Optional: `manualOutcome`, either `satisfied` or
-`action_required`.
+`action_required`, plus `requestId` and `expectedCheckFingerprint` for retries.
+Execution goes through the local daemon, never an in-session fallback.
 
 ```json
 { "taskId": "jp-abc" }
@@ -256,6 +257,22 @@ Required: `taskId`. Optional: `manualOutcome`, either `satisfied` or
 ```json
 { "taskId": "jp-abc", "manualOutcome": "satisfied" }
 ```
+
+A new manual request captures the current check fingerprint before sending. If
+the reply is lost or times out, the tool reports an **unknown** result and returns
+a `retry` object. Resend that exact object, including its request ID, outcome,
+and fingerprint; do not recapture a replacement check. An explicit manual
+`requestId` without its original fingerprint is rejected. Unknown does not mean
+cancelled: the daemon may already have committed the transition.
+
+Unavailable or incompatible service returns setup/status guidance without
+running local reconciliation. `/task-reconciler status` is read-only. The same
+command accepts explicit `install`, `start`, `stop`, `update`, `update --rollback`,
+and `uninstall`; no command is run on startup or reload. See the
+[opt-in installation and cutover guide](../README.md#optional-task-reconciliation-daemon).
+`PI_TASK_RECONCILER_CONFIG` selects an explicit configuration file; otherwise
+administration uses `~/.pi/task-reconciler/config.json` and clients prefer the
+installed snapshot for their canonical Beads store.
 
 Reconciliation resolves pending worktree operations before native dependencies,
 due checks, and expired ownership. One exact valid acquisition is finalized;
@@ -349,8 +366,23 @@ records a terminal outcome.
 Pending PR polls use the configured interval. Adapter failures stay Waiting and
 use bounded exponential backoff. Poll timestamps update observations but never
 reset `stateEnteredAt` or `lastProgressAt`, so views preserve total waiting age.
-Session-start reconciliation is synchronous and bounded by configured task and
-PR-check limits. It creates no timer, watcher, or background process.
+Automatic and explicit reconciliation share the standalone daemon. Discovery
+runs every minute, while existing 15-minute PR deadlines/backoff remain in the
+lifecycle state. Pi startup performs no automatic reconciliation or installation.
+Ordinary mutations and lease activity stay local. If the service is unavailable,
+reconciliation remains unavailable; there is no hidden fallback.
+
+Pi-only notices reuse the work-state snapshot and persisted session cursor.
+Historical successes are baselined; unresolved attention is visible. Check
+`wakeOn` supports outcome names (`satisfied`, `action_required`, `error`, `manual`)
+and specific PR results (`merged`, `changes_requested`, `merge_conflict`,
+`closed_unmerged`); an empty list uses default important notices. Repeated polls
+and unchanged errors do not notify again. A cursor is scoped to the session and
+project, capped at 128 KiB, and explicitly rebaselined on overflow. At most ten
+notices are presented per interaction. Disappearing task IDs are resolved with
+one rotating bulk lookup (up to 100 IDs/16 KiB) per refresh; missing rows never
+imply completion. These notices use Pi UI notifications, not desktop messages
+or model-triggering turns.
 
 Activity events rate-limit metadata writes while extending long-running leases.
 A `reload` shutdown preserves current ownership. Quit, new, resume, fork-style,

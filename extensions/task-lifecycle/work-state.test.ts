@@ -6,6 +6,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import type { BeadsIssue } from "../../lib/beads.js";
 import { SESSION_PROJECT_ENTRY_TYPE } from "../../lib/session-project.js";
 import { registerTaskWorkState } from "./work-state.js";
+import type { DaemonHealth } from "../../lib/task-reconciler/health.js";
 
 const store = "/tmp/personal/.beads";
 process.env.BEADS_DIR = store;
@@ -54,6 +55,7 @@ function createHarness(
     entries?: any[];
     issues?: BeadsIssue[];
     readyIds?: string[];
+    health?: () => Promise<DaemonHealth>;
     exec?: (
       command: string,
       args: string[],
@@ -68,6 +70,7 @@ function createHarness(
   const tools = new Map<string, Tool>();
   const renderers = new Map<string, Function>();
   const appended: Array<{ customType: string; data: any }> = [];
+  const cursors: Array<{ customType: string; data: any }> = [];
   const sent: Array<{ message: any; options: any }> = [];
   const notifications: Array<{ message: string; type: string }> = [];
   const calls: Array<{ command: string; args: string[] }> = [];
@@ -142,7 +145,10 @@ function createHarness(
       renderers.set(customType, renderer);
     },
     appendEntry(customType: string, data: any) {
-      appended.push({ customType, data });
+      if (customType === "jp-reconciliation-cursor") {
+        cursors.push({ customType, data });
+        branch.push({ type: "custom", customType, data });
+      } else appended.push({ customType, data });
     },
     async exec(command: string, args: string[]) {
       calls.push({ command, args });
@@ -168,9 +174,29 @@ function createHarness(
     },
   };
 
-  registerTaskWorkState(pi as any);
+  registerTaskWorkState(pi as any, {
+    health:
+      options.health ??
+      (async () => ({
+        state: "available",
+        protocolVersion: 1,
+        runtimeVersion: "fixture",
+        pid: 1,
+        startedAt: "2026-01-01T00:00:00Z",
+        heartbeatAt: "2026-01-01T00:00:00Z",
+        queue: {
+          lastScanAttemptAt: null,
+          lastScanSuccessAt: null,
+          queued: 0,
+          localRunning: 0,
+          externalRunning: 0,
+          diagnostics: [],
+        },
+      })),
+  });
 
   return {
+    cursors,
     appended,
     branch,
     calls,
@@ -948,4 +974,180 @@ test("hidden lifecycle context obeys its measured character budget", async () =>
 
   assert.ok(hidden.message.content.length <= 12_000);
   assert.match(hidden.message.content, /<\/untrusted-task-metadata>$/);
+});
+
+test("completed visible tasks are bulk-resolved and noticed once without model turns", async () => {
+  const { waitingTask } = await import(
+    "../../lib/task-reconciler/test-fixtures.js"
+  );
+  const task = waitingTask("jp-visible");
+  const issue: BeadsIssue = {
+    id: task.id,
+    title: task.title,
+    status: "blocked",
+    labels: [],
+    lifecycle: task.lifecycle,
+  };
+  const h = createHarness({
+    exec: async (_command, args) => ({
+      code: 0,
+      stderr: "",
+      stdout: JSON.stringify(
+        args[0] === "show"
+          ? [rawIssue(issue)]
+          : issue.status === "closed"
+            ? []
+            : [rawIssue(issue)],
+      ),
+    }),
+  });
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  issue.status = "closed";
+  issue.lifecycle!.phase = "done";
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.equal(
+    h.notifications.filter((n) => n.message.includes("completed")).length,
+    1,
+  );
+  assert.equal(h.calls.filter((c) => c.args[0] === "show").length, 1);
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.equal(
+    h.notifications.filter((n) => n.message.includes("completed")).length,
+    1,
+  );
+  assert.equal(h.sent.length, 0);
+  assert.ok(h.cursors.length > 0);
+});
+
+test("missing tasks produce an explicit diagnostic rather than inferred completion", async () => {
+  const { waitingTask } = await import(
+    "../../lib/task-reconciler/test-fixtures.js"
+  );
+  const task = waitingTask("jp-missing");
+  let visible = true;
+  const h = createHarness({
+    exec: async () => ({
+      code: 0,
+      stderr: "",
+      stdout: JSON.stringify(
+        visible
+          ? [
+              {
+                id: task.id,
+                title: task.title,
+                status: task.status,
+                metadata: task.metadata,
+                labels: [],
+              },
+            ]
+          : [],
+      ),
+    }),
+  });
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  visible = false;
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.ok(h.notifications.some((n) => /could not be loaded/.test(n.message)));
+  assert.ok(!h.notifications.some((n) => n.message.includes("completed")));
+  const count = h.notifications.length;
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.equal(h.notifications.length, count);
+});
+
+test("persisted notice cursor suppresses repeated health notices after reload", async () => {
+  const health = async (): Promise<DaemonHealth> => ({
+    state: "incompatible",
+    reason: "private detail",
+  });
+  const first = createHarness({ health });
+  await first.handlers.get("before_agent_start")!({}, first.context);
+  assert.equal(first.notifications.length, 1);
+  assert.equal(first.sent.length, 0);
+  const next = createHarness({ health, entries: first.branch });
+  await next.handlers.get("before_agent_start")!({}, next.context);
+  assert.equal(next.notifications.length, 0);
+});
+
+test("disappearance lookups are bounded and rotate without repeating the same lookup warning", async () => {
+  const { waitingTask } = await import(
+    "../../lib/task-reconciler/test-fixtures.js"
+  );
+  const tasks = Array.from({ length: 175 }, (_, i) =>
+    waitingTask(`jp-bulk-${i}`),
+  );
+  let visible = true;
+  const h = createHarness({
+    exec: async () => ({
+      code: 0,
+      stderr: "",
+      stdout: JSON.stringify(
+        visible
+          ? tasks.map((t) => ({
+              id: t.id,
+              title: t.title,
+              status: t.status,
+              labels: [],
+              metadata: t.metadata,
+            }))
+          : [],
+      ),
+    }),
+  });
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  visible = false;
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  const batches = h.calls
+    .filter((c) => c.args[0] === "show")
+    .map((c) => c.args.slice(1, c.args.indexOf("--json")));
+  assert.ok(
+    batches.every(
+      (b) => b.length <= 100 && Buffer.byteLength(b.join(" ")) <= 16 * 1024,
+    ),
+  );
+  assert.equal(new Set(batches.flat()).size, 175);
+  assert.equal(
+    h.notifications.filter((n) => n.message.includes("could not be loaded"))
+      .length,
+    1,
+  );
+});
+
+test("closed tasks moved to another project leave the notice cursor without a completion notice", async () => {
+  const { waitingTask } = await import(
+    "../../lib/task-reconciler/test-fixtures.js"
+  );
+  const task = waitingTask("jp-moved");
+  const row: BeadsIssue = {
+    id: task.id,
+    title: task.title,
+    status: "blocked",
+    labels: ["workstream:first"],
+    lifecycle: task.lifecycle,
+  };
+  let visible = true;
+  const h = createHarness({
+    entries: [
+      {
+        type: "custom",
+        customType: SESSION_PROJECT_ENTRY_TYPE,
+        data: { version: 1, workstream: "first" },
+      },
+    ],
+    exec: async (_cmd, args) => ({
+      code: 0,
+      stderr: "",
+      stdout: JSON.stringify(
+        visible || args[0] === "show" ? [rawIssue(row)] : [],
+      ),
+    }),
+  });
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  visible = false;
+  row.status = "closed";
+  row.lifecycle!.phase = "done";
+  row.labels = ["workstream:second"];
+  await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.ok(!h.notifications.some((n) => n.message.includes("completed")));
+  assert.ok(!h.cursors.at(-1)!.data.cursor.knownTaskIds.includes(row.id));
 });

@@ -1,3 +1,11 @@
+import { createHash } from "node:crypto";
+import { readPiDaemonHealth } from "../../lib/task-reconciler/pi-client.js";
+import type { DaemonHealth } from "../../lib/task-reconciler/health.js";
+import {
+  readNoticeCursor,
+  selectReconciliationNotices,
+  type NoticeCursor,
+} from "../../lib/task-reconciler/notices.js";
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   Markdown,
@@ -8,6 +16,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   classifyReadiness,
+  resolveBeadsDir,
   createBeadsClient,
   lifecycleAnnotation,
   listClassifiedIssues,
@@ -38,9 +47,10 @@ interface TaskWorkStateContext {
     getBranch(): ReadonlyArray<{ type: string; customType?: string }>;
     getEntries(): readonly unknown[];
     getSessionName(): string | undefined;
+    getSessionId?(): string;
   };
   ui: {
-    notify(message: string, type: "warning"): void;
+    notify(message: string, type: "info" | "warning"): void;
   };
 }
 
@@ -67,6 +77,7 @@ export interface TaskWorkStateApi {
 
 interface State {
   project?: string;
+  listedTaskIds?: readonly string[];
   active?: ClassifiedIssue[];
   inProgress: ClassifiedIssue[];
   blocked: ClassifiedIssue[];
@@ -361,7 +372,12 @@ class StartupWorkTable implements Component {
   }
 }
 
-export function registerTaskWorkState(pi: TaskWorkStateApi): void {
+export function registerTaskWorkState(
+  pi: TaskWorkStateApi,
+  deps?: { health(): Promise<DaemonHealth> },
+): void {
+  const storePath = resolveBeadsDir();
+  const readHealth = deps?.health ?? (() => readPiDaemonHealth(storePath));
   const client = createBeadsClient(async (command, args) => {
     const result = await pi.exec(command, [...args]);
     return {
@@ -391,6 +407,7 @@ export function registerTaskWorkState(pi: TaskWorkStateApi): void {
       );
       return {
         project,
+        listedTaskIds: active.map((issue) => issue.id),
         active: scoped,
         inProgress: scoped.filter((issue) => issue.readiness === "in_progress"),
         blocked: scoped.filter((issue) => issue.readiness === "blocked"),
@@ -408,6 +425,7 @@ export function registerTaskWorkState(pi: TaskWorkStateApi): void {
 
     return {
       active,
+      listedTaskIds: active.map((issue) => issue.id),
       inProgress: active.filter((issue) => issue.readiness === "in_progress"),
       blocked: active.filter((issue) => issue.readiness === "blocked"),
       ready: active.filter((issue) => issue.readiness === "ready"),
@@ -434,6 +452,155 @@ export function registerTaskWorkState(pi: TaskWorkStateApi): void {
     };
   }
 
+  const cursorEntry = "jp-reconciliation-cursor";
+  let cursor: NoticeCursor | null = null;
+  let scope: string | null | undefined;
+  let session: unknown;
+  let refreshTail: Promise<unknown> = Promise.resolve();
+  function refresh(context: TaskWorkStateContext): Promise<State> {
+    const project = resolveSessionProject(context.sessionManager).workstream;
+    const identity =
+      context.sessionManager.getSessionId?.() ?? context.sessionManager;
+    const run = refreshTail.then(async () => {
+      const projectKey = project?.toLowerCase() ?? null;
+      if (session !== identity || scope !== projectKey) {
+        session = identity;
+        scope = projectKey;
+        cursor = null;
+        for (const raw of context.sessionManager.getEntries()) {
+          const entry = raw as {
+            type?: string;
+            customType?: string;
+            data?: { project?: string | null; cursor?: unknown };
+          };
+          if (
+            entry?.type === "custom" &&
+            entry.customType === cursorEntry &&
+            entry.data?.project === projectKey
+          )
+            cursor = readNoticeCursor(entry.data.cursor);
+        }
+      }
+      const priorSerialized = JSON.stringify(cursor);
+      const [state, health] = await Promise.all([
+        queryState(project),
+        readHealth(),
+      ]);
+      const rows: BeadsIssue[] = [...(state.active ?? [])];
+      const visible = new Set(rows.map((issue) => issue.id));
+      const listed = new Set(state.listedTaskIds ?? visible);
+      if (cursor) {
+        const retained = cursor.knownTaskIds.filter(
+          (id) => visible.has(id) || !listed.has(id),
+        );
+        cursor = { ...cursor, knownTaskIds: retained };
+      }
+      const absent =
+        cursor?.knownTaskIds.filter((id) => !visible.has(id)) ?? [];
+      const batch: string[] = [];
+      let bytes = 0;
+      for (const id of absent) {
+        const size = Buffer.byteLength(id) + 1;
+        if (batch.length >= 100 || bytes + size > 16 * 1024) break;
+        batch.push(id);
+        bytes += size;
+      }
+      let missing: readonly string[] = [];
+      if (batch.length) {
+        const found = await client.showIssues(batch);
+        if (found.ok) {
+          const returned = new Set(found.value.map((issue) => issue.id));
+          missing = batch.filter((id) => !returned.has(id));
+          const wanted = new Set(batch);
+          const inScope = (issue: BeadsIssue) =>
+            !project ||
+            issue.labels
+              .find((label) => label.startsWith("workstream:"))
+              ?.slice("workstream:".length)
+              .toLowerCase() === project.toLowerCase();
+          rows.push(
+            ...found.value.filter(
+              (issue) => wanted.has(issue.id) && inScope(issue),
+            ),
+          );
+          const moved = new Set(
+            found.value
+              .filter((issue) => wanted.has(issue.id) && !inScope(issue))
+              .map((issue) => issue.id),
+          );
+          if (cursor && moved.size)
+            cursor = {
+              ...cursor,
+              knownTaskIds: cursor.knownTaskIds.filter((id) => !moved.has(id)),
+              lastSeen: Object.fromEntries(
+                Object.entries(cursor.lastSeen).filter(
+                  ([id]) => !moved.has(id),
+                ),
+              ),
+            };
+        } else missing = batch;
+        if (cursor)
+          cursor = {
+            ...cursor,
+            knownTaskIds: [
+              ...cursor.knownTaskIds.filter((id) => !batch.includes(id)),
+              ...batch.filter((id) => cursor!.knownTaskIds.includes(id)),
+            ],
+          };
+      }
+      const next = selectReconciliationNotices(rows, health, cursor);
+      const notices = [...next.notices];
+      if (missing.length) {
+        const signature = `missing:${createHash("sha256").update("unavailable_records").digest("hex")}`;
+        if (next.cursor.lastSeen.$lookup !== signature && notices.length < 10) {
+          notices.push({
+            key: "missing_tasks",
+            level: "warning",
+            message:
+              "Previously visible tasks could not be loaded; no completion was inferred. Lookup will be retried.",
+          });
+          next.cursor = {
+            ...next.cursor,
+            lastSeen: { ...next.cursor.lastSeen, $lookup: signature },
+          };
+        }
+      }
+      if (
+        missing.length === 0 &&
+        batch.length === absent.length &&
+        next.cursor.lastSeen.$lookup !== undefined
+      )
+        next.cursor = {
+          ...next.cursor,
+          lastSeen: Object.fromEntries(
+            Object.entries(next.cursor.lastSeen).filter(
+              ([key]) => key !== "$lookup",
+            ),
+          ),
+        };
+      if (!readNoticeCursor(next.cursor)) {
+        next.cursor = selectReconciliationNotices(rows, health, null).cursor;
+        notices.splice(0, notices.length, {
+          key: "cursor_reset",
+          level: "warning",
+          message:
+            "Reconciliation notice cursor was rebaselined after exceeding its safety limit.",
+        });
+      }
+      for (const notice of notices)
+        context.ui.notify(notice.message, notice.level);
+      if (JSON.stringify(next.cursor) !== priorSerialized)
+        pi.appendEntry(cursorEntry, {
+          project: projectKey,
+          cursor: next.cursor,
+        });
+      cursor = next.cursor;
+      return state;
+    });
+    refreshTail = run.catch(() => undefined);
+    return run;
+  }
+
   pi.registerEntryRenderer<StartupWorkEntry>(
     STARTUP_ENTRY,
     (entry, _options, theme) => {
@@ -458,9 +625,7 @@ export function registerTaskWorkState(pi: TaskWorkStateApi): void {
     if (alreadyStarted()) return;
 
     try {
-      const state = await queryState(
-        resolveSessionProject(context.sessionManager).workstream,
-      );
+      const state = await refresh(context);
       setTimeout(() => {
         if (!alreadyStarted()) pi.appendEntry(STARTUP_ENTRY, { state });
       }, 0);
@@ -477,11 +642,7 @@ export function registerTaskWorkState(pi: TaskWorkStateApi): void {
       return {
         message: {
           customType: "jp-work",
-          content: renderHiddenState(
-            await queryState(
-              resolveSessionProject(context.sessionManager).workstream,
-            ),
-          ),
+          content: renderHiddenState(await refresh(context)),
           display: false,
         },
       };
@@ -498,9 +659,7 @@ export function registerTaskWorkState(pi: TaskWorkStateApi): void {
 
   pi.on("session_compact", async (_event, context) => {
     try {
-      const state = await queryState(
-        resolveSessionProject(context.sessionManager).workstream,
-      );
+      const state = await refresh(context);
       pi.sendMessage(
         {
           customType: "jp-work-compact",

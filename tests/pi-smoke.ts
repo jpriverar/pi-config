@@ -843,6 +843,25 @@ async function verifyContractHarness(
     evidenceArtifactIds: [],
   });
   assert.equal(closed.details.status, "closed");
+  const commandCount = harness.execCalls.length;
+  const previousDaemonConfig = process.env.PI_TASK_RECONCILER_CONFIG;
+  process.env.PI_TASK_RECONCILER_CONFIG = join(cwd, "not-installed.json");
+  try {
+    const reconciliation = await invokeTool(harness, "task_reconcile", {
+      taskId: created.id,
+    });
+    assert.equal(reconciliation.isError, true);
+    assert.equal(reconciliation.details.code, "unavailable");
+    assert.equal(
+      harness.execCalls.length,
+      commandCount,
+      "no local reconciliation fallback",
+    );
+  } finally {
+    if (previousDaemonConfig === undefined)
+      delete process.env.PI_TASK_RECONCILER_CONFIG;
+    else process.env.PI_TASK_RECONCILER_CONFIG = previousDaemonConfig;
+  }
   assert.ok(
     harness.execCalls.every(
       (call) =>
@@ -1025,6 +1044,7 @@ async function main() {
     assert.equal(new Set(commandNames).size, commandNames.length);
     for (const command of [
       "herdr-clone",
+      "task-reconciler",
       "tasks",
       "project",
       "plan-view",

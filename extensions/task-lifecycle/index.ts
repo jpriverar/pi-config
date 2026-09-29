@@ -1,4 +1,18 @@
 import { randomUUID } from "node:crypto";
+import {
+  fingerprintCheck,
+  type ReconcileRequest,
+} from "../../lib/task-lifecycle/reconciliation.js";
+import {
+  ReconciliationClientError,
+  ReconciliationUnknownResultError,
+} from "../../lib/task-reconciler/client.js";
+import type { ReconcileReply } from "../../lib/task-reconciler/protocol.js";
+import {
+  piReconcilerConfigPath,
+  reconcilerSetupGuidance,
+  requestPiReconciliation,
+} from "../../lib/task-reconciler/pi-client.js";
 import { fileURLToPath } from "node:url";
 
 import { loadLifecycleConfig } from "../../lib/task-lifecycle/config.js";
@@ -132,6 +146,7 @@ export interface TaskLifecycleToolService {
 interface ExtensionContext {
   cwd: string;
   sessionManager: { getSessionId(): string };
+  ui?: { notify(message: string, level: "info" | "warning"): void };
 }
 
 type PendingPoolOperation =
@@ -163,6 +178,13 @@ interface ExtensionApi {
     handler: (event: any, context: ExtensionContext) => unknown,
   ): void;
   registerTool(tool: ToolDefinition): void;
+  registerCommand?(
+    name: string,
+    command: {
+      description: string;
+      handler(args: string, context: ExtensionContext): Promise<void>;
+    },
+  ): void;
   exec?: (
     command: string,
     args: readonly string[],
@@ -172,6 +194,13 @@ interface ExtensionApi {
 
 export interface TaskLifecycleExtensionDependencies {
   service: TaskLifecycleToolService;
+  reconciliation?: {
+    issue(taskId: string): Promise<LifecycleIssue>;
+    request(
+      request: ReconcileRequest,
+      signal?: AbortSignal,
+    ): Promise<ReconcileReply>;
+  };
   now(): number;
   pid: number;
   hostname: string;
@@ -514,7 +543,7 @@ export function createTaskLifecycleExtension(
       name: "task_reconcile",
       label: "Reconcile task",
       description:
-        "Reconcile deterministic lifecycle state such as an expired active execution lease.",
+        "Ask the local daemon to reconcile a task. Unknown outcomes include the exact request/check binding to reuse on retry.",
       parameters: objectSchema(
         {
           taskId: taskIdProperty,
@@ -522,19 +551,97 @@ export function createTaskLifecycleExtension(
             type: "string",
             enum: ["satisfied", "action_required"],
           },
+          requestId: { type: "string", minLength: 1, maxLength: 256 },
+          expectedCheckFingerprint: {
+            type: "string",
+            pattern: "^[a-f0-9]{64}$",
+          },
         },
         ["taskId"],
       ),
-      async execute(_id, params, _signal, _update, context) {
-        return toolResult(
-          await deps.service.reconcileTask(
-            params.taskId,
-            ownerFor(context),
-            params.manualOutcome === undefined
-              ? {}
-              : { manualOutcome: params.manualOutcome },
-          ),
-        );
+      async execute(id, params, signal) {
+        try {
+          const request: ReconcileRequest = {
+            taskId: params.taskId,
+            requestId: params.requestId ?? id,
+          };
+          if (params.manualOutcome !== undefined) {
+            request.manualOutcome = params.manualOutcome;
+            if (params.requestId !== undefined) {
+              if (params.expectedCheckFingerprint === undefined)
+                throw new ReconciliationClientError(
+                  "invalid_request",
+                  "Manual retry requires the original request ID and fingerprint binding.",
+                );
+              request.expectedCheckFingerprint =
+                params.expectedCheckFingerprint;
+            } else {
+              if (params.expectedCheckFingerprint !== undefined)
+                throw new ReconciliationClientError(
+                  "invalid_request",
+                  "Retry fingerprint requires its original request ID.",
+                );
+              if (!deps.reconciliation)
+                throw new ReconciliationClientError(
+                  "unavailable",
+                  reconcilerSetupGuidance,
+                );
+              const issue = await deps.reconciliation.issue(params.taskId);
+              if (issue.lifecycle?.activeCheck?.kind !== "manual")
+                throw new ReconciliationClientError(
+                  "manual_check_required",
+                  "Task has no current manual check.",
+                );
+              request.expectedCheckFingerprint = fingerprintCheck(issue)!;
+            }
+          } else if (params.expectedCheckFingerprint !== undefined)
+            request.expectedCheckFingerprint = params.expectedCheckFingerprint;
+          if (!deps.reconciliation)
+            throw new ReconciliationClientError(
+              "unavailable",
+              reconcilerSetupGuidance,
+            );
+          const reply = await deps.reconciliation.request(
+            request,
+            signal instanceof AbortSignal ? signal : undefined,
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: `${reply.task.id}: ${reply.outcome} (${reply.task.phase ?? reply.task.status})`,
+              },
+            ],
+            details: reply,
+          };
+        } catch (error) {
+          if (error instanceof ReconciliationUnknownResultError)
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: `Reconciliation result unknown; retry this exact binding: ${JSON.stringify(error.request)}`,
+                },
+              ],
+              details: { outcome: "unknown", retry: error.request },
+            };
+          const code =
+            error instanceof ReconciliationClientError
+              ? error.code
+              : "request_failed";
+          const message =
+            error instanceof ReconciliationClientError
+              ? error.message
+              : "Reconciliation request could not be prepared.";
+          return {
+            isError: true,
+            content: [
+              { type: "text", text: `${message} ${reconcilerSetupGuidance}` },
+            ],
+            details: { code },
+          };
+        }
       },
     });
 
@@ -605,11 +712,75 @@ export function createTaskLifecycleExtension(
       },
     });
 
-    pi.on("session_start", async (_event, context) => {
-      await deps.service.reconcileDue(ownerFor(context), {
-        taskLimit: deps.sessionReconcileLimit,
-        checkLimit: deps.sessionPrCheckLimit,
-      });
+    pi.registerCommand?.("task-reconciler", {
+      description:
+        "Explicitly administer the opt-in local reconciliation daemon.",
+      async handler(args, context) {
+        const parts = args.trim() ? args.trim().split(/\s+/) : ["status"];
+        const action = parts[0];
+        if (
+          ![
+            "install",
+            "start",
+            "stop",
+            "status",
+            "update",
+            "uninstall",
+          ].includes(action) ||
+          (parts.length > 1 &&
+            !(
+              parts.length === 2 &&
+              action === "update" &&
+              parts[1] === "--rollback"
+            ))
+        ) {
+          context.ui?.notify(
+            "Use /task-reconciler install|start|stop|status|update|uninstall; only update accepts --rollback.",
+            "warning",
+          );
+          return;
+        }
+        if (!pi.exec) {
+          context.ui?.notify("Pi command execution is unavailable.", "warning");
+          return;
+        }
+        const launcher = fileURLToPath(
+          new URL("../../bin/task-reconciler.mjs", import.meta.url),
+        );
+        context.ui?.notify(
+          `Task reconciler: ${action}. No other service operation will be performed implicitly.`,
+          "info",
+        );
+        try {
+          const result = await pi.exec(
+            process.execPath,
+            [
+              launcher,
+              action,
+              "--config",
+              piReconcilerConfigPath(),
+              ...parts.slice(1),
+            ],
+            {
+              timeout:
+                action === "install" || action === "update" ? 180_000 : 90_000,
+            },
+          );
+          context.ui?.notify(
+            (
+              result.stdout ||
+              result.stderr ||
+              `task-reconciler exited ${result.code}`
+            ).slice(0, 4000),
+            result.code === 0 ? "info" : "warning",
+          );
+        } catch {
+          context.ui?.notify(
+            "Administration result unknown; inspect /task-reconciler status before retrying.",
+            "warning",
+          );
+        }
+      },
     });
     pi.on("session_shutdown", async (event, context) => {
       if (event?.reason === "reload" || typeof event?.reason !== "string") {
@@ -988,8 +1159,9 @@ export default function taskLifecycle(
   const config = loadLifecycleConfig(
     fileURLToPath(new URL("./config.json", import.meta.url)),
   );
+  const storePath = resolveBeadsDir();
   const store = createLifecycleStore(pi.exec.bind(pi), {
-    store: resolveBeadsDir(),
+    store: storePath,
   });
   const pool = {
     async list(repository?: string) {
@@ -1033,6 +1205,11 @@ export default function taskLifecycle(
   });
   createTaskLifecycleExtension({
     service,
+    reconciliation: {
+      issue: (id) => store.show(id),
+      request: (request, signal) =>
+        requestPiReconciliation(request, signal, storePath),
+    },
     now: Date.now,
     pid: process.pid,
     hostname: readHostname(),
