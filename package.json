@@ -15,7 +15,8 @@
   },
   "scripts": {
     "build:reconciler": "node scripts/build-task-reconciler.mjs",
-    "test": "tsx --test $(find tests extensions lib -type f -name '*.test.ts' -print 2>/dev/null) && node --test tests/manifest.test.mjs",
+    "probe:reconciler": "tsx tests/task-reconciler-readonly-probe.ts",
+    "test": "tsx --test --test-concurrency=2 $(find tests extensions lib -type f -name '*.test.ts' -print 2>/dev/null) && node --test tests/manifest.test.mjs",
     "test:file": "tsx --test",
     "test:bootstrap": "tsx --test tests/reconcile-personal-profile.test.ts tests/bootstrap-macos.test.ts",
     "typecheck": "tsc --noEmit",

@@ -74,6 +74,10 @@ read-only migration report.
 
 ## Optional task reconciliation daemon
 
+See the [operations guide](docs/task-reconciler-operations.md) for the complete
+cutover checklist, health/auth recovery, exact retries, rollback and read-only
+selection probe. Installation and activation require separate approval.
+
 Package installation, package updates, extension loading, and `/reload` never
 install or start this service. Installation and activation are separate,
 explicit operations. The daemon runs the existing reconciliation policy; it
