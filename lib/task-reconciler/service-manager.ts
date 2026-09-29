@@ -129,6 +129,7 @@ export async function manageService(
   const label = `com.pi.task-reconciler.${key}`;
   const base = join(home, ".pi/task-reconciler");
   const root = join(base, "services", key);
+  let installationRoot = root;
   const paths: ServicePaths = {
     root,
     manifest: join(root, "service.json"),
@@ -155,10 +156,11 @@ export async function manageService(
   if (!initial && action !== "install")
     throw new Error(`service is not installed: ${label}`);
   const configOptions = {
-    allowMissingExecutables: ["stop", "status", "uninstall"].includes(action),
+    allowMissingExecutables:
+      options.rollback || ["stop", "status", "uninstall"].includes(action),
   };
   const config = await loadDaemonConfig(
-    action === "install" || action === "update"
+    action === "install" || (action === "update" && !options.rollback)
       ? configPath
       : join(deploymentPath(initial!.currentDeployment), "daemon.json"),
     configOptions,
@@ -272,11 +274,22 @@ export async function manageService(
     return raw as ServiceRecord;
   }
   async function save(current: ServiceRecord): Promise<void> {
-    await atomic(paths.manifest, JSON.stringify(current));
+    await atomic(
+      join(installationRoot, "service.json"),
+      JSON.stringify(current),
+    );
   }
   function deploymentPath(id: string): string {
     if (!safeVersion(id)) throw new Error("invalid deployment identifier");
-    return join(root, "runtimes", id);
+    return join(installationRoot, "runtimes", id);
+  }
+  function installedConfiguration(id: string) {
+    const destination = join(root, "runtimes", id);
+    return {
+      ...config,
+      poolConfigPath: join(destination, "pool.json"),
+      lifecycleConfigPath: join(destination, "lifecycle.json"),
+    };
   }
   async function deployment(id: string) {
     const path = deploymentPath(id);
@@ -319,10 +332,28 @@ export async function manageService(
         ) !== hash
       )
         throw new Error(`deployment digest mismatch: ${name}`);
-    const installed = await loadDaemonConfig(
-      join(path, "daemon.json"),
-      configOptions,
-    );
+    let installed: DaemonConfig;
+    if (installationRoot === root) {
+      installed = await loadDaemonConfig(
+        join(path, "daemon.json"),
+        configOptions,
+      );
+    } else {
+      // Before atomic first publication, final config paths do not exist yet.
+      if (
+        (
+          await readBoundedFile(join(path, "daemon.json"), fs, deps.uid)
+        ).toString("utf8") !== JSON.stringify(installedConfiguration(id))
+      )
+        throw new Error(
+          "unpublished configuration differs from validated input",
+        );
+      installed = {
+        ...config,
+        poolConfigPath: join(path, "pool.json"),
+        lifecycleConfigPath: join(path, "lifecycle.json"),
+      };
+    }
     if (installed.store !== config.store)
       throw new Error("installed daemon store mismatch");
     return {
@@ -497,16 +528,14 @@ export async function manageService(
     const policy = await readBoundedFile(config.lifecycleConfigPath, fs);
     const id = `${build.manifest.runtimeVersion}-${digest(JSON.stringify(config) + pool.toString("utf8") + policy.toString("utf8")).slice(0, 12)}`;
     const destination = deploymentPath(id);
-    await directory(join(root, "runtimes"), true);
+    await directory(join(installationRoot, "runtimes"), true);
     if (!(await exists(destination))) {
-      const temporary = await fs.mkdtemp(join(root, "runtimes/.staging-"));
+      const temporary = await fs.mkdtemp(
+        join(installationRoot, "runtimes/.staging-"),
+      );
       try {
         await fs.cp(build.directory, temporary, { recursive: true });
-        const installed = {
-          ...config,
-          poolConfigPath: join(destination, "pool.json"),
-          lifecycleConfigPath: join(destination, "lifecycle.json"),
-        };
+        const installed = installedConfiguration(id);
         await fs.writeFile(
           join(temporary, "daemon.json"),
           JSON.stringify(installed),
@@ -533,10 +562,10 @@ export async function manageService(
             label,
             [
               installed.executables.node,
-              join(destination, build.manifest.entry),
+              join(root, "runtimes", id, build.manifest.entry),
               "run",
               "--config",
-              join(destination, "daemon.json"),
+              join(root, "runtimes", id, "daemon.json"),
             ],
             serviceEnv,
           ),
@@ -617,9 +646,10 @@ export async function manageService(
     );
     if (check.code !== 0)
       throw new Error(`invalid LaunchAgent template: ${paths.template}`);
-    if (!(await exists(paths.admin))) await atomic(paths.admin, admin);
+    const adminPath = join(installationRoot, "admin.mjs");
+    if (!(await exists(adminPath))) await atomic(adminPath, admin);
     else if (
-      (await readBoundedFile(paths.admin, fs, deps.uid)).toString("utf8") !==
+      (await readBoundedFile(adminPath, fs, deps.uid)).toString("utf8") !==
       ADMIN_SOURCE
     )
       throw new Error("unverifiable installed admin entry point");
@@ -671,10 +701,26 @@ export async function manageService(
           throw new Error(
             `refusing existing unowned LaunchAgent: ${paths.agent}`,
           );
-        await directory(root, true);
-        if ((await fs.readdir(root)).length)
-          throw new Error(`refusing unowned installation contents: ${root}`);
-        current = await select(await stage(), null);
+        if (await exists(root)) {
+          await directory(root);
+          if ((await fs.readdir(root)).length)
+            throw new Error(`refusing unowned installation contents: ${root}`);
+        }
+        await directory(dirname(root), true);
+        const stagedRoot = await fs.mkdtemp(join(dirname(root), ".install-"));
+        installationRoot = stagedRoot;
+        try {
+          current = await select(await stage(), null);
+          await fs.rename(stagedRoot, root);
+          installationRoot = root;
+          paths.template = join(
+            deploymentPath(current.currentDeployment),
+            "agent.plist",
+          );
+        } finally {
+          installationRoot = root;
+          await fs.rm(stagedRoot, { recursive: true, force: true });
+        }
         return {
           action,
           label,
@@ -736,7 +782,14 @@ export async function manageService(
                 runtimeVersion: candidate.build.manifest.runtimeVersion,
               }
             : await stage();
-          return select(replacement, previous.currentDeployment);
+          if (candidate)
+            await loadDaemonConfig(join(candidate.path, "daemon.json"));
+          return select(
+            replacement,
+            replacement.id === previous.currentDeployment
+              ? previous.previousDeployment
+              : previous.currentDeployment,
+          );
         });
         selected = true;
         if (before.loaded && !before.disabled) await start(current);

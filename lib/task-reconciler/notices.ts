@@ -98,7 +98,13 @@ function observation(issue: BeadsIssue) {
   else if (l.phase === "done") kind = "done";
   else if (check?.state === "satisfied") kind = "satisfied";
   else if (l.phase === "waiting") kind = "pending";
-  const signature = `${kind}:${hash([l.phase, issue.status, check?.id, kind, pending, kind === "error" || kind === "action_required" ? check?.lastObservation : null])}`;
+  const checkEvent = [
+    "satisfied",
+    "error",
+    "action_required",
+    "manual",
+  ].includes(kind);
+  const signature = `${kind}:${hash([checkEvent ? null : l.phase, checkEvent ? null : issue.status, check?.id, kind, pending, kind === "error" || kind === "action_required" ? check?.lastObservation : null])}`;
   return { kind, signature, check };
 }
 export function selectReconciliationNotices(

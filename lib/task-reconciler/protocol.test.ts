@@ -102,3 +102,29 @@ test("reconciliation responses contain only a validated task summary", () => {
   );
   assert.throws(() => parseResponse({ ...value, version: 99 }));
 });
+
+test("response parsing covers every native lifecycle status", () => {
+  const phases: Record<
+    import("../task-lifecycle/types.js").LifecycleStatus,
+    string
+  > = {
+    open: "actionable",
+    in_progress: "active",
+    blocked: "waiting",
+    deferred: "deferred",
+    closed: "done",
+  };
+  for (const [status, phase] of Object.entries(phases)) {
+    const response = {
+      version: 1,
+      ok: true,
+      kind: "reconcile",
+      reply: {
+        requestId: "fixture",
+        outcome: "unchanged",
+        task: { id: "jp-1", status, phase },
+      },
+    };
+    assert.deepEqual(parseResponse(response), response);
+  }
+});

@@ -209,3 +209,24 @@ test("timed-out uncommitted manual intent cannot target a replacement check", as
     await host.stop();
   }
 });
+
+for (const outcome of ["unchanged", "stale"] as const)
+  test(`client accepts ${outcome} deferred task replies`, async (t) => {
+    const f = await hostFixture(t);
+    await f.start({
+      ...f.runner,
+      async reconcile(request) {
+        const result = await f.runner.reconcile(request);
+        result.outcome = outcome;
+        result.issue.status = "deferred";
+        result.issue.lifecycle = null;
+        return result;
+      },
+    });
+    const reply = await requestReconciliation(f.config, {
+      requestId: outcome,
+      taskId: "jp-deferred",
+    });
+    assert.equal(reply.outcome, outcome);
+    assert.equal(reply.task.status, "deferred");
+  });

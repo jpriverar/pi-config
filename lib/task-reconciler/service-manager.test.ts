@@ -672,3 +672,155 @@ test("retained verified releases do not prevent owned uninstall", async (t) => {
     false,
   );
 });
+
+test("first install recovers after deployment publication without adopting foreign contents", async (t) => {
+  const f = await fixture(t);
+  let failed = false;
+  const interrupted = {
+    ...f.deps,
+    fs: {
+      ...fs,
+      rename: (async (from: string, to: string) => {
+        if (to.endsWith("service.json") && !failed) {
+          failed = true;
+          throw new Error("fixture interrupted first publication");
+        }
+        return fs.rename(from, to);
+      }) as typeof fs.rename,
+    },
+  };
+  await assert.rejects(
+    manageService("install", f.configPath, interrupted),
+    /interrupted first publication/,
+  );
+  const installed = await manageService("install", f.configPath, f.deps);
+  assert.equal(installed.installed, true);
+  assert.equal(installed.loaded, false);
+  assert.equal(
+    f.calls.some((call) => call.file.includes("launchctl")),
+    false,
+  );
+});
+
+test("rollback uses retained assets despite missing source policies and stale source tools", async (t) => {
+  const f = await fixture(t);
+  await manageService("install", f.configPath, f.deps);
+  f.version = "fixture-v2";
+  await manageService("update", f.configPath, f.deps);
+  await fs.unlink(String(f.raw.poolConfigPath));
+  await fs.unlink(String(f.raw.lifecycleConfigPath));
+  f.raw.executables = {
+    node: process.execPath,
+    bd: join(f.root, "retired-bd"),
+    git: process.execPath,
+    gh: process.execPath,
+  };
+  await f.save();
+  const calls = f.buildCalls;
+  const rolled = await manageService("update", f.configPath, f.deps, {
+    rollback: true,
+  });
+  assert.equal(rolled.runtimeVersion, "fixture-v1");
+  assert.equal(rolled.loaded, false);
+  assert.equal(f.buildCalls, calls);
+});
+
+test("unchanged updates preserve the distinct rollback deployment", async (t) => {
+  const f = await fixture(t);
+  await manageService("install", f.configPath, f.deps);
+  f.version = "fixture-v2";
+  await manageService("update", f.configPath, f.deps);
+  await manageService("update", f.configPath, f.deps);
+  const calls = f.buildCalls;
+  const rolled = await manageService("update", f.configPath, f.deps, {
+    rollback: true,
+  });
+  assert.equal(rolled.runtimeVersion, "fixture-v1");
+  assert.equal(f.buildCalls, calls);
+});
+
+for (const boundary of ["smoke", "manifest", "root"] as const)
+  test(`crashed first installation at ${boundary} leaves no partially published service`, async (t) => {
+    const f = await fixture(t);
+    const services = join(
+      await fs.realpath(f.home),
+      ".pi/task-reconciler/services",
+    );
+    const root = join(services, f.label().split(".").at(-1)!);
+    const interrupted = {
+      ...f.deps,
+      exec: async (...args: Parameters<typeof f.deps.exec>) => {
+        if (boundary === "smoke" && args[1].includes("--runtime-info"))
+          throw new Error("fixture crash");
+        return f.deps.exec(...args);
+      },
+      fs: {
+        ...fs,
+        rename: (async (from: string, to: string) => {
+          if (
+            (boundary === "manifest" && to.endsWith("service.json")) ||
+            (boundary === "root" && to === root)
+          )
+            throw new Error("fixture crash");
+          return fs.rename(from, to);
+        }) as typeof fs.rename,
+        rm: (async (path: string, options: Parameters<typeof fs.rm>[1]) => {
+          if (String(path).startsWith(join(services, ".install-"))) return;
+          return fs.rm(path, options);
+        }) as typeof fs.rm,
+      },
+    };
+    await assert.rejects(
+      manageService("install", f.configPath, interrupted),
+      /fixture crash/,
+    );
+    await assert.rejects(fs.access(root), { code: "ENOENT" });
+    const orphan = (await fs.readdir(services)).find((name) =>
+      name.startsWith(".install-"),
+    )!;
+    await fs.writeFile(join(services, orphan, "unrelated-note"), "preserve");
+    const result = await manageService("install", f.configPath, f.deps);
+    assert.equal(result.installed, true);
+    assert.equal(result.loaded, false);
+    assert.equal(
+      await fs.readFile(join(services, orphan, "unrelated-note"), "utf8"),
+      "preserve",
+    );
+    assert.equal(
+      f.calls.some((call) => call.file.includes("launchctl")),
+      false,
+    );
+    await manageService("uninstall", f.configPath, f.deps);
+    await fs.access(join(services, orphan, "unrelated-note"));
+  });
+
+test("rollback refuses an unusable retained executable and leaves the service stopped", async (t) => {
+  const f = await fixture(t);
+  const oldBd = join(f.root, "old-bd");
+  await fs.writeFile(oldBd, "fixture", { mode: 0o700 });
+  f.raw.executables = {
+    node: process.execPath,
+    bd: oldBd,
+    git: process.execPath,
+    gh: process.execPath,
+  };
+  await f.save();
+  await manageService("install", f.configPath, f.deps);
+  f.version = "fixture-v2";
+  f.raw.executables = {
+    node: process.execPath,
+    bd: process.execPath,
+    git: process.execPath,
+    gh: process.execPath,
+  };
+  await f.save();
+  await manageService("update", f.configPath, f.deps);
+  await manageService("start", f.configPath, f.deps);
+  await fs.unlink(oldBd);
+  await assert.rejects(
+    manageService("update", f.configPath, f.deps, { rollback: true }),
+    /executable/,
+  );
+  assert.equal(f.loaded, false);
+  assert.equal(f.disabled, true);
+});

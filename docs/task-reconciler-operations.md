@@ -34,8 +34,11 @@ is not success. This is a single-host design, not a distributed worker lease.
    node bin/task-reconciler.mjs status --config "$cfg"
    ```
 
-   Installation copies a verified Node-only runtime and configuration. It does
-   not bootstrap launchd or publish the login agent. Confirm status reports
+   Installation publishes the complete verified runtime, configuration and
+   ownership manifest with one directory rename. It does not bootstrap launchd
+   or publish the login agent. A crash before publication can leave an unselected
+   private `.install-*` sibling directory; retries neither adopt nor delete it,
+   and it does not block a new explicit install. Confirm status reports
    installed but disabled/unloaded before requesting activation approval.
 
 5. After activation approval, explicitly start and inspect:
@@ -120,7 +123,10 @@ node bin/task-reconciler.mjs uninstall --config "$cfg"
 Update stops and confirms draining **before** compiling/selecting new policy. It
 restarts only a previously loaded, enabled service. A failed update stays stopped;
 there is no automatic policy rollback. The previous immutable runtime/config is
-retained for explicit rollback. Rolling back a stopped service leaves it stopped;
+retained for explicit rollback. Repeating an unchanged update preserves the
+last distinct rollback selection. Rollback reads the installed assets rather
+than the original policy files/tools, and validates the selected retained
+configuration before allowing restart. Rolling back a stopped service leaves it stopped;
 start separately after inspecting the selected version.
 
 The stable installed admin entry survives generated package-output cleanup.

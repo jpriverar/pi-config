@@ -161,3 +161,41 @@ test("specific PR wakeOn reasons do not wake for unrelated attention outcomes", 
   const attention = selectReconciliationNotices([task], health, quiet.cursor);
   assert.equal(attention.notices.length, 1);
 });
+
+test("claiming actionable work does not replay its archived check success", async () => {
+  const { claimLifecycle, createActionableLifecycle, validateLifecycle } =
+    await import("../task-lifecycle/model.js");
+  const task = issue();
+  const baseline = selectReconciliationNotices([task], health, null);
+  const check = {
+    ...task.lifecycle!.activeCheck!,
+    state: "satisfied" as const,
+  };
+  task.lifecycle = createActionableLifecycle("2026-01-02T00:00:00Z");
+  task.lifecycle.checkHistory.push(check);
+  task.status = "open";
+  validateLifecycle(task.lifecycle, {
+    ...waitingTask(task.id),
+    lifecycle: task.lifecycle,
+    status: "open",
+  });
+  const success = selectReconciliationNotices([task], health, baseline.cursor);
+  assert.equal(success.notices.length, 1);
+  task.lifecycle = claimLifecycle(task.lifecycle, {
+    operationId: "claim",
+    sessionId: "fixture",
+    now: "2026-01-02T00:00:00Z",
+    expiresAt: "2026-01-03T00:00:00Z",
+    resourceSnapshot: { observedAt: "2026-01-02T00:00:00Z", resourceIds: [] },
+  });
+  task.status = "in_progress";
+  validateLifecycle(task.lifecycle, {
+    ...waitingTask(task.id),
+    lifecycle: task.lifecycle,
+    status: "in_progress",
+  });
+  assert.equal(
+    selectReconciliationNotices([task], health, success.cursor).notices.length,
+    0,
+  );
+});

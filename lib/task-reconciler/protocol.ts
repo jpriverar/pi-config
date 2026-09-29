@@ -200,6 +200,7 @@ export function parseResponse(value: unknown): ProtocolResponse {
           "open",
           "in_progress",
           "blocked",
+          "deferred",
           "closed",
         ]),
         phase:
