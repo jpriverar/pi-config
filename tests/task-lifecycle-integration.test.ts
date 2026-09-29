@@ -256,6 +256,11 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
       "acquire-b",
     );
     assert.equal(primaryIssue.lifecycle?.resources.length, 2);
+    assert.deepEqual(
+      await service.claim(primary, owner, "reclaim-primary"),
+      primaryIssue,
+    );
+    assert.deepEqual(await store.show(primary), primaryIssue);
 
     const pullA = "https://github.com/example/repo-a/pull/1";
     const pullB = "https://github.com/example/repo-b/pull/2";

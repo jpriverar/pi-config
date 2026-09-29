@@ -129,8 +129,10 @@ Claims one Actionable or Waiting task for the current session. Claiming adopts
 a legacy task into version-1 lifecycle metadata. A legacy native `blocked` task
 without a structured check is adopted condition-free rather than inventing
 check authority. A managed Waiting task retains its native dependency or
-typed-check condition while becoming Active. Another live execution owner
-blocks the claim.
+typed-check condition while becoming Active. Re-claiming an Active task already
+owned by the current session returns it unchanged, even with a new operation ID;
+it does not renew the lease or record another transition. Another execution
+owner blocks the claim, even when reusing a recorded operation ID.
 
 ### `task_attach_artifact`
 

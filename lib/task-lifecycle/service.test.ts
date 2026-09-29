@@ -425,16 +425,54 @@ test("resolves explicit Active tasks owned by one session", async () => {
   assert.deepEqual(await sut.activeTasksForSession("missing"), []);
 });
 
-test("rejects a claim owned by another live session", async () => {
-  const store = new FakeStore();
-  const sut = service(store);
-  await sut.claim("jp-1", session("s1"), "claim-1");
+for (const waiting of [null, "dependency", "check"] as const) {
+  test(`same-owner reclaims preserve active state with ${waiting ?? "no"} waiting condition`, async () => {
+    const store = new FakeStore({
+      ...issue(
+        lifecycle({
+          phase: waiting === null ? "actionable" : "waiting",
+          waiting: waiting === null ? null : { kind: waiting },
+          activeCheck: waiting === "check" ? lifecycleCheck() : null,
+        }),
+      ),
+      status: waiting === "check" ? "blocked" : "open",
+      dependencies:
+        waiting === "dependency"
+          ? [{ id: "jp-blocker", status: "open", dependencyType: "blocks" }]
+          : [],
+    });
+    let now = NOW_MS;
+    const sut = service(store, { now: () => now });
+    await sut.claim("jp-1", session("s1"), "claim-1");
+    const before = structuredClone(store.saved);
+    const writes = store.writes;
+    now += 30_000;
 
-  await assert.rejects(
-    sut.claim("jp-1", session("s2"), "claim-2"),
-    /owned by active session s1/,
-  );
-});
+    for (const operationId of ["claim-1", "claim-2", undefined]) {
+      const saved = await sut.claim("jp-1", session("s1"), operationId);
+
+      assert.deepEqual(saved, before);
+      assert.equal(store.writes, writes);
+    }
+  });
+}
+
+for (const operationId of ["claim-1", "claim-2"]) {
+  test(`rejects another session's active claim with operation ${operationId}`, async () => {
+    const store = new FakeStore();
+    const sut = service(store);
+    await sut.claim("jp-1", session("s1"), "claim-1");
+    const before = structuredClone(store.saved);
+    const writes = store.writes;
+
+    await assert.rejects(
+      sut.claim("jp-1", session("s2"), operationId),
+      /owned by active session s1/,
+    );
+    assert.deepEqual(store.saved, before);
+    assert.equal(store.writes, writes);
+  });
+}
 
 test("waits on native blockers without duplicating blocker IDs in metadata", async () => {
   const store = new FakeStore();

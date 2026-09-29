@@ -173,13 +173,9 @@ export class TaskLifecycleService {
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
       const lifecycle = this.managedOrAdopted(issue, readyIds, now);
-      if (
-        lifecycle.phase === "active" &&
-        !hasOperation(lifecycle, operationId)
-      ) {
-        throw new Error(
-          `task ${taskId} is owned by active session ${lifecycle.execution?.sessionId ?? "unknown"}`,
-        );
+      if (lifecycle.phase === "active") {
+        requireCurrentOwner(taskId, lifecycle, owner);
+        return null;
       }
       const next = claimLifecycle(lifecycle, {
         operationId,
