@@ -164,6 +164,19 @@ export async function scanReconciliation(
   };
 }
 
+export class ReconciliationRequestError extends Error {
+  constructor(
+    readonly code:
+      | "invalid_request"
+      | "request_conflict"
+      | "manual_check_required"
+      | "check_changed",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 export interface ReconcileRequest {
   requestId: string;
   taskId: string;
@@ -239,14 +252,20 @@ export function reconciliationOperationId(request: ReconcileRequest): string {
     request.requestId.length > 256 ||
     /[\u0000-\u001f\u007f]/.test(request.requestId)
   ) {
-    throw new Error("reconciliation requestId is invalid");
+    throw new ReconciliationRequestError(
+      "invalid_request",
+      "reconciliation requestId is invalid",
+    );
   }
   if (
     request.manualOutcome !== undefined &&
     request.manualOutcome !== "satisfied" &&
     request.manualOutcome !== "action_required"
   ) {
-    throw new Error("reconciliation manualOutcome is invalid");
+    throw new ReconciliationRequestError(
+      "invalid_request",
+      "reconciliation manualOutcome is invalid",
+    );
   }
   return `reconcile:${digest(request.requestId)}:${digest({ taskId: request.taskId, manualOutcome: request.manualOutcome ?? null, fingerprint: request.expectedCheckFingerprint ?? null })}`;
 }
@@ -261,6 +280,9 @@ export function reconciliationAlreadyApplied(
   );
   if (recorded === undefined) return false;
   if (recorded.operationId !== operationId)
-    throw new Error(`conflicting reconciliation request for task ${issue.id}`);
+    throw new ReconciliationRequestError(
+      "request_conflict",
+      `conflicting reconciliation request for task ${issue.id}`,
+    );
   return true;
 }

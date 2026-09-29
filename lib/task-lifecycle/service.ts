@@ -33,6 +33,7 @@ import {
 } from "./model.js";
 import {
   fingerprintCheck,
+  ReconciliationRequestError,
   reconciliationAlreadyApplied,
   reconciliationOperationId,
   type PreparedCheck,
@@ -496,14 +497,21 @@ export class TaskLifecycleService {
         issue.lifecycle?.activeCheck?.kind !== "manual" ||
         issue.lifecycle.waiting?.kind !== "check"
       ) {
-        throw new Error(`task ${taskId} does not retain a manual check`);
+        throw new ReconciliationRequestError(
+          "manual_check_required",
+          `task ${taskId} does not retain a manual check`,
+        );
       }
       if (request.expectedCheckFingerprint === undefined)
-        throw new Error(
+        throw new ReconciliationRequestError(
+          "invalid_request",
           `task ${taskId} manual outcome requires a check fingerprint`,
         );
       if (fingerprintCheck(issue) !== request.expectedCheckFingerprint)
-        throw new Error(`task ${taskId} check changed before reconciliation`);
+        throw new ReconciliationRequestError(
+          "check_changed",
+          `task ${taskId} check changed before reconciliation`,
+        );
     };
     validateManual(current);
     let lifecycle = current.lifecycle;
