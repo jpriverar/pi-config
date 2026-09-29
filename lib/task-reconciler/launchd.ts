@@ -47,13 +47,14 @@ export async function inspectLaunchd(
   );
   if (overrides.code !== 0 || !body)
     throw new Error(`unrecognized launchd disabled status for ${domain}`);
-  const entries = [...body[1].matchAll(/"([^"\r\n]+)"\s*=>\s*(true|false)/g)];
-  if (body[1].replace(/"([^"\r\n]+)"\s*=>\s*(true|false)/g, "").trim())
+  const entryPattern = /"([^"\r\n]+)"\s*=>\s*(true|false|enabled|disabled)/g;
+  const entries = [...body[1].matchAll(entryPattern)];
+  if (body[1].replace(entryPattern, "").trim())
     throw new Error(`unrecognized launchd disabled status for ${domain}`);
   const matches = entries.filter((entry) => entry[1] === label);
   if (matches.length > 1)
     throw new Error(`ambiguous launchd disabled status for ${label}`);
-  const disabled = matches[0]?.[2] === "true";
+  const disabled = matches[0]?.[2] === "true" || matches[0]?.[2] === "disabled";
   const result = await command(["print", `${domain}/${label}`]);
   if (
     result.code === 113 &&
