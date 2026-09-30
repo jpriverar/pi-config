@@ -1,5 +1,6 @@
 import { describe, expect, test } from "../../tests/expect.js";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -651,7 +652,7 @@ describe("bearer-capability lifecycle", () => {
     }
   });
 
-  test("preserves an unlocked removing claim without compensation when ordinary removal fails", async () => {
+  test("restores exact native ownership after unchanged removal failure so release can retry", async () => {
     let failRemoval = false;
     const h = await createHarness({
       interceptGit: (args) =>
@@ -675,7 +676,7 @@ describe("bearer-capability lifecycle", () => {
         "list",
         "--porcelain",
       ]);
-      expect(gitListing).not.toContain(
+      expect(gitListing).toContain(
         `locked pi-pool/v2 claim=${acquired.claimId}`,
       );
       const [record] = await leaseFiles(h.poolRoot);
@@ -685,10 +686,80 @@ describe("bearer-capability lifecycle", () => {
         claimId: acquired.claimId,
         state: "removing",
       });
+      failRemoval = false;
+      expect(
+        (await h.pool.release("repo", acquired.claimId, owner(999, "other")))
+          .released,
+      ).toBe(true);
+      expect(await leaseFiles(h.poolRoot)).toEqual([]);
     } finally {
       await h.cleanup();
     }
   });
+
+  for (const change of ["dirty", "head", "foreign-lock"] as const) {
+    test(`does not restore ownership over ${change} state after removal failure`, async () => {
+      let path = "";
+      const h = await createHarness({
+        interceptGit: (args) => {
+          if (args[0] !== "worktree" || args[1] !== "remove") return undefined;
+          if (change === "dirty")
+            writeFileSync(join(path, "local.txt"), "preserve me\n");
+          if (change === "head")
+            execFileSync("git", [
+              "-C",
+              path,
+              "commit",
+              "--allow-empty",
+              "-m",
+              "concurrent change",
+            ]);
+          if (change === "foreign-lock")
+            execFileSync("git", [
+              "-C",
+              path,
+              "worktree",
+              "lock",
+              "--reason",
+              "foreign-owner",
+              path,
+            ]);
+          return {
+            code: 1,
+            stdout: "",
+            stderr: "injected changed-state failure",
+          };
+        },
+      });
+      try {
+        const acquired = await h.pool.acquire(
+          { repository: "repo", branch: "feature" },
+          owner(405, "alice"),
+        );
+        path = acquired.path;
+        await expect(
+          h.pool.release("repo", acquired.claimId, owner(999, "other")),
+        ).rejects.toThrow(/injected changed-state failure/);
+        const listing = await git(h.primary, [
+          "worktree",
+          "list",
+          "--porcelain",
+        ]);
+        expect(listing).not.toContain(
+          `locked pi-pool/v2 claim=${acquired.claimId}`,
+        );
+        if (change === "foreign-lock")
+          expect(listing).toContain("locked foreign-owner");
+        if (change === "dirty")
+          expect(await readFile(join(path, "local.txt"), "utf8")).toBe(
+            "preserve me\n",
+          );
+        expect(await exists(path)).toBe(true);
+      } finally {
+        await h.cleanup();
+      }
+    });
+  }
 
   test("list and repair expose exact recovery evidence and bearer claim ID", async () => {
     const h = await createHarness();

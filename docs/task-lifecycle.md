@@ -268,7 +268,10 @@ and fingerprint; do not recapture a replacement check. An explicit manual
 cancelled: the daemon may already have committed the transition.
 
 Unavailable or incompatible service returns setup/status guidance without
-running local reconciliation. `/task-reconciler status` is read-only. The same
+running local reconciliation. Task/check validation errors do not suggest
+installing or starting the daemon. `manual_check_required` means the task has
+no applicable manual check; omit `manualOutcome` and its fingerprint when
+requesting ordinary resource reconciliation. `/task-reconciler status` is read-only. The same
 command accepts explicit `install`, `start`, `stop`, `update`, `update --rollback`,
 and `uninstall`; no command is run on startup or reload. See the
 [opt-in installation and cutover guide](../README.md#optional-task-reconciliation-daemon).
@@ -280,7 +283,8 @@ Reconciliation resolves pending worktree operations before native dependencies,
 due checks, and expired ownership. One exact valid acquisition is finalized;
 a release whose exact claim disappeared is finalized. Missing acquisitions,
 still-present releases, and ambiguous or contradictory evidence remain
-explicit. Manual checks never
+explicit. Pool repair is inspection/recovery of pool metadata, not permission
+to delete a retained checkout or automatically complete a pending task release. Manual checks never
 infer success; they require an explicit terminal outcome.
 
 ### `task_close`
@@ -325,8 +329,10 @@ worktree_pool release(repository, claimId)
 ```
 
 Before acquisition, the lifecycle hook verifies that the session owns exactly
-one Active task and remembers the task and request in process by `toolCallId`.
-It does not alter the tool input. The task-agnostic pool generates its ordinary
+one Active task and performs a read-only check of its existing worktree
+associations. Pending, missing, ambiguous, or contradictory resources reject
+the request before pool allocation. The hook remembers the task and request
+in process by `toolCallId`; it does not alter the tool input. The task-agnostic pool generates its ordinary
 claim and path identities. A successful validated `tool_result` records the
 Active resource and durable branch artifact on the remembered task. A failed
 tool call records no resource.
@@ -406,9 +412,26 @@ release remain available without attachment; ordinary acquisition does not.
 Acquire correlation is process-local until a validated successful result records
 the generated claim. If Pi stops after pool allocation but before that result is
 finalized, use pool `list` or `repair` and explicit lifecycle reconciliation;
-automatic interrupted-acquire inference is deferred. Associated release still
-persists `release_pending` before pool mutation and reconciles exact safe
-evidence. No automated path deletes dirty, occupied, malformed, contradictory,
+automatic interrupted-acquire inference is deferred. Preflight reduces known
+failures but does not close the allocation-to-persistence crash/race window;
+post-allocation association validation still runs. Known association failures
+identify the obstructing claim without exposing raw store errors. If recording
+fails after allocation, the checkout is retained; do not acquire another copy
+as a recovery shortcut.
+
+Associated release still persists `release_pending` before pool mutation and
+reconciles exact safe evidence. Initialized submodules or retained submodule
+Git data are refused before changing the pool lease or unlocking the worktree.
+Never-initialized submodules remain removable through ordinary Git cleanup.
+Refusal preserves the checkout and native owner, but the task's release stays
+pending for explicit recovery; this does not implement submodule deletion.
+
+If ordinary removal fails after unlock, the pool restores the original native
+claim only when the exact managed registration, branch, HEAD, cleanliness, and
+lack of another lock still match. It retains the `removing` journal so an exact
+release retry can finish after the cause is resolved. Changed, dirty, missing,
+unverifiable, or newly locked state is not relocked. This does not adopt or
+repair historical unlocked claims. No automated path deletes dirty, occupied, malformed, contradictory,
 missing, or ambiguous worktrees.
 
 ## Verification and migration

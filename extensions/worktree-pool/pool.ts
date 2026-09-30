@@ -367,8 +367,9 @@ export class WorktreePool {
     if (record === undefined) return { path: "", released: false };
     if (record.state !== "active" && record.state !== "removing")
       return { path: record.path, released: false };
+    let original: RegisteredWorktree;
     try {
-      await this.verifyLeaseAuthority(repository, record);
+      original = (await this.verifyLeaseAuthority(repository, record)).worktree;
     } catch {
       return { path: record.path, released: false };
     }
@@ -378,6 +379,7 @@ export class WorktreePool {
     ) {
       return { path: record.path, released: false };
     }
+    await this.assertRemovalSupported(record.path);
     if (record.state !== "removing") {
       await this.replaceRecord(repository.poolRoot, claimId, {
         ...record,
@@ -419,12 +421,73 @@ export class WorktreePool {
         await removeLeaseRecord(repository.poolRoot, claimId);
         return { path: record.path, released: true };
       }
+      const restored = await this.restoreNativeClaim(
+        repository,
+        record,
+        original.head,
+      );
       throw new Error(
-        `failed to remove managed worktree ${record.path}: ${errorMessage(error)}; claim preserved as removing`,
+        `failed to remove managed worktree ${record.path}: ${errorMessage(error)}; claim preserved as removing; ${restored ? "native ownership restored; retry release with this exact claim after resolving the removal failure" : "native ownership not restored; inspect the exact claim before retrying"}`,
       );
     }
     await removeLeaseRecord(repository.poolRoot, claimId);
     return { path: record.path, released: true };
+  }
+
+  private async assertRemovalSupported(path: string): Promise<void> {
+    const modulesPath = (
+      await this.git(path, [
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-path",
+        "modules",
+      ])
+    ).trim();
+    const modules = await lstat(modulesPath).catch((error) => {
+      if (error?.code === "ENOENT") return undefined;
+      throw error;
+    });
+    const status = await this.git(path, ["submodule", "status"]);
+    if (
+      modules !== undefined ||
+      status
+        .split("\n")
+        .some((line) => line.length > 0 && !line.startsWith("-"))
+    ) {
+      throw new Error(
+        `cannot release managed worktree ${path}: initialized or retained submodule cleanup is unsupported; worktree and native ownership were preserved; inspect this claim with worktree_pool list or repair`,
+      );
+    }
+  }
+
+  private async restoreNativeClaim(
+    repository: ResolvedRepository,
+    record: LeaseRecord,
+    expectedHead: RegisteredWorktree["head"],
+  ): Promise<boolean> {
+    try {
+      const current = await verifyManagedWorktree(repository, record.path, {
+        runGit: this.deps.runGit,
+      });
+      if (
+        current.lockedReason !== undefined ||
+        current.head !== expectedHead ||
+        current.branch !== `refs/heads/${record.branch}` ||
+        !(await this.isClean(record.path)) ||
+        !(await this.branchProtectsHead(record.path, record.branch))
+      )
+        return false;
+      // A failed removal must not turn our own unlock into an ownership mismatch.
+      return await tryLockWorktree(
+        repository,
+        record.path,
+        record.claimId,
+        record,
+        this.deps.runGit,
+      );
+    } catch {
+      return false;
+    }
   }
 
   private async cleanupFailedAcquire(

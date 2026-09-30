@@ -77,6 +77,19 @@ export interface TaskWorktreeAcquireRequest extends AcquireRequest {
   taskId: string;
 }
 
+export class WorktreeAssociationError extends Error {
+  constructor(
+    kind: "pending" | "missing" | "ambiguous" | "contradictory",
+    claimId: string,
+  ) {
+    super(
+      kind === "pending"
+        ? `pending worktree association ${safeIdentifier(claimId)} requires reconciliation`
+        : `${kind} worktree association for claim ${safeIdentifier(claimId)}`,
+    );
+  }
+}
+
 export interface TaskLifecycleServiceDependencies {
   store: LifecycleStore;
   now: () => number;
@@ -869,6 +882,17 @@ export class TaskLifecycleService {
     return results;
   }
 
+  async preflightWorktreeAcquire(
+    request: TaskWorktreeAcquireRequest,
+    owner: LockOwner,
+  ): Promise<void> {
+    const lifecycle = requireManaged(
+      await this.deps.store.show(request.taskId),
+    );
+    requireCurrentOwner(request.taskId, lifecycle, owner);
+    await this.assertHealthyAssociations(lifecycle, this.requirePool());
+  }
+
   async recordWorktreeAcquire(
     request: TaskWorktreeAcquireRequest,
     acquired: AcquireResult,
@@ -1455,9 +1479,7 @@ export class TaskLifecycleService {
         continue;
       }
       if (resource.cleanupState !== "active") {
-        throw new Error(
-          `pending worktree association ${resource.claimId} requires reconciliation`,
-        );
+        throw new WorktreeAssociationError("pending", resource.claimId);
       }
       const matches = await exactClaimMatches(
         pool,
@@ -1465,8 +1487,9 @@ export class TaskLifecycleService {
         resource.claimId,
       );
       if (matches.length !== 1) {
-        throw new Error(
-          `${matches.length === 0 ? "missing" : "ambiguous"} worktree association for claim ${resource.claimId}`,
+        throw new WorktreeAssociationError(
+          matches.length === 0 ? "missing" : "ambiguous",
+          resource.claimId,
         );
       }
       assertValidAssociation(resource, matches[0]);
@@ -1804,9 +1827,7 @@ function assertValidAssociation(
     listing.evidence.nativeClaimMatches === true &&
     (resource.path === null || resource.path === listing.path);
   if (!valid) {
-    throw new Error(
-      `contradictory worktree association for claim ${resource.claimId}`,
-    );
+    throw new WorktreeAssociationError("contradictory", resource.claimId);
   }
 }
 

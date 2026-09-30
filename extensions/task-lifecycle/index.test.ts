@@ -176,6 +176,9 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
       calls.push({ name: "interruptSession", args });
       return [];
     },
+    async preflightWorktreeAcquire(...args: any[]) {
+      calls.push({ name: "preflightWorktreeAcquire", args });
+    },
     async recordWorktreeAcquire(...args: any[]) {
       calls.push({ name: "recordWorktreeAcquire", args });
       if (guardState.finalizationError !== null) {
@@ -1142,6 +1145,45 @@ test("task_reconcile passes explicit manual outcomes to the daemon", async () =>
     },
   ]);
   assert.equal(h.calls.length, 0);
+});
+
+test("manual-check rejection does not suggest daemon setup", async () => {
+  const { ReconciliationClientError } = await import(
+    "../../lib/task-reconciler/client.js"
+  );
+  const h = harness({
+    reconciliation: {
+      issue: async () => normalizedIssue(),
+      request: async () => {
+        throw new ReconciliationClientError(
+          "manual_check_required",
+          "reconciliation rejected (manual_check_required)",
+        );
+      },
+    },
+  });
+  const result = await h.tools.get("task_reconcile")!.execute(
+    "reconcile",
+    {
+      taskId: "jp-1",
+      manualOutcome: "action_required",
+      requestId: "retry",
+      expectedCheckFingerprint: "0".repeat(64),
+    },
+    undefined,
+    undefined,
+    h.context,
+  );
+  assert.equal(result.isError, true);
+  assert.match(
+    result.content[0].text,
+    /no.*manual check|does not.*manual check/i,
+  );
+  assert.match(result.content[0].text, /omit.*manualOutcome/i);
+  assert.doesNotMatch(
+    result.content[0].text,
+    /install|start require|task-reconciler status/i,
+  );
 });
 
 test("startup and reload never reconcile or administer the service", async () => {

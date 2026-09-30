@@ -30,6 +30,7 @@ import { createCheckAdapterRegistry } from "../../lib/task-lifecycle/checks.js";
 import { classifyTaskToolRequirement } from "../../lib/task-lifecycle/tool-guard.js";
 import {
   TaskLifecycleService,
+  WorktreeAssociationError,
   type CloseDispositionInput,
   type TaskLifecyclePoolPort,
   type TaskWorktreeAcquireRequest,
@@ -117,6 +118,10 @@ export interface TaskLifecycleToolService {
   ): Promise<LifecycleIssue[]>;
   refreshSessionActivity(owner: LockOwner): Promise<LifecycleIssue[]>;
   interruptSession(owner: LockOwner, reason: string): Promise<LifecycleIssue[]>;
+  preflightWorktreeAcquire(
+    request: TaskWorktreeAcquireRequest,
+    owner: LockOwner,
+  ): Promise<void>;
   recordWorktreeAcquire(
     request: TaskWorktreeAcquireRequest,
     acquired: AcquireResult,
@@ -631,14 +636,18 @@ export function createTaskLifecycleExtension(
               ? error.code
               : "request_failed";
           const message =
-            error instanceof ReconciliationClientError
-              ? error.message
-              : "Reconciliation request could not be prepared.";
+            code === "manual_check_required"
+              ? "Task has no current manual check. For ordinary reconciliation, omit manualOutcome and expectedCheckFingerprint."
+              : error instanceof ReconciliationClientError
+                ? error.message
+                : "Reconciliation request could not be prepared.";
+          const guidance =
+            code === "unavailable" || code === "incompatible"
+              ? ` ${reconcilerSetupGuidance}`
+              : "";
           return {
             isError: true,
-            content: [
-              { type: "text", text: `${message} ${reconcilerSetupGuidance}` },
-            ],
+            content: [{ type: "text", text: `${message}${guidance}` }],
             details: { code },
           };
         }
@@ -856,6 +865,18 @@ export function createTaskLifecycleExtension(
             ? {}
             : { startPoint: event.input.startPoint as string }),
         };
+        try {
+          await deps.service.preflightWorktreeAcquire(
+            request,
+            ownerFor(context),
+          );
+        } catch (error) {
+          const reason =
+            error instanceof WorktreeAssociationError
+              ? `${error.message}; inspect the exact claim with worktree_pool list or repair before retrying`
+              : "unable to verify worktree_pool acquire lifecycle state";
+          return block(`${reason}; no worktree was allocated`);
+        }
         pendingPoolOperations.set(event.toolCallId, {
           mode: "acquire",
           taskId: activeTask.id,
@@ -910,11 +931,15 @@ export function createTaskLifecycleExtension(
             operation.operationId,
           );
           return undefined;
-        } catch {
-          return lifecycleFinalizationError("acquire", {
-            taskId: operation.taskId,
-            claimId: receipt.claimId,
-          });
+        } catch (error) {
+          return lifecycleFinalizationError(
+            "acquire",
+            {
+              taskId: operation.taskId,
+              claimId: receipt.claimId,
+            },
+            error,
+          );
         }
       }
 
@@ -1113,6 +1138,7 @@ function readReleased(value: unknown): boolean | null {
 function lifecycleFinalizationError(
   mode: string,
   context?: { taskId: string; claimId: string },
+  cause?: unknown,
 ) {
   const text =
     context === undefined
@@ -1122,7 +1148,10 @@ function lifecycleFinalizationError(
     content: [
       {
         type: "text" as const,
-        text,
+        text:
+          cause instanceof WorktreeAssociationError
+            ? `${text}. ${cause.message}; inspect the existing claims before another acquire. The allocated worktree was not removed.`
+            : text,
       },
     ],
     details:
