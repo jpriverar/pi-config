@@ -218,7 +218,7 @@ function canonicalValue(value: unknown): unknown {
   return value;
 }
 
-function digest(value: unknown): string {
+export function digest(value: unknown): string {
   return createHash("sha256")
     .update(JSON.stringify(canonicalValue(value)))
     .digest("hex");

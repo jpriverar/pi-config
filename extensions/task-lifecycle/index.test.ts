@@ -311,6 +311,8 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
       "task_reconcile",
       "task_close",
       "task_reopen",
+      "task_worktree_repair_preview",
+      "task_worktree_repair_apply",
     ],
   );
   assert.deepEqual(

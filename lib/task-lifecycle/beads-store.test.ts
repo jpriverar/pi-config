@@ -564,6 +564,94 @@ test("locked reconciliation can abstain without writing or inventing an operatio
   assert.deepEqual(current.metadata, raw.metadata);
 });
 
+test(
+  "async repair validation retains the store lock until persistence completes",
+  { timeout: 5000 },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "lifecycle-repair-lock-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    let raw = rawIssue();
+    let enter!: () => void;
+    let release!: () => void;
+    let waiting!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const contended = new Promise<void>((resolve) => {
+      waiting = resolve;
+    });
+    const events: string[] = [];
+    const config = options(root);
+    config.lockDependencies.sleep = async () => {
+      waiting();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    };
+    const store = createLifecycleStore(async (_command, args) => {
+      if (args[0] === "update") {
+        events.push("persist");
+        raw = {
+          ...raw,
+          status: args[args.indexOf("-s") + 1],
+          metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+        };
+      }
+      return result(raw);
+    }, config);
+    const first = store.mutate("jp-1", OWNER, async () => {
+      events.push("validate");
+      enter();
+      await gate;
+      return claimedMutation("locked-repair");
+    });
+    await entered;
+    const second = store.mutate(
+      "jp-1",
+      { ...OWNER, sessionId: "another-session" },
+      (current) => {
+        events.push("second");
+        assert.equal(current.status, "in_progress");
+        return null;
+      },
+    );
+    await contended;
+    assert.deepEqual(events, ["validate"]);
+    release();
+    await Promise.all([first, second]);
+    assert.deepEqual(events, ["validate", "persist", "second"]);
+  },
+);
+
+test("mutation waits for async repair validation before persisting", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "lifecycle-async-repair-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let raw = rawIssue();
+  let validated = false;
+  const store = createLifecycleStore(async (_command, args) => {
+    if (args[0] === "update") {
+      assert.equal(validated, true);
+      raw = {
+        ...raw,
+        status: args[args.indexOf("-s") + 1],
+        metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+      };
+    }
+    return result(raw);
+  }, options(root));
+  const saved = await store.mutate("jp-1", OWNER, async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    validated = true;
+    return claimedMutation("async-repair");
+  });
+  assert.equal(saved.status, "in_progress");
+  assert.equal(
+    saved.lifecycle!.transitionHistory[0].operationId,
+    "async-repair",
+  );
+});
+
 test("replayed identical metadata does not issue another Beads update", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "lifecycle-unchanged-"));
   t.after(() => rm(root, { recursive: true, force: true }));

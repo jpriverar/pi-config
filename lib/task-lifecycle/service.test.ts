@@ -186,7 +186,7 @@ class FakeStore implements LifecycleStore {
     const beforeMutate = this.beforeMutate;
     this.beforeMutate = undefined;
     beforeMutate?.();
-    const mutation = operation(this.saved);
+    const mutation = await operation(this.saved);
     if (mutation === null) return this.saved;
     if (
       this.failActiveResourceOnce &&

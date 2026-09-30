@@ -28,6 +28,12 @@ import {
 } from "./lease-records.js";
 import { inspectRepository } from "./git-state.js";
 import {
+  inspectRepairClaim,
+  restoreRepairClaim,
+  type ClaimRepairSnapshot,
+  type ClaimRepairTransaction,
+} from "./claim-repair.js";
+import {
   createManagedWorktree,
   managedWorktreePath,
   removeManagedWorktree,
@@ -273,6 +279,50 @@ export class WorktreePool {
       repository,
       owner,
       () => this.releaseLocked(repository, claimId, owner),
+      this.deps.operationLock,
+    );
+  }
+
+  async inspectRepairClaims(
+    repositoryName: string,
+    claimIds: readonly string[],
+  ): Promise<ClaimRepairSnapshot[]> {
+    const repository = this.repository(repositoryName);
+    return Promise.all(
+      claimIds.map(async (claimId) =>
+        inspectRepairClaim(
+          repository,
+          await this.exactRecord(repository, claimId),
+          this.deps.runGit,
+        ),
+      ),
+    );
+  }
+
+  async withClaimRepair<T>(
+    repositoryName: string,
+    claimIds: readonly string[],
+    actor: OwnerIdentity,
+    operation: (transaction: ClaimRepairTransaction) => Promise<T>,
+  ): Promise<T> {
+    const repository = this.repository(repositoryName);
+    return withOperationLock(
+      repository,
+      actor,
+      () =>
+        operation({
+          inspect: () => this.inspectRepairClaims(repositoryName, claimIds),
+          restore: (snapshot) => {
+            if (!claimIds.includes(snapshot.record.claimId))
+              throw new Error("repair claim is outside the locked selection");
+            return restoreRepairClaim(
+              repository,
+              snapshot,
+              () => this.exactRecord(repository, snapshot.record.claimId),
+              this.deps.runGit,
+            );
+          },
+        }),
       this.deps.operationLock,
     );
   }

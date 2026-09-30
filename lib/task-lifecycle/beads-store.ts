@@ -281,7 +281,7 @@ export function createLifecycleStore(
   async function mutate(
     id: string,
     owner: Parameters<LifecycleStore["mutate"]>[1],
-    operation: (issue: LifecycleIssue) => Mutation | null,
+    operation: Parameters<LifecycleStore["mutate"]>[2],
   ): Promise<LifecycleIssue> {
     assertIdentifier(id, "issue id");
     return withFileOperationLock(
@@ -289,7 +289,7 @@ export function createLifecycleStore(
       owner,
       async () => {
         const current = await readOne(id, `read issue ${id}`);
-        const mutation = operation(current.issue);
+        const mutation = await operation(current.issue);
         if (mutation === null) return current.issue;
         validateMutation(mutation, id, store);
         const mergedMetadata = mergeLifecycleMetadata(

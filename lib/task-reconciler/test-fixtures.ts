@@ -127,7 +127,7 @@ export class MemoryLifecycleStore implements LifecycleStore {
     this.maxConcurrent = Math.max(this.maxConcurrent, this.concurrent);
     try {
       await new Promise<void>((resolve) => setImmediate(resolve));
-      return fn();
+      return await fn();
     } finally {
       this.concurrent -= 1;
     }
@@ -165,9 +165,9 @@ export class MemoryLifecycleStore implements LifecycleStore {
     _owner: LockOwner,
     operation: Parameters<LifecycleStore["mutate"]>[2],
   ) {
-    return this.access(() => {
+    return this.access(async () => {
       const current = structuredClone(this.issues.get(id)!);
-      const mutation = operation(current);
+      const mutation = await operation(current);
       if (mutation !== null) {
         const saved = {
           ...current,

@@ -210,7 +210,9 @@ export interface LifecycleStore {
   mutate(
     id: string,
     owner: LockOwner,
-    operation: (issue: LifecycleIssue) => Mutation | null,
+    operation: (
+      issue: LifecycleIssue,
+    ) => Mutation | null | Promise<Mutation | null>,
   ): Promise<LifecycleIssue>;
   addBlocker(
     dependentId: string,

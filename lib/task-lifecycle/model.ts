@@ -1241,11 +1241,16 @@ export function completeWorktreeAcquire(
     input.now,
   );
   const withArtifact = attachArtifact(state, artifact);
+  // Deduplication preserves an existing artifact's identity and history.
+  const retainedArtifact = withArtifact.artifacts.find(
+    (candidate) =>
+      candidate.kind === artifact.kind && candidate.uri === artifact.uri,
+  )!;
   const resources = [...withArtifact.resources];
   resources[index] = {
     ...current,
     path: input.path,
-    branchArtifactId: artifact.id,
+    branchArtifactId: retainedArtifact.id,
     acquiredAt: input.now,
     cleanupState: "active",
     lastObservation: input.observation,
