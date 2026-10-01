@@ -130,9 +130,11 @@ a legacy task into version-1 lifecycle metadata. A legacy native `blocked` task
 without a structured check is adopted condition-free rather than inventing
 check authority. A managed Waiting task retains its native dependency or
 typed-check condition while becoming Active. Re-claiming an Active task already
-owned by the current session returns it unchanged, even with a new operation ID;
-it does not renew the lease or record another transition. Another execution
-owner blocks the claim, even when reusing a recorded operation ID.
+owned by the current session renews its lease, including after expiry or failed
+cleanup. It preserves the owner, original claim timestamp, retained conditions,
+artifacts, and resource history; it does not inspect or repair worktrees.
+Same-timestamp retries do not write again. Another execution owner blocks the
+claim, even if that owner's lease expired or the operation ID was previously used.
 
 ### `task_attach_artifact`
 
@@ -250,7 +252,8 @@ Active task to Deferred. Cleanup refusal leaves the task Active.
 
 Required: `taskId`. Optional: `manualOutcome`, either `satisfied` or
 `action_required`, plus `requestId` and `expectedCheckFingerprint` for retries.
-Execution goes through the local daemon, never an in-session fallback.
+Optional fields may be omitted or null for ordinary reconciliation. Execution
+goes through the local daemon, never an in-session fallback.
 
 ```json
 { "taskId": "jp-abc" }
@@ -261,14 +264,15 @@ Execution goes through the local daemon, never an in-session fallback.
 ```
 
 A new manual request captures the current check fingerprint before sending. If
-the reply is lost or times out, the tool reports an **unknown** result and returns
-a `retry` object. Resend that exact object, including its request ID, outcome,
-and fingerprint; do not recapture a replacement check. An explicit manual
+the reply is lost or times out, the tool throws an **unknown** error containing
+the exact retry request as JSON. Resend that request, including its request ID,
+outcome, and fingerprint; do not recapture a replacement check. An explicit manual
 `requestId` without its original fingerprint is rejected. Unknown does not mean
 cancelled: the daemon may already have committed the transition.
 
-Unavailable or incompatible service returns setup/status guidance without
-running local reconciliation. Task/check validation errors do not suggest
+Rejected and unknown requests use Pi's actual tool error channel. An unavailable
+or incompatible service reports setup/status guidance without running local
+reconciliation. Task/check validation errors do not suggest
 installing or starting the daemon. `manual_check_required` means the task has
 no applicable manual check; omit `manualOutcome` and its fingerprint when
 requesting ordinary resource reconciliation. `/task-reconciler status` is read-only. The same
@@ -281,9 +285,15 @@ installed snapshot for their canonical Beads store.
 
 Reconciliation resolves pending worktree operations before native dependencies,
 due checks, and expired ownership. One exact valid acquisition is finalized;
-a release whose exact claim disappeared is finalized. Missing acquisitions,
-still-present releases, and ambiguous or contradictory evidence remain
-explicit. Pool repair is inspection/recovery of pool metadata, not permission
+a release whose exact claim disappeared is finalized. After the same owner
+renews, an obsolete expiry-release intent is cancelled only when its exact claim
+still has valid native ownership/branch evidence. Normal acquisition preflight
+also resolves these obsolete intents, without requiring a repair tool. Observation
+and persistence hold the pool lock before the store lock, so stale evidence cannot
+restore a checkout deleted by a concurrent cleanup. An explicit release receives
+its own operation identity even before the automatic reservation becomes obsolete.
+Explicit release requests, missing acquisitions, and ambiguous or contradictory
+evidence remain explicit. Pool repair is inspection/recovery of pool metadata, not permission
 to delete a retained checkout or automatically complete a pending task release. Manual checks never
 infer success; they require an explicit terminal outcome.
 
@@ -451,10 +461,13 @@ A `reload` shutdown preserves current ownership. Quit, new, resume, fork-style,
 and other shutdowns first release associated worktrees, then interrupt
 ownership: condition-free work returns to Actionable, while retained dependency
 or check work returns to Waiting. Expiry reconciliation reserves cleanup against
-the exact expired lease; a concurrent renewal cancels cleanup, while activity
-cannot renew a lease after its cleanup reservation is persisted. Cleanup refusal
-leaves the task Active with its execution lease and resource evidence intact. A
-successful transition records `execution_interrupted` once.
+the exact expired lease, but that reservation does not veto claim/activity
+renewal. Cleanup revalidates its lease and reservation under the pool lock, then
+holds the store mutation lock through destructive release and persistence. A
+renewal cancels queued stale cleanup; it cannot return usable ownership while a
+deletion is already running. Cleanup refusal leaves the task Active and does not
+prevent its owner from renewing. Already released resources remain released. A
+successful interruption records `execution_interrupted` once.
 
 ## Pool boundary and recovery
 
@@ -477,8 +490,10 @@ Associated release still persists `release_pending` before pool mutation and
 reconciles exact safe evidence. Initialized submodules or retained submodule
 Git data are refused before changing the pool lease or unlocking the worktree.
 Never-initialized submodules remain removable through ordinary Git cleanup.
-Refusal preserves the checkout and native owner, but the task's release stays
-pending for explicit recovery; this does not implement submodule deletion.
+Refusal preserves the checkout and native owner. Explicit releases stay pending
+for explicit recovery; obsolete expiry releases can be cancelled by ordinary
+resource reconciliation after the owner renews. This does not implement
+submodule deletion.
 
 If ordinary removal fails after unlock, the pool restores the original native
 claim only when the exact managed registration, branch, HEAD, cleanliness, and

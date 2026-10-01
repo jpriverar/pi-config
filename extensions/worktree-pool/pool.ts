@@ -81,6 +81,12 @@ type LeaseObservation = {
   authorityError?: string;
 };
 export type ReleaseResult = { path: string; released: boolean };
+export type ReleaseTransaction = (
+  release: () => Promise<ReleaseResult>,
+) => Promise<ReleaseResult>;
+export type ClaimObservationTransaction<T> = (
+  observe: () => Promise<PoolWorktreeListing[]>,
+) => Promise<T>;
 export type PoolStateEvidence = {
   pathExists: boolean | null;
   registered: boolean | null;
@@ -273,12 +279,34 @@ export class WorktreePool {
     repositoryName: string,
     claimId: string,
     owner: OwnerIdentity,
+    transaction: ReleaseTransaction = (release) => release(),
   ): Promise<ReleaseResult> {
     const repository = this.repository(repositoryName);
     return withOperationLock(
       repository,
       owner,
-      () => this.releaseLocked(repository, claimId, owner),
+      () => transaction(() => this.releaseLocked(repository, claimId, owner)),
+      this.deps.operationLock,
+    );
+  }
+
+  async withClaimObservation<T>(
+    repositoryName: string,
+    claimId: string,
+    owner: OwnerIdentity,
+    operation: ClaimObservationTransaction<T>,
+  ): Promise<T> {
+    const repository = this.repository(repositoryName);
+    return withOperationLock(
+      repository,
+      owner,
+      () =>
+        operation(async () => {
+          const listing = await this.list(repositoryName);
+          return listing.repositories
+            .flatMap((candidate) => candidate.worktrees)
+            .filter((worktree) => worktree.claimId === claimId);
+        }),
       this.deps.operationLock,
     );
   }

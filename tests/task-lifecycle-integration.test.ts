@@ -434,6 +434,9 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
       pool: {
         ...runtime.pool,
         list: runtime.pool.list.bind(runtime.pool),
+        withClaimObservation: runtime.pool.withClaimObservation.bind(
+          runtime.pool,
+        ),
         release: runtime.pool.release.bind(runtime.pool),
         async acquire(request, poolOwner, identity) {
           const result = await runtime.pool.acquire(

@@ -1,3 +1,4 @@
+import type { ClaimObservationTransaction } from "../../extensions/worktree-pool/pool.js";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -82,16 +83,34 @@ export async function createDaemonRuntime(
       );
       return runtime.pool.list(repository);
     },
-    async acquire() {
-      throw new Error("reconciliation daemon cannot acquire worktrees");
-    },
-    async release(repository, claimId, claimOwner) {
+    async withClaimObservation<T>(
+      repository: string,
+      claimId: string,
+      claimOwner: LockOwner,
+      operation: ClaimObservationTransaction<T>,
+    ) {
       const runtime = await loadWorktreePoolRuntime(
         [repository],
         "identity",
         poolDependencies,
       );
-      return runtime.pool.release(repository, claimId, claimOwner);
+      return runtime.pool.withClaimObservation(
+        repository,
+        claimId,
+        claimOwner,
+        operation,
+      );
+    },
+    async acquire() {
+      throw new Error("reconciliation daemon cannot acquire worktrees");
+    },
+    async release(repository, claimId, claimOwner, transaction) {
+      const runtime = await loadWorktreePoolRuntime(
+        [repository],
+        "identity",
+        poolDependencies,
+      );
+      return runtime.pool.release(repository, claimId, claimOwner, transaction);
     },
   };
   const service = new TaskLifecycleService({

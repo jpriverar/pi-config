@@ -21,7 +21,10 @@ import { loadLifecycleConfig } from "../../lib/task-lifecycle/config.js";
 import { hostname as readHostname } from "node:os";
 
 import { resolveBeadsDir, type BeadsExec } from "../../lib/beads.js";
-import type { AcquireResult } from "../worktree-pool/pool.js";
+import type {
+  AcquireResult,
+  ClaimObservationTransaction,
+} from "../worktree-pool/pool.js";
 import {
   loadWorktreePoolRuntime,
   loadWorktreePoolRuntimeForClaims,
@@ -556,40 +559,43 @@ export function createTaskLifecycleExtension(
       name: "task_reconcile",
       label: "Reconcile task",
       description:
-        "Ask the local daemon to reconcile a task. Unknown outcomes include the exact request/check binding to reuse on retry.",
+        "Ask the local daemon to reconcile a task. For ordinary reconciliation, supply taskId and omit or null the other fields. Manual outcomes apply only to a current manual check. Unknown outcomes include the exact binding to reuse on retry.",
       parameters: objectSchema(
         {
           taskId: taskIdProperty,
           manualOutcome: {
-            type: "string",
-            enum: ["satisfied", "action_required"],
+            type: ["string", "null"],
+            enum: ["satisfied", "action_required", null],
           },
-          requestId: { type: "string", minLength: 1, maxLength: 256 },
+          requestId: { type: ["string", "null"], minLength: 1, maxLength: 256 },
           expectedCheckFingerprint: {
-            type: "string",
+            type: ["string", "null"],
             pattern: "^[a-f0-9]{64}$",
           },
         },
         ["taskId"],
       ),
       async execute(id, params, signal) {
+        const manualOutcome = params.manualOutcome ?? undefined;
+        const requestId = params.requestId ?? undefined;
+        const expectedCheckFingerprint =
+          params.expectedCheckFingerprint ?? undefined;
         try {
           const request: ReconcileRequest = {
             taskId: params.taskId,
-            requestId: params.requestId ?? id,
+            requestId: requestId ?? id,
           };
-          if (params.manualOutcome !== undefined) {
-            request.manualOutcome = params.manualOutcome;
-            if (params.requestId !== undefined) {
-              if (params.expectedCheckFingerprint === undefined)
+          if (manualOutcome !== undefined) {
+            request.manualOutcome = manualOutcome;
+            if (requestId !== undefined) {
+              if (expectedCheckFingerprint === undefined)
                 throw new ReconciliationClientError(
                   "invalid_request",
                   "Manual retry requires the original request ID and fingerprint binding.",
                 );
-              request.expectedCheckFingerprint =
-                params.expectedCheckFingerprint;
+              request.expectedCheckFingerprint = expectedCheckFingerprint;
             } else {
-              if (params.expectedCheckFingerprint !== undefined)
+              if (expectedCheckFingerprint !== undefined)
                 throw new ReconciliationClientError(
                   "invalid_request",
                   "Retry fingerprint requires its original request ID.",
@@ -607,8 +613,8 @@ export function createTaskLifecycleExtension(
                 );
               request.expectedCheckFingerprint = fingerprintCheck(issue)!;
             }
-          } else if (params.expectedCheckFingerprint !== undefined)
-            request.expectedCheckFingerprint = params.expectedCheckFingerprint;
+          } else if (expectedCheckFingerprint !== undefined)
+            request.expectedCheckFingerprint = expectedCheckFingerprint;
           if (!deps.reconciliation)
             throw new ReconciliationClientError(
               "unavailable",
@@ -629,16 +635,9 @@ export function createTaskLifecycleExtension(
           };
         } catch (error) {
           if (error instanceof ReconciliationUnknownResultError)
-            return {
-              isError: true,
-              content: [
-                {
-                  type: "text",
-                  text: `Reconciliation result unknown; retry this exact binding: ${JSON.stringify(error.request)}`,
-                },
-              ],
-              details: { outcome: "unknown", retry: error.request },
-            };
+            throw new Error(
+              `Reconciliation result unknown; retry this exact binding: ${JSON.stringify(error.request)}`,
+            );
           const code =
             error instanceof ReconciliationClientError
               ? error.code
@@ -653,11 +652,9 @@ export function createTaskLifecycleExtension(
             code === "unavailable" || code === "incompatible"
               ? ` ${reconcilerSetupGuidance}`
               : "";
-          return {
-            isError: true,
-            content: [{ type: "text", text: `${message}${guidance}` }],
-            details: { code },
-          };
+          throw new Error(
+            `Reconciliation failed (${code}): ${message}${guidance}`,
+          );
         }
       },
     });
@@ -1210,6 +1207,20 @@ export default function taskLifecycle(
       );
       return runtime.pool.list(repository);
     },
+    async withClaimObservation<T>(
+      repository: string,
+      claimId: string,
+      owner: LockOwner,
+      operation: ClaimObservationTransaction<T>,
+    ) {
+      const runtime = await loadWorktreePoolRuntime([repository], "identity");
+      return runtime.pool.withClaimObservation(
+        repository,
+        claimId,
+        owner,
+        operation,
+      );
+    },
     async acquire(
       request: Parameters<TaskLifecyclePoolPort["acquire"]>[0],
       owner: Parameters<TaskLifecyclePoolPort["acquire"]>[1],
@@ -1221,9 +1232,14 @@ export default function taskLifecycle(
       );
       return runtime.pool.acquire(request, owner, identity);
     },
-    async release(repository: string, claimId: string, owner: LockOwner) {
+    async release(
+      repository: string,
+      claimId: string,
+      owner: LockOwner,
+      transaction: Parameters<TaskLifecyclePoolPort["release"]>[3],
+    ) {
       const runtime = await loadWorktreePoolRuntime([repository], "identity");
-      return runtime.pool.release(repository, claimId, owner);
+      return runtime.pool.release(repository, claimId, owner, transaction);
     },
   };
   const checkAdapters = createCheckAdapterRegistry({

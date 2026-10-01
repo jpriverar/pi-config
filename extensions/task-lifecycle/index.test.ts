@@ -1149,7 +1149,44 @@ test("task_reconcile passes explicit manual outcomes to the daemon", async () =>
   assert.equal(h.calls.length, 0);
 });
 
-test("manual-check rejection does not suggest daemon setup", async () => {
+for (const optionalFields of [
+  {},
+  { manualOutcome: null, requestId: null, expectedCheckFingerprint: null },
+]) {
+  test(`ordinary reconciliation does not invent manual authority (${JSON.stringify(optionalFields)})`, async () => {
+    const requests: unknown[] = [];
+    const h = harness({
+      reconciliation: {
+        issue: async () => {
+          throw new Error(
+            "ordinary reconciliation must not capture a manual check",
+          );
+        },
+        request: async (request) => {
+          requests.push(request);
+          return {
+            requestId: request.requestId,
+            outcome: "unchanged",
+            task: { id: "jp-1", phase: "active", status: "in_progress" },
+          };
+        },
+      },
+    });
+    const result = await h.tools
+      .get("task_reconcile")!
+      .execute(
+        "ordinary",
+        { taskId: "jp-1", ...optionalFields },
+        undefined,
+        undefined,
+        h.context,
+      );
+    assert.deepEqual(requests, [{ requestId: "ordinary", taskId: "jp-1" }]);
+    assert.equal(result.details.outcome, "unchanged");
+  });
+}
+
+test("manual-check rejection throws without suggesting daemon setup", async () => {
   const { ReconciliationClientError } = await import(
     "../../lib/task-reconciler/client.js"
   );
@@ -1164,27 +1201,28 @@ test("manual-check rejection does not suggest daemon setup", async () => {
       },
     },
   });
-  const result = await h.tools.get("task_reconcile")!.execute(
-    "reconcile",
-    {
-      taskId: "jp-1",
-      manualOutcome: "action_required",
-      requestId: "retry",
-      expectedCheckFingerprint: "0".repeat(64),
+  await assert.rejects(
+    h.tools.get("task_reconcile")!.execute(
+      "reconcile",
+      {
+        taskId: "jp-1",
+        manualOutcome: "action_required",
+        requestId: "retry",
+        expectedCheckFingerprint: "0".repeat(64),
+      },
+      undefined,
+      undefined,
+      h.context,
+    ),
+    (error: Error) => {
+      assert.match(error.message, /no.*manual check|does not.*manual check/i);
+      assert.match(error.message, /omit.*manualOutcome/i);
+      assert.doesNotMatch(
+        error.message,
+        /install|start require|task-reconciler status/i,
+      );
+      return true;
     },
-    undefined,
-    undefined,
-    h.context,
-  );
-  assert.equal(result.isError, true);
-  assert.match(
-    result.content[0].text,
-    /no.*manual check|does not.*manual check/i,
-  );
-  assert.match(result.content[0].text, /omit.*manualOutcome/i);
-  assert.doesNotMatch(
-    result.content[0].text,
-    /install|start require|task-reconciler status/i,
   );
 });
 
@@ -1235,23 +1273,30 @@ test("manual timeout returns a binding and retry does not recapture a replaced c
     },
   });
   const tool = h.tools.get("task_reconcile")!;
-  const first = await tool.execute(
-    "first",
-    { taskId: "jp-1", manualOutcome: "satisfied" },
-    undefined,
-    undefined,
-    h.context,
+  let retry: Record<string, unknown> = {};
+  await assert.rejects(
+    tool.execute(
+      "first",
+      { taskId: "jp-1", manualOutcome: "satisfied" },
+      undefined,
+      undefined,
+      h.context,
+    ),
+    (error: Error) => {
+      assert.match(error.message, /result unknown/);
+      retry = JSON.parse(
+        error.message.slice(
+          error.message.indexOf("binding: ") + "binding: ".length,
+        ),
+      );
+      assert.equal(retry.expectedCheckFingerprint, fingerprint);
+      return true;
+    },
   );
-  assert.equal(first.isError, true);
-  assert.equal(first.details.outcome, "unknown");
-  assert.equal(first.details.retry.expectedCheckFingerprint, fingerprint);
   issue.lifecycle!.activeCheck!.id = "replacement";
-  await tool.execute(
-    "second",
-    first.details.retry,
-    undefined,
-    undefined,
-    h.context,
+  await assert.rejects(
+    tool.execute("second", retry, undefined, undefined, h.context),
+    /result unknown/,
   );
   assert.equal(reads, 1);
   assert.deepEqual(requests[0], requests[1]);
@@ -1276,24 +1321,26 @@ test("unavailable daemon and incomplete manual retry fail without local fallback
     },
   });
   const tool = h.tools.get("task_reconcile")!;
-  const unavailable = await tool.execute(
-    "request",
-    { taskId: "jp-1" },
-    undefined,
-    undefined,
-    h.context,
+  await assert.rejects(
+    tool.execute(
+      "request",
+      { taskId: "jp-1" },
+      undefined,
+      undefined,
+      h.context,
+    ),
+    /incompatible/,
   );
-  assert.equal(unavailable.isError, true);
-  assert.match(unavailable.content[0].text, /incompatible/);
-  const incomplete = await tool.execute(
-    "retry",
-    { taskId: "jp-1", requestId: "old", manualOutcome: "satisfied" },
-    undefined,
-    undefined,
-    h.context,
+  await assert.rejects(
+    tool.execute(
+      "retry",
+      { taskId: "jp-1", requestId: "old", manualOutcome: "satisfied" },
+      undefined,
+      undefined,
+      h.context,
+    ),
+    /fingerprint|binding/i,
   );
-  assert.equal(incomplete.isError, true);
-  assert.match(incomplete.content[0].text, /fingerprint|binding/i);
   assert.ok(!h.calls.some((c) => c.name === "reconcileTask"));
 });
 
