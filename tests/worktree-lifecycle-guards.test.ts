@@ -175,3 +175,33 @@ test("dirty submodule contents survive refused cleanup with ownership intact", a
     true,
   );
 });
+
+test("ordinary acquisition retains an existing branch artifact's ID and history", async (t) => {
+  const h = await fixture(t);
+  const attached = await h.service.attachArtifact(
+    h.task.id,
+    {
+      id: "existing-branch-artifact",
+      kind: "branch",
+      uri: "git://repo/refs/heads/jpriverar/validation",
+      title: "Previously attached branch",
+      role: "supporting",
+    },
+    h.owner,
+    "attach-existing-branch",
+  );
+  const artifact = attached.lifecycle!.artifacts.find(
+    (candidate) => candidate.id === "existing-branch-artifact",
+  )!;
+  const { acquired } = await h.acquire("jpriverar/validation");
+  assert.ok(acquired);
+  const state = (await h.store.show(h.task.id)).lifecycle!;
+  const resource = state.resources.find(
+    (candidate) => candidate.claimId === acquired.claimId,
+  )!;
+  assert.equal(resource.branchArtifactId, artifact.id);
+  assert.deepEqual(
+    state.artifacts.filter((candidate) => candidate.uri === artifact.uri),
+    [artifact],
+  );
+});

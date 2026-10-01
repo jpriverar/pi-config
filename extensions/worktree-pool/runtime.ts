@@ -6,7 +6,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadPoolConfig, resolveRepository } from "./config.js";
-import { listLeaseRecords } from "./lease-records.js";
 import type {
   OperationLockDependencies,
   OwnerIdentity,
@@ -88,46 +87,6 @@ export async function loadWorktreePoolRuntime(
       uuid: dependencies.uuid,
     }),
   };
-}
-
-export async function loadWorktreePoolRuntimeForClaims(
-  claimIds: readonly string[],
-  dependencies: WorktreePoolRuntimeDependencies = productionRuntimeDependencies,
-): Promise<WorktreePoolRuntime> {
-  if (
-    claimIds.length < 1 ||
-    claimIds.length > 8 ||
-    new Set(claimIds).size !== claimIds.length
-  )
-    throw new Error("repair requires one to eight distinct claim IDs");
-  const config = await (dependencies.loadConfig ?? loadPoolConfig)(
-    dependencies.configPath,
-    {
-      home: dependencies.home,
-      runGit: dependencies.runGit,
-      realpath: dependencies.realpath,
-    },
-  );
-  const records = await listLeaseRecords(config.root);
-  if (records.some((gate) => gate.state === "ambiguous"))
-    throw new Error("repair claim inventory is ambiguous");
-  const repositories = new Set(
-    claimIds.map((claimId) => {
-      const matches = records.filter(
-        (gate) => gate.state === "valid" && gate.record.claimId === claimId,
-      );
-      if (matches.length !== 1 || matches[0].state !== "valid")
-        throw new Error("repair claim is missing or ambiguous");
-      return matches[0].record.repository;
-    }),
-  );
-  if (repositories.size !== 1)
-    throw new Error("repair claims must belong to one repository");
-  // Overrides are not a repository inventory; resolve only the selected lease identities.
-  return loadWorktreePoolRuntime([...repositories], "identity", {
-    ...dependencies,
-    loadConfig: async () => config,
-  });
 }
 
 export function currentOwner(

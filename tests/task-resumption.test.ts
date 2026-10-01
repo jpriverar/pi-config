@@ -193,9 +193,9 @@ test(
       now: () => now,
       uuid: randomUUID,
     });
-    const held = h.runtime.pool.withClaimRepair(
+    const held = h.runtime.pool.withClaimObservation(
       "repo",
-      [h.acquired.claimId],
+      h.acquired.claimId,
       h.owner,
       async () => {
         poolHeld.resolve();

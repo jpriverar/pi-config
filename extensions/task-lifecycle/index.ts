@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { WorktreeRepairService } from "../../lib/task-lifecycle/worktree-repair.js";
-import { registerWorktreeRepairTools } from "./repair-tools.js";
 import {
   fingerprintCheck,
   type ReconcileRequest,
@@ -25,10 +23,7 @@ import type {
   AcquireResult,
   ClaimObservationTransaction,
 } from "../worktree-pool/pool.js";
-import {
-  loadWorktreePoolRuntime,
-  loadWorktreePoolRuntimeForClaims,
-} from "../worktree-pool/runtime.js";
+import { loadWorktreePoolRuntime } from "../worktree-pool/runtime.js";
 import { registerTaskWorkState, type TaskWorkStateApi } from "./work-state.js";
 import { createDeterministicGitArtifactClassifier } from "./git-artifact-command.js";
 import { registerGitArtifactHooks } from "./git-artifact-hooks.js";
@@ -207,7 +202,6 @@ interface ExtensionApi {
 
 export interface TaskLifecycleExtensionDependencies {
   service: TaskLifecycleToolService;
-  worktreeRepair?: Pick<WorktreeRepairService, "preview" | "apply">;
   reconciliation?: {
     issue(taskId: string): Promise<LifecycleIssue>;
     request(
@@ -725,8 +719,6 @@ export function createTaskLifecycleExtension(
         );
       },
     });
-
-    registerWorktreeRepairTools(pi, { service: deps.worktreeRepair, ownerFor });
 
     pi.registerCommand?.("task-reconciler", {
       description:
@@ -1260,12 +1252,6 @@ export default function taskLifecycle(
   });
   createTaskLifecycleExtension({
     service,
-    worktreeRepair: new WorktreeRepairService({
-      store,
-      loadPool: async (claimIds) =>
-        (await loadWorktreePoolRuntimeForClaims(claimIds)).pool,
-      now: Date.now,
-    }),
     reconciliation: {
       issue: (id) => store.show(id),
       request: (request, signal) =>

@@ -297,60 +297,6 @@ evidence remain explicit. Pool repair is inspection/recovery of pool metadata, n
 to delete a retained checkout or automatically complete a pending task release. Manual checks never
 infer success; they require an explicit terminal outcome.
 
-### `task_worktree_repair_preview` and `task_worktree_repair_apply`
-
-These are explicit operator recovery tools, not automatic reconciliation or a
-metadata editor. They preserve checkout files, submodules, branches, HEADs,
-claim identities, and the target task's existing execution owner.
-
-Preview requires `taskId` and one to eight distinct `claimIds`, all in one
-repository. It is read-only and returns a fingerprint of the inspected task
-and claim state. Supported transitions are narrowly bounded:
-
-- cancel an exact pending release while retaining its checkout, restoring the
-  original native claim lock if the pool journal is `removing` and the lock is
-  absent, then returning pool/task state to Active;
-- associate a healthy existing Active pool claim already owned by the target
-  session, without allocating another checkout;
-- report already-consistent selected claims without changing them.
-
-The target must have one unexpired Active execution owner, and that session
-must own exactly one Active task. A selected claim recorded on another task
-is refused, including released history. The tools also refuse dirty state
-(including submodules regardless of ignore configuration), changed or ambiguous
-identity, foreign native locks, expired ownership, unsupported states, and
-unreadable/malformed association inventory. They never transfer ownership or
-adopt a missing-lock Active pool claim.
-
-Apply requires the same `taskId`, `claimIds`, and `expectedFingerprint`. It is
-TUI-only and always obtains native operator confirmation when changes are
-needed. The dialog displays the exact plan and asks the operator to confirm
-that the target session remains idle. A model-provided flag cannot grant
-approval. RPC, print/JSON mode, unavailable UI, denial, cancellation, and a
-stale fingerprint fail closed. Do not invoke internal services through Bash
-as a confirmation bypass.
-
-Confirmation holds no locks. After approval, apply acquires the repository's
-pool-operation lock and then the global lifecycle-store mutation lock, rebuilds
-the plan, and compares the fingerprint before changing anything. Both locks
-remain held through verified task persistence. Async lifecycle mutation
-callbacks must preserve this pool-before-store order and must not recursively
-mutate the store. Repair records the actual initiating session in an
-`operator_worktree_repair` transition; it does not impersonate the preserved
-execution owner.
-
-A failure after mutation may leave a partial result. No rollback deletes work,
-and an uncertain apply must not be retried automatically. Request a fresh
-preview: it recognizes a restored native lock with a still-removing journal,
-an Active pool claim with task release still pending, and a task update that
-already committed. Any new mutations require confirmation against the fresh
-fingerprint. This is not general crash-safe acquire journaling or protection
-against arbitrary external Git/filesystem edits that ignore the locks.
-
-Repair is administrative and may target another idle session's task only
-through this explicit confirmation path. It does not close that task, renew
-its execution lease, remove submodules, deploy code, or repair other claims.
-
 ### `task_close`
 
 Required: `taskId`, `kind`, and `reason`. `kind` is `completed`, `cancelled`,
