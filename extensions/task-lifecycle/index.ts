@@ -699,7 +699,7 @@ export function createTaskLifecycleExtension(
       name: "task_reopen",
       label: "Reopen task",
       description:
-        "Reopen a done lifecycle task, returning it to dependency waiting or actionable state.",
+        "Reopen a done or deferred lifecycle task, returning it to dependency waiting or actionable state.",
       parameters: objectSchema(
         {
           taskId: taskIdProperty,

@@ -326,8 +326,10 @@ Required: `taskId` and `reason`. Optional: `operationId`.
 { "taskId": "jp-abc", "reason": "Review requested changes" }
 ```
 
-Reopen returns the task to Waiting when native blockers remain, otherwise to
-Actionable.
+Reopen accepts Done and Deferred tasks and restores native `open` status without
+claiming the task. It returns the task to Waiting when native blockers remain,
+otherwise to Actionable. Use this to resume deliberately parked work; do not
+change only the native status with `bd update`.
 
 ### `worktree_pool acquire` and `release`
 

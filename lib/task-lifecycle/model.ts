@@ -608,7 +608,10 @@ export function reopenLifecycle(
   input: ReopenInput,
 ): LifecycleMetadataV1 {
   if (hasOperation(state, input.operationId)) return state;
-  requireInvariant(state.phase === "done", "reopen requires phase done");
+  requireInvariant(
+    state.phase === "done" || state.phase === "deferred",
+    `reopen requires phase done or deferred; got ${state.phase}`,
+  );
   requireNoUnreleasedWorktrees(state);
   assertText(input.operationId, "reopen operationId");
   assertText(input.reason, "reopen reason");

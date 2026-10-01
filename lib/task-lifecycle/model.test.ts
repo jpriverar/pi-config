@@ -681,3 +681,20 @@ test("tracks deterministic worktree acquire and release stages", () => {
   assert.equal(released.resources[0].cleanupState, "released");
   assert.equal(released.resources[0].releasedAt, LATER);
 });
+
+test("reopening deferred work still refuses unreleased worktrees", () => {
+  const deferred = baseLifecycle({
+    phase: "deferred",
+    resources: [resource()],
+  });
+  assert.throws(
+    () =>
+      reopenLifecycle(deferred, {
+        operationId: "reopen-deferred",
+        now: LATER,
+        reason: "Resume work",
+        hasUnresolvedBlockers: false,
+      }),
+    /requires release of unreleased worktree/,
+  );
+});

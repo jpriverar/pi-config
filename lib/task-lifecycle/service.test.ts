@@ -779,6 +779,92 @@ test("closes with a disposition and reopens according to native blockers", async
   assert.deepEqual(reopened.lifecycle?.waiting, { kind: "dependency" });
 });
 
+for (const blockerStatus of [null, "open", "closed"] as const) {
+  test(`reopens deferred work with ${blockerStatus ?? "no"} blocker without claiming it`, async () => {
+    const store = new FakeStore();
+    const sut = service(store);
+    await sut.claim("jp-1", session("s1"), "claim-1");
+    await sut.attachArtifact(
+      "jp-1",
+      {
+        id: "existing-report",
+        kind: "report",
+        uri: "file:///report.md",
+        title: "Existing work",
+        role: "evidence",
+      },
+      session("s1"),
+      "attach-1",
+    );
+    const deferred = await sut.defer(
+      "jp-1",
+      "Park for later",
+      session("s1"),
+      "defer-1",
+    );
+    assert.equal(deferred.status, "deferred");
+    assert.equal(deferred.lifecycle?.phase, "deferred");
+    store.saved.dependencies =
+      blockerStatus === null
+        ? []
+        : [
+            {
+              id: "jp-blocker",
+              status: blockerStatus,
+              dependencyType: "blocks",
+            },
+          ];
+    const before = structuredClone(deferred.lifecycle!);
+
+    const reopened = await sut.reopen(
+      "jp-1",
+      "Resume this work",
+      session("s2"),
+      "reopen-1",
+    );
+
+    const phase = blockerStatus === "open" ? "waiting" : "actionable";
+    assert.equal(reopened.status, "open");
+    assert.equal(reopened.lifecycle?.phase, phase);
+    assert.deepEqual(
+      reopened.lifecycle?.waiting,
+      blockerStatus === "open" ? { kind: "dependency" } : null,
+    );
+    assert.equal(reopened.lifecycle?.execution, null);
+    assert.equal(reopened.lifecycle?.disposition, null);
+    assert.equal(reopened.lifecycle?.activeCheck, null);
+    assert.deepEqual(reopened.lifecycle?.artifacts, before.artifacts);
+    assert.deepEqual(reopened.lifecycle?.transitionHistory, [
+      ...before.transitionHistory,
+      {
+        operationId: "reopen-1",
+        type: "reopen",
+        at: NOW,
+        from: "deferred",
+        to: phase,
+        reason: "Resume this work",
+      },
+    ]);
+    const writes = store.writes;
+    assert.deepEqual(
+      await sut.reopen("jp-1", "Resume this work", session("s2"), "reopen-1"),
+      reopened,
+    );
+    assert.equal(store.writes, writes);
+  });
+}
+
+test("reopen cannot take an active task away from its owner", async () => {
+  const store = new FakeStore(activeIssue("jp-1", "s1"));
+  const before = structuredClone(store.saved);
+  await assert.rejects(
+    service(store).reopen("jp-1", "Resume", session("s2"), "reopen-1"),
+    /reopen requires phase/,
+  );
+  assert.deepEqual(store.saved, before);
+  assert.equal(store.writes, 0);
+});
+
 test("blocks completed but permits cancelled with unresolved dependencies", async () => {
   const blocked = activeIssue("jp-1", "s1");
   blocked.dependencies = [
