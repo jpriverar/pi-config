@@ -10,6 +10,12 @@ import {
   type ClassifiedIssue,
 } from "../../lib/beads.js";
 import { resolveSessionProject } from "../../lib/session-project.js";
+import { createPaneReporter, type PaneReporter } from "./herdr-pane.js";
+import {
+  createHerdrMetadataSender,
+  type MetadataSender,
+} from "./herdr-transport.js";
+import { selectTaskAssignment } from "./herdr-values.js";
 
 const WIDGET_KEY = "project-status";
 
@@ -40,7 +46,21 @@ function scopeIssues(
   );
 }
 
-export default function projectStatus(pi: ExtensionAPI) {
+export default function projectStatus(
+  pi: ExtensionAPI,
+  dependencies: {
+    metadataSender?: MetadataSender | null;
+    now?: () => number;
+  } = {},
+) {
+  const metadataSender =
+    dependencies.metadataSender === undefined
+      ? createHerdrMetadataSender(process.env)
+      : dependencies.metadataSender;
+  const now = dependencies.now ?? Date.now;
+  let reporter: PaneReporter | undefined;
+  let pendingRefresh: { ctx: ExtensionContext; generation: number } | undefined;
+  let refreshing: Promise<void> | undefined;
   const client = createBeadsClient(async (command, args) => {
     const result = await pi.exec(command, [...args]);
     return {
@@ -64,6 +84,13 @@ export default function projectStatus(pi: ExtensionAPI) {
   ): Promise<TaskState | undefined> {
     const listed = await client.listIssues();
     if (!isCurrentSession(generation)) return undefined;
+    reporter?.updateTask(
+      selectTaskAssignment(
+        listed.ok ? listed.value : undefined,
+        sessionId,
+        now(),
+      ),
+    );
     if (!listed.ok) return "unavailable";
 
     const ready = await client.listReadyIssueIds();
@@ -163,7 +190,7 @@ export default function projectStatus(pi: ExtensionAPI) {
     }));
   }
 
-  async function refresh(
+  async function refreshOnce(
     ctx: ExtensionContext,
     generation: number,
   ): Promise<void> {
@@ -181,14 +208,76 @@ export default function projectStatus(pi: ExtensionAPI) {
     renderStatus(ctx, currentSessionName, currentTaskState);
   }
 
+  function refresh(ctx: ExtensionContext, generation: number): Promise<void> {
+    if (!isCurrentSession(generation)) return Promise.resolve();
+    pendingRefresh = { ctx, generation };
+    if (!refreshing) {
+      refreshing = (async () => {
+        while (pendingRefresh) {
+          const next = pendingRefresh;
+          pendingRefresh = undefined;
+          if (!isCurrentSession(next.generation)) continue;
+          try {
+            await refreshOnce(next.ctx, next.generation);
+          } catch {
+            if (!isCurrentSession(next.generation)) continue;
+            reporter?.updateTask({ label: "Task unavailable" });
+            currentTaskState = "unavailable";
+            renderStatus(next.ctx, currentSessionName, currentTaskState);
+          }
+        }
+      })().finally(() => {
+        refreshing = undefined;
+      });
+    }
+    return refreshing;
+  }
+
   pi.on("session_start", async (_event, ctx) => {
-    await refresh(ctx, ++sessionGeneration);
+    const generation = ++sessionGeneration;
+    const previous = reporter;
+    reporter = undefined;
+    await previous?.stop();
+    if (!isCurrentSession(generation)) return;
+    if (metadataSender) {
+      reporter = createPaneReporter({
+        context: ctx,
+        send: metadataSender,
+        now,
+        refreshTask: () => refresh(ctx, generation),
+      });
+    }
+    await refresh(ctx, generation);
   });
   pi.on("session_shutdown", async () => {
     sessionGeneration += 1;
+    pendingRefresh = undefined;
+    const previous = reporter;
+    reporter = undefined;
+    await previous?.stop();
   });
-  pi.on("session_info_changed", async (_event, ctx) =>
-    refresh(ctx, sessionGeneration),
-  );
-  pi.on("turn_end", async (_event, ctx) => refresh(ctx, sessionGeneration));
+  const refreshSession = (_event: unknown, ctx: ExtensionContext) => {
+    reporter?.updateRuntime(ctx);
+    return refresh(ctx, sessionGeneration);
+  };
+  pi.on("session_info_changed", refreshSession);
+  pi.on("turn_end", refreshSession);
+  pi.on("before_agent_start", refreshSession);
+  const refreshRuntime = (_event: unknown, ctx: ExtensionContext) =>
+    reporter?.updateRuntime(ctx);
+  pi.on("model_select", refreshRuntime);
+  pi.on("session_compact", refreshRuntime);
+  pi.on("session_tree", refreshRuntime);
+  pi.on("turn_start", refreshRuntime);
+  const taskChanges = new Set([
+    "task_claim",
+    "task_wait",
+    "task_defer",
+    "task_close",
+    "task_reopen",
+    "task_reconcile",
+  ]);
+  pi.on("tool_execution_end", (event, ctx) => {
+    if (taskChanges.has(event.toolName)) return refresh(ctx, sessionGeneration);
+  });
 }

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setImmediate } from "node:timers/promises";
+import type { PaneTokens } from "./herdr-values.js";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
@@ -70,11 +72,15 @@ function createHarness(
     sessionId?: string;
     entries?: readonly Entry[];
     beforeExec?: (callNumber: number) => Promise<void>;
+    herdr?: boolean;
+    mode?: string;
   } = {},
 ) {
   const handlers = new Map<string, Handler>();
   const calls: string[][] = [];
   const staleAccesses: string[] = [];
+  const metadata: PaneTokens[] = [];
+  let unavailable = options.unavailable;
   let stale = false;
   let sessionName =
     options.sessionName === undefined ? "pi-setup" : options.sessionName;
@@ -96,7 +102,7 @@ function createHarness(
           : args.includes("closed")
             ? "closed"
             : "active";
-      if (options.unavailable === query) {
+      if (unavailable === query) {
         return { code: 1, stdout: "", stderr: "private failure" };
       }
       const result =
@@ -127,7 +133,9 @@ function createHarness(
     },
   };
   const context = {
-    mode: "tui",
+    mode: options.mode ?? "tui",
+    model: { id: "gpt-5.4" },
+    getContextUsage: () => ({ percent: 82 }),
     sessionManager: {
       getEntries: () => options.entries ?? [],
       getSessionId: () => options.sessionId ?? "session-1",
@@ -139,8 +147,23 @@ function createHarness(
     },
   };
 
-  projectStatus(pi as any);
+  projectStatus(pi as any, {
+    metadataSender: options.herdr
+      ? async (tokens: PaneTokens) => {
+          metadata.push({ ...tokens });
+          return true;
+        }
+      : null,
+    now: () => Date.parse("2026-09-22T12:01:00Z"),
+  });
   return {
+    metadata,
+    setIssues(next: BeadsIssue[]) {
+      issues.splice(0, issues.length, ...next);
+    },
+    setUnavailable(next: Query | undefined) {
+      unavailable = next;
+    },
     calls,
     context,
     handlers,
@@ -400,8 +423,8 @@ test("keeps runtime telemetry out of the project header", async () => {
 
   assert.match(harness.renderHeader(), /pi-setup/);
   assert.doesNotMatch(harness.renderHeader(), /Opus 4\.6|high|32%|disk 200G|⛁/);
-  assert.equal(harness.handlers.get("model_select"), undefined);
-  assert.equal(harness.handlers.get("thinking_level_select"), undefined);
+  await harness.handlers.get("model_select")?.({}, harness.context);
+  assert.doesNotMatch(harness.renderHeader(), /gpt-5\.4|Context|82%/);
 });
 
 test("fits dense global status within the terminal width", async () => {
@@ -456,3 +479,151 @@ for (const unavailable of ["active", "ready", "closed"] as const) {
     assert.doesNotMatch(harness.renderHeader(), /Opus 4\.6|high|32%|disk|⛁/);
   });
 }
+
+test("Herdr uses the existing issue read and actual current model", async () => {
+  const task = issue("jp-owned", "in_progress");
+  task.lifecycle = activeLifecycle("session-1");
+  const h = createHarness({ issues: [task], herdr: true });
+  await start(h);
+  await setImmediate();
+  assert.equal(h.calls.length, 3);
+  assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-owned");
+  assert.equal(h.metadata.at(-1)?.pi_model, "gpt-5.4");
+  assert.equal(h.metadata.at(-1)?.pi_context_warning, "Context 82%");
+  h.context.model = { id: "another-model" };
+  await h.handlers.get("model_select")?.({}, h.context);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)?.pi_model, "another-model");
+  assert.equal(h.calls.length, 3, "model changes must not query Beads");
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+});
+
+test("claim and release events re-read ownership, including failed close", async () => {
+  const h = createHarness({ herdr: true });
+  await start(h);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)?.pi_task, "Unassigned");
+  const task = issue("jp-owned", "in_progress");
+  task.lifecycle = activeLifecycle("session-1");
+  h.setIssues([task]);
+  await h.handlers.get("tool_execution_end")?.(
+    { toolName: "task_claim", isError: false },
+    h.context,
+  );
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-owned");
+  const calls = h.calls.length;
+  await h.handlers.get("tool_execution_end")?.(
+    { toolName: "task_close", isError: true },
+    h.context,
+  );
+  await setImmediate();
+  assert.equal(h.calls.length, calls + 3);
+  assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-owned");
+  h.setIssues([]);
+  await h.handlers.get("tool_execution_end")?.(
+    { toolName: "task_wait" },
+    h.context,
+  );
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)?.pi_task, "Unassigned");
+  h.setUnavailable("active");
+  await h.handlers.get("before_agent_start")?.({}, h.context);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)?.pi_task, "Task unavailable");
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+});
+
+test("unrelated count-query failure cannot erase verified task ownership", async () => {
+  const task = issue("jp-owned", "in_progress");
+  task.lifecycle = activeLifecycle("session-1");
+  const h = createHarness({
+    issues: [task],
+    herdr: true,
+    unavailable: "ready",
+  });
+  await start(h);
+  await setImmediate();
+  assert.match(h.renderHeader(), /tasks unavailable/);
+  assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-owned");
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+});
+
+test("RPC sessions inheriting a valid sender do not overwrite the parent", async () => {
+  const h = createHarness({ herdr: true, mode: "rpc" });
+  await start(h);
+  await h.handlers.get("model_select")?.({}, h.context);
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+  assert.deepEqual(h.metadata, []);
+});
+
+test("shutdown abandons an in-flight task read before it can publish stale metadata", async () => {
+  let release!: () => void;
+  let began!: () => void;
+  const started = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const h = createHarness({
+    herdr: true,
+    beforeExec: async (n) => {
+      if (n === 4) {
+        began();
+        await blocked;
+      }
+    },
+  });
+  await start(h);
+  await setImmediate();
+  const refresh = Promise.resolve(h.handlers.get("turn_end")?.({}, h.context));
+  await started;
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+  h.markStale();
+  release();
+  await refresh;
+  await setImmediate();
+  assert.deepEqual(h.staleAccesses, []);
+  assert.ok(Object.values(h.metadata.at(-1)!).every((v) => v === null));
+});
+
+test("coalesces overlapping task refreshes and preserves the latest snapshot", async () => {
+  let release!: () => void;
+  let began!: () => void;
+  const beganPromise = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const h = createHarness({
+    herdr: true,
+    beforeExec: async (n) => {
+      if (n === 4) {
+        began();
+        await blocked;
+      }
+    },
+  });
+  await start(h);
+  const running = Promise.resolve(h.handlers.get("turn_end")?.({}, h.context));
+  await beganPromise;
+  const task = issue("jp-latest", "in_progress");
+  task.lifecycle = activeLifecycle("session-1");
+  h.setIssues([task]);
+  const requests = Array.from({ length: 5 }, () =>
+    h.handlers.get("before_agent_start")?.({}, h.context),
+  );
+  assert.equal(h.calls.length, 4);
+  release();
+  await Promise.all([running, ...requests]);
+  await setImmediate();
+  assert.equal(
+    h.calls.length,
+    9,
+    "one active refresh plus one coalesced refresh",
+  );
+  assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-latest");
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+});
