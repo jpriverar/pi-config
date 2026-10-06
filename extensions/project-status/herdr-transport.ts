@@ -69,6 +69,8 @@ export function createHerdrMetadataSender(
         killSignal: "SIGKILL",
         encoding: "utf8",
       });
+      // Herdr 0.8's metadata CLI acknowledges success with exit 0 and no output.
+      if (!stdout.trim()) return true;
       const reply = JSON.parse(stdout);
       return (
         !reply.error &&

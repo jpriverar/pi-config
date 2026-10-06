@@ -62,7 +62,7 @@ export default function projectStatus(
   let pendingRefresh: { ctx: ExtensionContext; generation: number } | undefined;
   let refreshing: Promise<void> | undefined;
   const client = createBeadsClient(async (command, args) => {
-    const result = await pi.exec(command, [...args]);
+    const result = await pi.exec(command, [...args], { timeout: 1500 });
     return {
       code: result.code,
       stdout: result.stdout,
@@ -262,7 +262,10 @@ export default function projectStatus(
   };
   pi.on("session_info_changed", refreshSession);
   pi.on("turn_end", refreshSession);
-  pi.on("before_agent_start", refreshSession);
+  pi.on("before_agent_start", (_event, ctx) => {
+    // Optional display reads must not become a prompt-start prerequisite.
+    void refreshSession(_event, ctx);
+  });
   const refreshRuntime = (_event: unknown, ctx: ExtensionContext) =>
     reporter?.updateRuntime(ctx);
   pi.on("model_select", refreshRuntime);

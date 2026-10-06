@@ -68,14 +68,17 @@ retry loop. Publication is asynchronous and coalesced. The next meaningful Pi
 event can retry a failed delivery. Shutdown attempts to clear only owned keys;
 forced termination cannot guarantee cleanup. Startup reconstructs values.
 
+Task display queries have a 1500ms process timeout. The prompt-start display
+refresh is asynchronous and cannot hold up the model while Beads is slow.
 Task operations re-read actual ownership rather than assume a requested claim
 or close succeeded. External task mutations appear at the next interaction or
 refresh. A known lease expiry triggers one authoritative re-read. Display
 refreshes do not renew leases.
 
 Space refreshes serialize before reading the authoritative snapshot. Each
-Herdr call is bounded to two seconds, lock acquisition to two seconds, and the
-locked refresh to ten seconds. A failed/invalid snapshot makes no writes.
+Herdr call is bounded to two seconds, the locked refresh to ten seconds, and
+lock acquisition to eleven seconds. A pending event therefore survives a
+successful holder's maximum refresh budget and reads a fresh snapshot. A failed/invalid snapshot makes no writes.
 A space closed after the snapshot does not prevent updating the others.
 Timeouts/errors appear in Herdr's plugin log; after correcting the cause, invoke
 `jp.space-tabs.refresh` or let the next tab event refresh. There is no indefinite

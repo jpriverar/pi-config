@@ -78,6 +78,7 @@ function createHarness(
 ) {
   const handlers = new Map<string, Handler>();
   const calls: string[][] = [];
+  const executionLimits: Array<{ timeout?: number } | undefined> = [];
   const staleAccesses: string[] = [];
   const metadata: PaneTokens[] = [];
   let unavailable = options.unavailable;
@@ -92,9 +93,14 @@ function createHarness(
     on(event: string, handler: Handler) {
       handlers.set(event, handler);
     },
-    async exec(_command: string, args: string[]) {
+    async exec(
+      _command: string,
+      args: string[],
+      limits?: { timeout?: number },
+    ) {
       if (stale) staleAccesses.push("pi.exec");
       calls.push(args);
+      executionLimits.push(limits);
       await options.beforeExec?.(calls.length);
       const query: Query =
         args[0] === "ready"
@@ -157,6 +163,7 @@ function createHarness(
     now: () => Date.parse("2026-09-22T12:01:00Z"),
   });
   return {
+    executionLimits,
     metadata,
     setIssues(next: BeadsIssue[]) {
       issues.splice(0, issues.length, ...next);
@@ -626,4 +633,48 @@ test("coalesces overlapping task refreshes and preserves the latest snapshot", a
   );
   assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-latest");
   await h.handlers.get("session_shutdown")?.({}, h.context);
+});
+
+test("a stalled display lookup cannot prevent a prompt from starting", async () => {
+  let release!: () => void;
+  let began!: () => void;
+  const beganPromise = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const h = createHarness({
+    beforeExec: async (n) => {
+      if (n === 4) {
+        began();
+        await blocked;
+      }
+    },
+  });
+  await start(h);
+  const hook = Promise.resolve(
+    h.handlers.get("before_agent_start")?.({}, h.context),
+  );
+  await beganPromise;
+  const continued = await Promise.race([
+    hook.then(() => true),
+    setImmediate().then(() => false),
+  ]);
+  release();
+  await hook;
+  await setImmediate();
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+  assert.equal(
+    continued,
+    true,
+    "optional display reads must not gate model startup",
+  );
+});
+
+test("task display queries pass a finite timeout to the process boundary", async () => {
+  const h = createHarness();
+  await start(h);
+  assert.equal(h.executionLimits.length, 3);
+  assert.ok(h.executionLimits.every((limits) => limits?.timeout === 1500));
 });

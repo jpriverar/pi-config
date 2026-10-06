@@ -80,6 +80,10 @@ elif args[:2] == ["workspace", "report-metadata"]:
     if os.environ.get("DISAPPEAR") == args[2]:
         print(json.dumps({"error": {"code": "not_found"}}), file=sys.stderr)
         sys.exit(1)
+    if os.environ.get("PUBLISH_STARTED"):
+        Path(os.environ["PUBLISH_STARTED"]).touch()
+    if os.environ.get("PUBLISH_DELAY"):
+        time.sleep(float(os.environ["PUBLISH_DELAY"]))
     if os.environ.get("BLOCK"):
         Path(os.environ["BLOCK"]).touch()
         while not Path(os.environ["RELEASE"]).exists(): time.sleep(0.01)
@@ -92,7 +96,7 @@ elif args[:2] == ["workspace", "report-metadata"]:
         elif item == "--clear-token": row["tokens"].pop(args[i + 1], None)
     path.write_text(json.dumps(value))
     with log.open("a") as f: f.write(json.dumps(args) + "\n")
-    print(json.dumps({"result": {"type": "workspace_metadata"}}))
+    # Herdr 0.8 report-metadata succeeds silently.
 else:
     raise RuntimeError(args)
 '''
@@ -114,7 +118,7 @@ class ProcessTests(unittest.TestCase):
         self.env = {**os.environ, "HERDR_ENV": "1", "HERDR_SOCKET_PATH": str(self.root / "test.sock"), "HERDR_BIN_PATH": str(self.binary), "HERDR_PLUGIN_STATE_DIR": str(self.state), "FIXTURE": str(self.fixture), "CALLS": str(self.log)}
 
     def run_refresh(self, **extra):
-        return subprocess.run([sys.executable, "-B", str(SCRIPT)], env={**self.env, **extra}, capture_output=True, text=True, timeout=12)
+        return subprocess.run([sys.executable, "-B", str(SCRIPT)], env={**self.env, **extra}, capture_output=True, text=True, timeout=25)
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -152,7 +156,7 @@ class ProcessTests(unittest.TestCase):
             started = time.monotonic()
             result = self.run_refresh()
             self.assertNotEqual(result.returncode, 0)
-            self.assertLess(time.monotonic() - started, 6)
+            self.assertLess(time.monotonic() - started, 15)
             self.assertEqual(self.calls(), [])
 
     def test_concurrent_events_take_their_snapshot_after_serialization(self):
@@ -173,6 +177,22 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0)
         self.assertEqual(json.loads(self.fixture.read_text())["workspaces"][0]["tokens"]["active_tab"], "tab: new review")
         self.assertEqual([call for call in self.calls() if call[0] == "snapshot"], [["snapshot", "review"], ["snapshot", "new review"]])
+
+    def test_slow_successful_holder_does_not_drop_the_last_tab_event(self):
+        marker = self.root / "publish-started"
+        first = subprocess.Popen([sys.executable, "-B", str(SCRIPT)], env={**self.env, "PUBLISH_STARTED": str(marker), "PUBLISH_DELAY": "1.4"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: first.kill() if first.poll() is None else None)
+        deadline = time.monotonic() + 4
+        while not marker.exists() and time.monotonic() < deadline: time.sleep(0.01)
+        self.assertTrue(marker.exists())
+        value = json.loads(self.fixture.read_text())
+        value["tabs"][1]["label"] = "latest selected tab"
+        self.fixture.write_text(json.dumps(value))
+        second = self.run_refresh()
+        first.communicate(timeout=8)
+        self.assertEqual(first.returncode, 0)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(json.loads(self.fixture.read_text())["workspaces"][0]["tokens"]["active_tab"], "tab: latest selected tab")
 
     def test_refuses_missing_plugin_context_instead_of_targeting_live_default(self):
         result = self.run_refresh(HERDR_ENV="0")

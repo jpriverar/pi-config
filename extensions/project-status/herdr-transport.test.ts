@@ -118,3 +118,10 @@ test("the real subprocess adapter terminates a hung command", async (t) => {
     "hung reporter exceeded its bounded timeout",
   );
 });
+
+test("accepts the installed Herdr CLI's silent successful metadata write", async () => {
+  const send = createHerdrMetadataSender(environment, async () => ({
+    stdout: "",
+  }))!;
+  assert.equal(await send(values, 1, new AbortController().signal), true);
+});

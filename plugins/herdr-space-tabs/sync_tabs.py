@@ -12,8 +12,9 @@ import time
 
 SOURCE = "plugin:jp.space-tabs"
 COMMAND_SECONDS = 2
-LOCK_SECONDS = 2
 REFRESH_SECONDS = 10
+# The final event must survive one successful holder's full refresh budget.
+LOCK_SECONDS = REFRESH_SECONDS + 1
 MAX_REPLY_BYTES = 1024 * 1024
 ANSI = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]")
 
@@ -74,7 +75,7 @@ def workspace_tokens(snapshot):
     return result
 
 
-def run_herdr(binary, args, deadline):
+def run_herdr(binary, args, deadline, allow_empty=False):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise HerdrError("space metadata refresh deadline exceeded")
@@ -86,6 +87,8 @@ def run_herdr(binary, args, deadline):
     except OSError as error:
         raise HerdrError(f"unable to execute herdr {operation}") from error
     output = result.stdout if result.returncode == 0 else result.stderr
+    if result.returncode == 0 and allow_empty and not output.strip():
+        return {}
     if len(output.encode("utf-8")) > MAX_REPLY_BYTES:
         raise HerdrError(f"herdr {operation} response exceeded limit")
     try:
@@ -136,7 +139,7 @@ def refresh(binary, state_dir):
             for key, value in tokens.items():
                 args.extend(["--token", f"{key}={value}"] if value else ["--clear-token", key])
             try:
-                run_herdr(binary, args, deadline)
+                run_herdr(binary, args, deadline, allow_empty=True)
             except HerdrError as error:
                 # A space can close after the snapshot without invalidating others.
                 if error.code != "not_found":
