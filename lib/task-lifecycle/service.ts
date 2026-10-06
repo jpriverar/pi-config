@@ -289,11 +289,6 @@ export class TaskLifecycleService {
       const lifecycle = requireManaged(issue);
       if (hasOperation(lifecycle, operationId)) return null;
       requireCurrentOwner(taskId, lifecycle, owner);
-      if (lifecycle.activeCheck !== null) {
-        throw new Error(
-          "cannot add dependency waiting while an active check exists",
-        );
-      }
       requireReleasedWorktrees(taskId, lifecycle, "task_wait");
       const updated = await addBlockers(blockers);
       const next = waitLifecycle(requireManaged(updated), {

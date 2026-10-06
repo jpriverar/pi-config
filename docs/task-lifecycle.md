@@ -419,9 +419,15 @@ The v1 `expiresAt` field and `executionTimeoutMs` configuration remain readable
 and are maintained for compatibility. They do not authorize deletion or owner
 replacement and are not daemon scheduling deadlines. Historical
 `execution_interrupted` events remain readable; no new ones are generated.
-Explicit deletion still holds the pool lock before the store mutation lock
-through removal and persistence. Claim renewal cannot return while an explicit
-deletion is already running. Already released resources remain released.
+The internal `TaskLifecycleService.releaseWorktree` transaction holds the pool
+lock before the store mutation lock through removal and persistence; claim
+renewal waits for that transaction. The public `worktree_pool release` tool has
+separate lifecycle prepare, pool removal, and lifecycle finalize steps. Its pool
+removal does not hold the task-store lock, so same-owner claim/activity metadata
+may be refreshed while removal is in progress. That refresh is not evidence that
+the checkout is usable: the resource stays `release_pending` until finalization
+or reconciliation observes completed removal. Already released resources remain
+released.
 
 ## Pool boundary and recovery
 

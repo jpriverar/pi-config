@@ -2753,3 +2753,43 @@ test("a concurrent acquisition cannot leave dependency edges behind when waiting
   assert.deepEqual(store.saved.dependencies, []);
   assert.equal(store.saved.lifecycle!.phase, "active");
 });
+
+for (const retainedWorktree of [false, true]) {
+  test(`a retained check can be replaced with dependency waiting after explicit release (worktree=${retainedWorktree})`, async () => {
+    const { store, sut } = await activeServiceWithPool();
+    const owner = session("s1");
+    await sut.waitForCheck("jp-1", lifecycleCheck(), owner, "wait-check");
+    await sut.claim("jp-1", owner, "reclaim");
+    if (retainedWorktree) {
+      await sut.acquireWorktree(
+        { taskId: "jp-1", repository: "repo", branch: "jpriverar/replan" },
+        owner,
+        "acquire",
+      );
+      const before = structuredClone(store.saved);
+      await assert.rejects(
+        sut.waitForDependencies("jp-1", ["jp-blocker"], owner, "replan"),
+        /worktree_pool/,
+      );
+      assert.deepEqual(store.saved, before);
+      assert.deepEqual(store.blockers, []);
+      await sut.releaseWorktree(
+        "jp-1",
+        before.lifecycle!.resources[0].claimId,
+        owner,
+        "explicit-release",
+      );
+    }
+    const saved = await sut.waitForDependencies(
+      "jp-1",
+      ["jp-blocker"],
+      owner,
+      "replan",
+    );
+    assert.equal(saved.lifecycle!.phase, "waiting");
+    assert.deepEqual(saved.lifecycle!.waiting, { kind: "dependency" });
+    assert.equal(saved.lifecycle!.activeCheck, null);
+    assert.equal(saved.lifecycle!.execution, null);
+    assert.deepEqual(store.blockers, [["jp-1", "jp-blocker"]]);
+  });
+}

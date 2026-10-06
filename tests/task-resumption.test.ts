@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
+import { createTaskLifecycleExtension } from "../extensions/task-lifecycle/index.js";
+import { createWorktreePoolExtension } from "../extensions/worktree-pool/index.js";
 import { loadWorktreePoolRuntime } from "../extensions/worktree-pool/runtime.js";
 import { createLifecycleStore } from "../lib/task-lifecycle/beads-store.js";
 import { TaskLifecycleService } from "../lib/task-lifecycle/service.js";
@@ -240,7 +242,7 @@ test(
 );
 
 test(
-  "claim cannot return renewed ownership during an already-running destructive release",
+  "service-transaction release blocks claim renewal until deletion is persisted",
   { timeout: 120_000 },
   async (t) => {
     const h = await fixture(t);
@@ -367,6 +369,142 @@ test(
     } finally {
       finish.resolve();
       await Promise.allSettled([observation, release]);
+    }
+  },
+);
+
+test(
+  "public pool release permits metadata renewal between preparation and finalization",
+  { timeout: 120_000 },
+  async (t) => {
+    const h = await fixture(t);
+    const removing = signal();
+    const finishRemoval = signal();
+    const waited = signal();
+    const initial = await h.store.show(h.task.id);
+    const store = lockedStore(h, initial, () => {}, waited.resolve);
+    const runtime = await loadWorktreePoolRuntime(["repo"], "identity", {
+      ...h.runtimeDependencies,
+      runGit: async (cwd, args) => {
+        if (args[0] === "worktree" && args[1] === "remove") {
+          removing.resolve();
+          await finishRemoval.promise;
+        }
+        return h.runtimeDependencies.runGit!(cwd, args);
+      },
+    });
+    const now = Date.parse(initial.lifecycle!.execution!.expiresAt) + 1000;
+    const service = new TaskLifecycleService({
+      store,
+      pool: runtime.pool,
+      ...fixturePolicy,
+      now: () => now,
+      uuid: randomUUID,
+    });
+    const handlers = new Map<
+      string,
+      Array<(event: any, context: any) => any>
+    >();
+    const tools = new Map<string, any>();
+    const api = {
+      on(name: string, handler: any) {
+        handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+      },
+      registerTool(tool: any) {
+        tools.set(tool.name, tool);
+      },
+      registerCommand() {},
+      registerEntryRenderer() {},
+      appendEntry() {},
+      sendMessage() {},
+    };
+    createTaskLifecycleExtension({
+      service,
+      now: () => h.owner.started,
+      pid: h.owner.pid,
+      hostname: h.owner.host,
+      activityWriteIntervalMs: fixturePolicy.activityWriteIntervalMs,
+      sessionReconcileLimit: fixturePolicy.sessionReconcileLimit,
+      sessionPrCheckLimit: fixturePolicy.sessionPrCheckLimit,
+    })(api as any);
+    createWorktreePoolExtension({
+      now: () => h.owner.started,
+      pid: h.owner.pid,
+      hostname: h.owner.host,
+      loadRuntime: async () => runtime,
+    })(api);
+    const context = {
+      cwd: h.repo,
+      sessionManager: {
+        getSessionId: () => h.owner.sessionId,
+        getBranch: () => [],
+        getEntries: () => [],
+        getSessionName: () => undefined,
+      },
+      ui: { notify() {} },
+    };
+    const call = h.event("public-release", {
+      action: "release",
+      repository: "repo",
+      claimId: h.acquired.claimId,
+    });
+    for (const handler of handlers.get("tool_call")!)
+      assert.equal(await handler(call, context), undefined);
+    assert.equal(
+      (await store.show(h.task.id)).lifecycle!.resources[0].cleanupState,
+      "release_pending",
+    );
+    const release = tools
+      .get("worktree_pool")
+      .execute(
+        call.toolCallId,
+        call.input,
+        undefined,
+        undefined,
+        context,
+      ) as Promise<any>;
+    let claim: Promise<LifecycleIssue> | undefined;
+    try {
+      await Promise.race([
+        removing.promise,
+        release.then(() => {
+          throw new Error("public release finished without entering removal");
+        }),
+      ]);
+      claim = service.claim(h.task.id, h.owner, "renew-during-public-release");
+      assert.equal(
+        await Promise.race([
+          claim.then(() => "renewed"),
+          waited.promise.then(() => "blocked"),
+        ]),
+        "renewed",
+      );
+      const renewed = await claim;
+      assert.equal(
+        renewed.lifecycle!.resources[0].cleanupState,
+        "release_pending",
+      );
+      assert.equal(renewed.lifecycle!.execution!.sessionId, h.owner.sessionId);
+      await fs.access(h.acquired.path);
+      finishRemoval.resolve();
+      const result = await release;
+      assert.equal(result.details.released, true);
+      for (const handler of handlers.get("tool_result")!) {
+        assert.equal(
+          await handler({ ...call, ...result, isError: false }, context),
+          undefined,
+        );
+      }
+      const finalized = await store.show(h.task.id);
+      assert.equal(finalized.lifecycle!.resources[0].cleanupState, "released");
+      assert.equal(
+        finalized.lifecycle!.execution!.sessionId,
+        h.owner.sessionId,
+      );
+      await assert.rejects(fs.stat(h.acquired.path), { code: "ENOENT" });
+    } finally {
+      finishRemoval.resolve();
+      await Promise.allSettled([release, ...(claim ? [claim] : [])]);
     }
   },
 );
