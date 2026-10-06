@@ -1,16 +1,9 @@
 [ui.sidebar.agents.rows_by_agent]
 pi = [
-  ["state_icon", "tab", "workspace"],
-  ["agent", "$pi_model", "state_text"],
+  ["tab", "workspace"],
   ["$pi_task"],
-  [
-    { token = "$pi_context_warning", fg = "#e6c45f" },
-    { token = "$pi_context_critical", fg = "#ff8278", bold = true },
-  ],
+  ["state_icon", "state_text", "agent", "$pi_model"],
 ]
 
 [ui.sidebar.spaces]
-rows = [
-  ["state_icon", "workspace", "$tab_count"],
-  ["$active_tab"],
-]
+rows = [["state_icon", "workspace", "$tab_count"]]

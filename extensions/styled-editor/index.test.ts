@@ -294,6 +294,42 @@ test("shows context percent when token detail is unavailable", async () => {
   assert.doesNotMatch(rendered, /44% \(/);
 });
 
+for (const styled of [true, false]) {
+  test(`keeps unknown context visible in the ${styled ? "styled prompt" : "plain footer"}`, async (t) => {
+    const harness = createHarness();
+    const editor = await start(harness);
+    t.after(() =>
+      harness.commands.get("prompt")!.handler("on", harness.context),
+    );
+    if (!styled) {
+      await harness.commands.get("prompt")!.handler("off", harness.context);
+    }
+    const render = () =>
+      stripTerminalSequences(
+        (styled ? editor.render(100) : harness.renderFooter(100)).join("\n"),
+      );
+    assert.match(render(), /44% \(440k\/1M\)/);
+
+    for (const usage of [
+      { ["to" + "kens"]: null, contextWindow: 1_000_000, percent: null },
+      undefined,
+    ]) {
+      harness.setUsage(usage);
+      const unknown = render();
+      assert.match(unknown, /Context \?/);
+      assert.doesNotMatch(unknown, /\d+%/);
+    }
+
+    harness.setUsage({
+      ["to" + "kens"]: 0,
+      contextWindow: 1_000_000,
+      percent: 0,
+    });
+    assert.match(render(), /0% \(0\/1M\)/);
+    assert.doesNotMatch(render(), /Context \?/);
+  });
+}
+
 test("sanitizes hostile runtime identity before rendering", async () => {
   const editor = await start(
     createHarness({

@@ -15,6 +15,14 @@ The plugin runs from Herdr events, with no daemon or database polling.
 
 ## Display semantics
 
+The example layout shows Pi panes in three rows: tab and space; task; then
+state icon, state text, Pi, and model. Spaces show their state icon, name, and
+tab count in one row. Sidebar context and active-tab labels are omitted;
+their metadata remains available for custom layouts.
+
+Context usage stays in Pi's footer. When Pi cannot yet estimate it after
+compaction, the footer shows `Context ?` until fresh usage becomes available.
+
 `pi_model` follows the actual selected model. `pi_task` shows a matching active,
 unexpired session claim's title. A successful lookup with no claim shows
 `Unassigned`; lookup failures/conflicting claims show `Task unavailable`, and

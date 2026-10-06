@@ -183,6 +183,12 @@ function buildRuntimeStatus(
       text: `${rounded}%${detail}`,
       separatorBefore: "bar",
     });
+  } else {
+    segments.push({
+      color: "dim",
+      text: "Context ?",
+      separatorBefore: "bar",
+    });
   }
 
   if (diskStatus) {
