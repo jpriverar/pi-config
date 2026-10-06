@@ -1,8 +1,8 @@
 [ui.sidebar.agents.rows_by_agent]
 pi = [
-  ["tab", "workspace"],
+  ["state_icon", "tab", "workspace"],
   ["$pi_task"],
-  ["state_icon", "state_text", "agent", "$pi_model"],
+  ["state_text", "agent", "$pi_model"],
 ]
 
 [ui.sidebar.spaces]

@@ -15,8 +15,8 @@ The plugin runs from Herdr events, with no daemon or database polling.
 
 ## Display semantics
 
-The example layout shows Pi panes in three rows: tab and space; task; then
-state icon, state text, Pi, and model. Spaces show their state icon, name, and
+The example layout shows Pi panes in three rows: state icon, tab, and space;
+task; then state text, Pi, and model. Spaces show their state icon, name, and
 tab count in one row. Sidebar context and active-tab labels are omitted;
 their metadata remains available for custom layouts.
 
