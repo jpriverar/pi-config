@@ -222,6 +222,15 @@ not retry or delete anything automatically: a timed-out request may have
 succeeded. Inspect Herdr before retrying. To recover a saved clone manually,
 run `pi --session <reported-session-file>` from the intended working directory.
 
+## Herdr sidebar metadata
+
+Interactive Pi sessions inside Herdr can display their current model, claimed
+task, and high context usage. An optional event-driven Herdr plugin adds each
+space's tab count and active tab, without Git information. Configuration and
+plugin activation are explicit; see [Herdr sidebar metadata](plugins/herdr-space-tabs/README.md)
+for behavior, activation, and rollback. Python 3.9+ on macOS/Linux is required
+for the space plugin and its tests.
+
 ## Worktree pool
 
 The package includes a bounded, conservative worktree allocator. Its core knows

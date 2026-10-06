@@ -1,0 +1,16 @@
+[ui.sidebar.agents.rows_by_agent]
+pi = [
+  ["state_icon", "tab", "workspace"],
+  ["agent", "$pi_model", "state_text"],
+  ["$pi_task"],
+  [
+    { token = "$pi_context_warning", fg = "#e6c45f" },
+    { token = "$pi_context_critical", fg = "#ff8278", bold = true },
+  ],
+]
+
+[ui.sidebar.spaces]
+rows = [
+  ["state_icon", "workspace", "$tab_count"],
+  ["$active_tab"],
+]

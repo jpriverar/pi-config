@@ -1,0 +1,39 @@
+id = "jp.space-tabs"
+name = "Space tab metadata"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Show each space's tab count and active tab."
+platforms = ["macos", "linux"]
+
+[[startup]]
+command = ["python3", "-B", "sync_tabs.py"]
+
+[[actions]]
+id = "refresh"
+title = "Refresh space tab metadata"
+description = "Refresh active tab and tab count for every space."
+command = ["python3", "-B", "sync_tabs.py"]
+
+[[events]]
+on = "workspace.created"
+command = ["python3", "-B", "sync_tabs.py"]
+
+[[events]]
+on = "tab.created"
+command = ["python3", "-B", "sync_tabs.py"]
+
+[[events]]
+on = "tab.closed"
+command = ["python3", "-B", "sync_tabs.py"]
+
+[[events]]
+on = "tab.focused"
+command = ["python3", "-B", "sync_tabs.py"]
+
+[[events]]
+on = "tab.renamed"
+command = ["python3", "-B", "sync_tabs.py"]
+
+[[events]]
+on = "tab.moved"
+command = ["python3", "-B", "sync_tabs.py"]

@@ -16,7 +16,7 @@
   "scripts": {
     "build:reconciler": "node scripts/build-task-reconciler.mjs",
     "probe:reconciler": "tsx tests/task-reconciler-readonly-probe.ts",
-    "test": "tsx --test --test-concurrency=2 $(find tests extensions lib -type f -name '*.test.ts' -print 2>/dev/null) && node --test tests/manifest.test.mjs",
+    "test": "tsx --test --test-concurrency=2 $(find tests extensions lib -type f -name '*.test.ts' -print 2>/dev/null) && node --test tests/manifest.test.mjs && python3 -B -m unittest discover -s plugins/herdr-space-tabs -p 'test_*.py'",
     "test:file": "tsx --test",
     "test:bootstrap": "tsx --test tests/reconcile-personal-profile.test.ts tests/bootstrap-macos.test.ts",
     "typecheck": "tsc --noEmit",
