@@ -2,7 +2,7 @@
 
 Work item: `jp-u1aq`
 
-Status: conversational design approved; written spec awaiting review. Implementation is not authorized yet.
+Status: written specification and native implementation plan approved on 2026-10-06. Live activation remains an explicit checkpoint.
 
 ## Intent and approved scope
 

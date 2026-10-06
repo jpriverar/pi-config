@@ -17,8 +17,8 @@ SCRIPT = Path(__file__).with_name("sync_tabs.py")
 def snapshot():
     return {
         "workspaces": [
-            {"workspace_id": "w1", "active_tab_id": "w1:t2", "tokens": {}},
-            {"workspace_id": "w2", "active_tab_id": "w2:t1", "tokens": {}},
+            {"workspace_id": "w1", "active_tab_id": "w1:t2", "tokens": dict()},
+            {"workspace_id": "w2", "active_tab_id": "w2:t1", "tokens": dict()},
         ],
         "tabs": [
             {"tab_id": "w1:t1", "workspace_id": "w1", "label": "shell"},

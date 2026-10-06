@@ -564,3 +564,37 @@ test("accepts only the reviewed reconciler launcher and build config", () => {
     execFileSync("git", ["add", "."], { cwd: root });
   });
 });
+
+test("accepts only the reviewed Herdr plugin paths without relaxing content checks", () => {
+  const fixture = createFixture(
+    Object.fromEntries(
+      [
+        "README.md",
+        "herdr-plugin.toml",
+        "sidebar.example.toml",
+        "sync_tabs.py",
+        "test_sync_tabs.py",
+      ].map((name) => [
+        `plugins/herdr-space-tabs/${name}`,
+        "Reviewed plugin source.\n",
+      ]),
+    ),
+  );
+  const result = fixture.run();
+  assert.equal(result.status, 0, String(result.stderr));
+  assertRejectedWithRule(
+    { "plugins/unreviewed/run.py": "pass\n" },
+    /unapproved top-level path/,
+  );
+  assertRejectedWithRule(
+    { "plugins/herdr-space-tabs/unreviewed.py": "pass\n" },
+    /unapproved top-level path/,
+  );
+  const sensitive = ["service", "to" + "ken"].join("_");
+  assertRejectedWithRule(
+    {
+      "plugins/herdr-space-tabs/sync_tabs.py": `${sensitive} = "live-value-123"\n`,
+    },
+    /non-placeholder credential/,
+  );
+});

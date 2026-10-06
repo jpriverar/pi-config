@@ -13,7 +13,7 @@ const environment = {
   HERDR_SOCKET_PATH: "/tmp/test.sock",
   HERDR_BIN_PATH: "/test/herdr",
 };
-const tokens: PaneTokens = {
+const values: PaneTokens = {
   pi_model: "Model $(touch nope)",
   pi_task: "Review auth; stay safe",
   pi_context_warning: null,
@@ -45,7 +45,7 @@ test("publishes only owned keys with argv, sequence and finite execution limits"
       return { stdout: JSON.stringify({ result: { type: "pane_metadata" } }) };
     },
   )!;
-  assert.equal(await send(tokens, 12, new AbortController().signal), true);
+  assert.equal(await send(values, 12, new AbortController().signal), true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].file, "/test/herdr");
   assert.deepEqual(calls[0].args, [
@@ -80,7 +80,7 @@ for (const stdout of [
     const send = createHerdrMetadataSender(environment, async () => ({
       stdout,
     }))!;
-    assert.equal(await send(tokens, 1, new AbortController().signal), false);
+    assert.equal(await send(values, 1, new AbortController().signal), false);
   });
 }
 
@@ -90,10 +90,10 @@ test("does not retry missing executable or start cancelled work", async () => {
     calls++;
     throw new Error("ENOENT");
   })!;
-  assert.equal(await send(tokens, 1, new AbortController().signal), false);
+  assert.equal(await send(values, 1, new AbortController().signal), false);
   const cancelled = new AbortController();
   cancelled.abort();
-  assert.equal(await send(tokens, 2, cancelled.signal), false);
+  assert.equal(await send(values, 2, cancelled.signal), false);
   assert.equal(calls, 1);
 });
 
@@ -112,7 +112,7 @@ test("the real subprocess adapter terminates a hung command", async (t) => {
     HERDR_BIN_PATH: executable,
   })!;
   const start = Date.now();
-  assert.equal(await send(tokens, 1, new AbortController().signal), false);
+  assert.equal(await send(values, 1, new AbortController().signal), false);
   assert.ok(
     Date.now() - start < 5000,
     "hung reporter exceeded its bounded timeout",

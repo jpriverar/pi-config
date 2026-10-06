@@ -32,6 +32,13 @@ const approvedRootDirectories = new Set([
   "tests",
   "themes",
 ]);
+const approvedPluginFiles = new Set([
+  "plugins/herdr-space-tabs/README.md",
+  "plugins/herdr-space-tabs/herdr-plugin.toml",
+  "plugins/herdr-space-tabs/sidebar.example.toml",
+  "plugins/herdr-space-tabs/sync_tabs.py",
+  "plugins/herdr-space-tabs/test_sync_tabs.py",
+]);
 const allowedUrlHosts = new Set([
   "github.com",
   "raw.githubusercontent.com",
@@ -93,6 +100,7 @@ function report(errors, path, rule) {
 }
 
 function isApprovedPath(path) {
+  if (path.startsWith("plugins/")) return approvedPluginFiles.has(path);
   if (!path.includes("/")) return approvedRootFiles.has(path);
   return approvedRootDirectories.has(path.split("/", 1)[0]);
 }

@@ -9,13 +9,13 @@ function harness(
   options: {
     mode?: string;
     send?: (
-      tokens: PaneTokens,
+      values: PaneTokens,
       seq: number,
       signal: AbortSignal,
     ) => Promise<boolean>;
   } = {},
 ) {
-  const sent: Array<{ tokens: PaneTokens; seq: number }> = [];
+  const sent: Array<{ values: PaneTokens; seq: number }> = [];
   let percent: number | null = 12;
   let model = "model-one";
   let now = 1000;
@@ -35,9 +35,9 @@ function harness(
     refreshTask: async () => {
       refreshes++;
     },
-    send: async (tokens, seq, signal) => {
-      sent.push({ tokens: { ...tokens }, seq });
-      return options.send ? options.send(tokens, seq, signal) : true;
+    send: async (values, seq, signal) => {
+      sent.push({ values: { ...values }, seq });
+      return options.send ? options.send(values, seq, signal) : true;
     },
     clock: {
       now: () => now,
@@ -72,7 +72,7 @@ function harness(
 test("initializes current runtime without falsely claiming Unassigned", async () => {
   const h = harness();
   await setImmediate();
-  assert.deepEqual(h.sent[0].tokens, {
+  assert.deepEqual(h.sent[0].values, {
     pi_model: "model-one",
     pi_task: "Task unavailable",
     pi_context_warning: null,
@@ -80,14 +80,14 @@ test("initializes current runtime without falsely claiming Unassigned", async ()
   });
   h.reporter!.updateTask({ label: "Review auth" });
   await setImmediate();
-  assert.equal(h.sent.at(-1)!.tokens.pi_task, "Review auth");
+  assert.equal(h.sent.at(-1)!.values.pi_task, "Review auth");
   h.runtime("model-two", 90);
   await setImmediate();
-  assert.equal(h.sent.at(-1)!.tokens.pi_model, "model-two");
-  assert.equal(h.sent.at(-1)!.tokens.pi_context_critical, "Context 90%");
+  assert.equal(h.sent.at(-1)!.values.pi_model, "model-two");
+  assert.equal(h.sent.at(-1)!.values.pi_context_critical, "Context 90%");
   h.runtime("model-two", null);
   await setImmediate();
-  assert.equal(h.sent.at(-1)!.tokens.pi_context_critical, null);
+  assert.equal(h.sent.at(-1)!.values.pi_context_critical, null);
   await h.reporter!.stop();
 });
 
@@ -119,7 +119,7 @@ test("suppresses unchanged data and serializes bursts to the latest value", asyn
   finish(true);
   await setImmediate();
   assert.equal(h.sent.length, 2);
-  assert.deepEqual(h.sent[1].tokens, {
+  assert.deepEqual(h.sent[1].values, {
     pi_model: "latest",
     pi_task: "Current task",
     pi_context_warning: null,
@@ -161,7 +161,7 @@ test("lease renewal replaces one-shot expiry and shutdown suppresses stale callb
   h.runtime("stale", 99);
   await setImmediate();
   assert.equal(h.refreshes(), 1);
-  assert.deepEqual(h.sent.at(-1)!.tokens, {
+  assert.deepEqual(h.sent.at(-1)!.values, {
     pi_model: null,
     pi_task: null,
     pi_context_warning: null,
@@ -182,14 +182,14 @@ test("stop cancels an in-flight send before clearing only owned keys", async () 
   });
   await h.reporter!.stop();
   assert.equal(h.sent.length, 2);
-  assert.deepEqual(Object.keys(h.sent[1].tokens).sort(), [
+  assert.deepEqual(Object.keys(h.sent[1].values).sort(), [
     "pi_context_critical",
     "pi_context_warning",
     "pi_model",
     "pi_task",
   ]);
   assert.ok(h.sent[1].seq > h.sent[0].seq);
-  assert.ok(Object.values(h.sent[1].tokens).every((value) => value === null));
+  assert.ok(Object.values(h.sent[1].values).every((value) => value === null));
   await h.reporter!.stop();
   assert.equal(h.sent.length, 2);
 });
