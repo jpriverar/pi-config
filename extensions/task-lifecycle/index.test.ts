@@ -146,12 +146,7 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
       calls.push({ name: "reopen", args });
       return normalizedIssue("actionable");
     },
-    async reconcileExecutionTimeout(
-      ...args: Parameters<TaskLifecycleToolService["reconcileExecutionTimeout"]>
-    ) {
-      calls.push({ name: "reconcileExecutionTimeout", args });
-      return normalizedIssue();
-    },
+
     async reconcileTask(
       ...args: Parameters<TaskLifecycleToolService["reconcileTask"]>
     ) {
@@ -170,12 +165,7 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
       calls.push({ name: "refreshSessionActivity", args });
       return [];
     },
-    async interruptSession(
-      ...args: Parameters<TaskLifecycleToolService["interruptSession"]>
-    ) {
-      calls.push({ name: "interruptSession", args });
-      return [];
-    },
+
     async preflightWorktreeAcquire(...args: any[]) {
       calls.push({ name: "preflightWorktreeAcquire", args });
     },
@@ -316,7 +306,6 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
   assert.deepEqual(
     [...h.handlers.keys()],
     [
-      "session_shutdown",
       "turn_start",
       "tool_execution_start",
       "tool_execution_end",
@@ -1082,25 +1071,6 @@ test("activity and shutdown stay local without automatic reconciliation", async 
     h.calls.filter((call) => call.name === "refreshSessionActivity").length,
     3,
   );
-
-  await handler("session_shutdown")({ reason: "reload" }, h.context);
-  assert.equal(
-    h.calls.filter((call) => call.name === "interruptSession").length,
-    0,
-  );
-  await handler("session_shutdown")({ reason: "quit" }, h.context);
-  assert.deepEqual(h.calls.at(-1), {
-    name: "interruptSession",
-    args: [
-      {
-        pid: 4242,
-        sessionId: "session-1",
-        host: "host",
-        started: NOW,
-      },
-      "quit",
-    ],
-  });
 });
 
 test("task_reconcile passes explicit manual outcomes to the daemon", async () => {
@@ -1357,4 +1327,13 @@ test("administration requires explicit allowlisted invocation and uses an absolu
   const count = h.execCalls.length;
   await command.handler("start; echo unsafe", ctx);
   assert.equal(h.execCalls.length, count);
+});
+
+test("shutdown events never relinquish task ownership or initiate cleanup", async () => {
+  const h = harness();
+  for (const reason of ["quit", "new", "resume", "fork", "reload"]) {
+    for (const handler of h.handlers.get("session_shutdown") ?? [])
+      await handler({ reason }, h.context);
+  }
+  assert.deepEqual(h.calls, []);
 });

@@ -166,24 +166,6 @@ test("selects absent check deadlines but not deferred, closed, or unmanaged task
   );
 });
 
-test("a future check cannot hide expired ownership on the same task", () => {
-  const issue = checkTask("expired", AFTER);
-  issue.status = "in_progress";
-  issue.lifecycle!.phase = "active";
-  issue.lifecycle!.execution = {
-    sessionId: "previous-session",
-    claimedAt: BEFORE,
-    lastActivityAt: BEFORE,
-    expiresAt: AT,
-    resourceSnapshot: { observedAt: BEFORE, resourceIds: [] },
-  };
-  assert.deepEqual(selectDueCandidates([issue], new Map(), NOW), [
-    { taskId: "expired", eligibleAtMs: NOW, reasons: ["execution"] },
-  ]);
-  issue.lifecycle!.execution!.expiresAt = AFTER;
-  assert.deepEqual(selectDueCandidates([issue], new Map(), NOW), []);
-});
-
 test("selects pending resource repair using its transition timestamp", () => {
   const issue = task("resource", {
     phase: "active",
@@ -465,4 +447,22 @@ test("check fingerprints are stable across process locales", async () => {
   }
   assert.match(hashes[0], /^[a-f0-9]{64}$/);
   assert.equal(hashes[0], hashes[1]);
+});
+
+test("idle ownership is not reconciliation work, but due checks still are", () => {
+  const issue = checkTask("idle", AFTER);
+  issue.status = "in_progress";
+  issue.lifecycle!.phase = "active";
+  issue.lifecycle!.execution = {
+    sessionId: "owner",
+    claimedAt: BEFORE,
+    lastActivityAt: BEFORE,
+    expiresAt: BEFORE,
+    resourceSnapshot: { observedAt: BEFORE, resourceIds: [] },
+  };
+  assert.deepEqual(selectDueCandidates([issue], new Map(), NOW), []);
+  issue.lifecycle!.activeCheck!.nextCheckAt = AT;
+  assert.deepEqual(selectDueCandidates([issue], new Map(), NOW), [
+    { taskId: "idle", eligibleAtMs: NOW, reasons: ["check"] },
+  ]);
 });

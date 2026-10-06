@@ -13,7 +13,6 @@ import {
   completeWorktreeRelease,
   decodeLifecycle,
   deferLifecycle,
-  interruptLifecycle,
   reopenLifecycle,
   validateLifecycle,
   waitLifecycle,
@@ -538,39 +537,27 @@ test("defers active ownership after resources are released", () => {
   assert.equal(deferred.transitionHistory.at(-1)?.reason, "Lower priority");
 });
 
-test("idempotently interrupts expired active ownership", () => {
-  const active = claimLifecycle(baseLifecycle(), {
-    operationId: "claim-1",
-    sessionId: "session-a",
-    now: NOW,
-    expiresAt: LATER,
-    resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+test("historical interrupted-ownership records remain readable", () => {
+  const historical = baseLifecycle({
+    stateEnteredAt: LATER,
+    lastProgressAt: LATER,
+    transitionHistory: [
+      {
+        operationId: "interrupt-1",
+        type: "execution_interrupted",
+        at: LATER,
+        from: "active",
+        to: "actionable",
+        sessionId: "session-a",
+        reason: `last activity ${NOW}; observed ${LATER}`,
+      },
+    ],
   });
-  const interrupted = interruptLifecycle(active, {
-    operationId: "interrupt-1",
-    now: LATER,
-    expectedSessionId: "session-a",
+  assert.deepEqual(decodeLifecycle(historical), {
+    ok: true,
+    value: historical,
   });
-
-  assert.equal(interrupted.phase, "actionable");
-  assert.equal(interrupted.execution, null);
-  assert.deepEqual(interrupted.transitionHistory.at(-1), {
-    operationId: "interrupt-1",
-    type: "execution_interrupted",
-    at: LATER,
-    from: "active",
-    to: "actionable",
-    sessionId: "session-a",
-    reason: `last activity ${NOW}; observed ${LATER}`,
-  });
-  assert.deepEqual(
-    interruptLifecycle(interrupted, {
-      operationId: "interrupt-1",
-      now: LATER,
-      expectedSessionId: "session-a",
-    }),
-    interrupted,
-  );
+  validateLifecycle(historical, issue("open", historical));
 });
 
 test("refuses waiting or done transitions while worktrees remain unreleased", () => {

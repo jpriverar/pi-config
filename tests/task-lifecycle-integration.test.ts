@@ -378,15 +378,12 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
       "actionable",
     );
 
-    const interrupted = await createTask("interrupted execution");
-    await service.claim(interrupted, owner, "claim-interrupted");
-    now += 10 * 60_000 + 1;
-    const interruption = await service.reconcileExecutionTimeout(
-      interrupted,
-      owner,
-    );
-    assert.equal(interruption.lifecycle?.phase, "actionable");
-    assert.equal(transitionCount(interruption, "execution_interrupted"), 1);
+    const idle = await createTask("idle execution");
+    const owned = await service.claim(idle, owner, "claim-idle");
+    now += 7 * 24 * 60 * 60_000;
+    const observed = await service.reconcileTask(idle, owner);
+    assert.deepEqual(observed.lifecycle, owned.lifecycle);
+    await service.defer(idle, "finish idle verification", owner, "defer-idle");
 
     const dirty = await createTask("dirty retained worktree");
     await service.claim(dirty, owner, "claim-dirty");
@@ -415,10 +412,7 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
     );
     const retained = await store.show(dirty);
     assert.equal(retained.lifecycle?.phase, "active");
-    assert.equal(
-      retained.lifecycle?.resources[0].cleanupState,
-      "release_pending",
-    );
+    assert.equal(retained.lifecycle?.resources[0].cleanupState, "active");
     assert.equal(
       await readFile(join(dirtyResource.path, "dirty.txt"), "utf8"),
       "preserve\n",

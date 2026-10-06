@@ -8,9 +8,10 @@ this service. There is no in-session fallback when the daemon is unavailable.
 Ordinary task mutations and execution-lease renewal remain available in Pi.
 
 Once enabled, the daemon may reconcile dependency waits, observe due PR/time
-checks, expire stale execution leases, and finish safe pending resource cleanup
-without an open Pi session. It cannot claim work, launch agents, merge PRs, infer
-manual outcomes, or force-delete unsafe worktrees. Missing or ambiguous evidence
+checks, and record native facts about interrupted worktree operations without an
+open Pi session. It never expires ownership or initiates worktree deletion.
+Wait, defer, and close require explicit release through `worktree_pool` first.
+The daemon cannot claim work, launch agents, merge PRs, or infer manual outcomes. Missing or ambiguous evidence
 is not success. This is a single-host design, not a distributed worker lease.
 
 ## Cutover checklist
@@ -21,8 +22,10 @@ is not success. This is a single-host design, not a distributed worker lease.
    the package checkout with mode `0600`; see the [configuration example](../README.md#optional-task-reconciliation-daemon).
 2. Stop any old standalone daemon using its own verified administration path.
 3. **Retire every old Pi process using this store** or reload each onto the new
-   package. An old loaded extension can still perform in-session reconciliation;
-   updating files alone does not retire loaded JavaScript. Inventory all sessions
+   package. For this ownership-policy cutover, use `/reload` rather than quitting
+   an old session: its old shutdown hook may still release worktrees. An old loaded
+   extension can also perform in-session reconciliation; updating files alone
+   does not retire loaded JavaScript. Inventory all sessions
    and verify their loaded version before continuing. The daemon singleton cannot
    prevent legacy code that does not acquire that lock from reconciling.
 4. After installation approval, prepare the inactive service:
@@ -74,9 +77,11 @@ to fifteen minutes, with one local lane and two external observations.
   Pi or updating the package does not replace the running daemon.
 - **Repeated check errors:** inspect the affected task and account configuration.
   Pi presents deduplicated attention notices, not raw observation/error strings.
-- **Pending cleanup:** preserve dirty, live, missing or contradictory worktree
-  evidence. Use the normal pool inspection/repair workflow; do not delete lock or
-  worktree directories to make a warning disappear.
+- **Pending release:** a present, valid explicit release remains pending until
+  the owner retries it. Reconciliation does not retry deletion. Historical automatic
+  cleanup reservations are cancelled only with valid native evidence; already
+  removed claims are finalized. Preserve ambiguous or contradictory evidence;
+  do not delete lock or worktree directories to make a warning disappear.
 
 Private runtime/health files are under the configured runtime root. The lifetime
 singleton is instead anchored at `<canonical-store>/pi-task-reconciler`, so a

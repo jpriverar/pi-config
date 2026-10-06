@@ -11,7 +11,6 @@ import type {
   Disposition,
   DispositionKind,
   ExecutionLease,
-  InterruptInput,
   LegacyLifecycleAdoption,
   LifecycleCheck,
   LifecycleIssue,
@@ -567,39 +566,6 @@ export function closeLifecycle(
     input.now,
     "done",
     { reason: input.disposition.reason },
-  );
-}
-
-export function interruptLifecycle(
-  state: LifecycleMetadataV1,
-  input: InterruptInput,
-): LifecycleMetadataV1 {
-  if (hasOperation(state, input.operationId)) return state;
-  requireInvariant(state.phase === "active", "interrupt requires phase active");
-  requireInvariant(
-    state.execution !== null,
-    "interrupt requires an execution lease",
-  );
-  assertText(input.operationId, "interrupt operationId");
-  assertText(input.expectedSessionId, "interrupt expectedSessionId");
-  assertTimestamp(input.now, "interrupt timestamp");
-  requireInvariant(
-    state.execution.sessionId === input.expectedSessionId,
-    `execution belongs to session ${state.execution.sessionId}, not ${input.expectedSessionId}`,
-  );
-  const execution = state.execution;
-  const phase: LifecyclePhase =
-    state.waiting === null ? "actionable" : "waiting";
-  return transition(
-    { ...state, execution: null },
-    input.operationId,
-    "execution_interrupted",
-    input.now,
-    phase,
-    {
-      sessionId: execution.sessionId,
-      reason: `last activity ${execution.lastActivityAt}; observed ${input.now}`,
-    },
   );
 }
 

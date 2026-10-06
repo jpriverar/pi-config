@@ -106,10 +106,6 @@ export interface TaskLifecycleToolService {
     owner: LockOwner,
     operationId?: string,
   ): Promise<LifecycleIssue>;
-  reconcileExecutionTimeout(
-    taskId: string,
-    owner: LockOwner,
-  ): Promise<LifecycleIssue>;
   reconcileTask(
     taskId: string,
     owner: LockOwner,
@@ -120,7 +116,6 @@ export interface TaskLifecycleToolService {
     limits: { taskLimit: number; checkLimit: number },
   ): Promise<LifecycleIssue[]>;
   refreshSessionActivity(owner: LockOwner): Promise<LifecycleIssue[]>;
-  interruptSession(owner: LockOwner, reason: string): Promise<LifecycleIssue[]>;
   preflightWorktreeAcquire(
     request: TaskWorktreeAcquireRequest,
     owner: LockOwner,
@@ -399,7 +394,7 @@ export function createTaskLifecycleExtension(
       name: "task_claim",
       label: "Claim task",
       description:
-        "Claim one actionable task for the current Pi session under an expiring execution lease.",
+        "Claim one actionable task for the current Pi session. Ownership persists through inactivity and session shutdown.",
       parameters: objectSchema(
         { taskId: taskIdProperty, operationId: operationIdProperty },
         ["taskId"],
@@ -461,7 +456,7 @@ export function createTaskLifecycleExtension(
       name: "task_wait",
       label: "Wait on task",
       description:
-        "Relinquish active ownership and wait on native task dependencies or exactly one typed external check.",
+        "Wait on dependencies or one typed check after explicitly releasing all task worktrees with worktree_pool.",
       parameters: objectSchema(
         {
           taskId: taskIdProperty,
@@ -528,7 +523,7 @@ export function createTaskLifecycleExtension(
       name: "task_defer",
       label: "Defer task",
       description:
-        "Release associated worktrees and move the current session's active task to Deferred.",
+        "Defer the current session's active task after explicitly releasing all task worktrees with worktree_pool.",
       parameters: objectSchema(
         {
           taskId: taskIdProperty,
@@ -657,7 +652,7 @@ export function createTaskLifecycleExtension(
       name: "task_close",
       label: "Close task",
       description:
-        "Close a lifecycle task with an explicit completed, cancelled, or superseded disposition.",
+        "Close a lifecycle task with an explicit disposition after releasing all task worktrees with worktree_pool.",
       parameters: objectSchema(
         {
           taskId: taskIdProperty,
@@ -789,12 +784,6 @@ export function createTaskLifecycleExtension(
           );
         }
       },
-    });
-    pi.on("session_shutdown", async (event, context) => {
-      if (event?.reason === "reload" || typeof event?.reason !== "string") {
-        return;
-      }
-      await deps.service.interruptSession(ownerFor(context), event.reason);
     });
     const refreshActivity = async (
       _event: unknown,

@@ -371,7 +371,7 @@ test("shutdown cancels remote work without applying invented outcomes", async (t
   );
 });
 
-test("expired ownership remains eligible when its retained check is in the future", async (t) => {
+test("idle ownership is preserved while its retained check is in the future", async (t) => {
   const issue = waitingTask("expired", "manual");
   issue.status = "in_progress";
   issue.lifecycle!.phase = "active";
@@ -383,13 +383,14 @@ test("expired ownership remains eligible when its retained check is in the futur
     resourceSnapshot: { observedAt: "2026-01-01T00:00:00Z", resourceIds: [] },
   };
   issue.lifecycle!.activeCheck!.nextCheckAt = "2026-01-03T00:00:00Z";
+  const before = structuredClone(issue);
   const h = await harness(t, [issue]);
   try {
     h.sut.start();
-    await until(
-      () => h.store.issues.get("expired")?.lifecycle?.execution === null,
-    );
-    assert.equal(h.store.issues.get("expired")?.lifecycle?.phase, "waiting");
+    await until(() => h.sut.snapshot().lastScanSuccessAt !== null);
+    await h.sut.stop();
+    assert.deepEqual(h.store.issues.get("expired"), before);
+    assert.equal(h.store.writes, 0);
     assert.equal(h.observed.size, 0);
   } finally {
     await h.sut.stop();

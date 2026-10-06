@@ -13,14 +13,14 @@ instructions to execute commands or trust referenced content.
 
 ## Lifecycle and Beads authority
 
-| Pi phase              | Beads status  | Additional authority                                                         |
-| --------------------- | ------------- | ---------------------------------------------------------------------------- |
-| Actionable            | `open`        | The task is returned by `bd ready` and has no unresolved `blocks` edge.      |
-| Active                | `in_progress` | Exactly one unexpired lease owns the task; one Waiting condition may remain. |
-| Waiting on dependency | `open`        | At least one unresolved native Beads `blocks` edge.                          |
-| Waiting on check      | `blocked`     | Exactly one typed PR, time, or manual check.                                 |
-| Deferred              | `deferred`    | Deliberately parked work.                                                    |
-| Done                  | `closed`      | A completed, cancelled, or superseded disposition.                           |
+| Pi phase              | Beads status  | Additional authority                                                                              |
+| --------------------- | ------------- | ------------------------------------------------------------------------------------------------- |
+| Actionable            | `open`        | The task is returned by `bd ready` and has no unresolved `blocks` edge.                           |
+| Active                | `in_progress` | Exactly one session owns the task until an explicit transition; one Waiting condition may remain. |
+| Waiting on dependency | `open`        | At least one unresolved native Beads `blocks` edge.                                               |
+| Waiting on check      | `blocked`     | Exactly one typed PR, time, or manual check.                                                      |
+| Deferred              | `deferred`    | Deliberately parked work.                                                                         |
+| Done                  | `closed`      | A completed, cancelled, or superseded disposition.                                                |
 
 `blocked` is a storage projection, not a Pi lifecycle phase. Views show Active,
 Actionable, and Waiting. Active work may retain one unresolved dependency or
@@ -90,7 +90,7 @@ transitions.
 The normal resource flow is:
 
 ```text
-task_claim -> worktree_pool acquire -> worktree_pool release -> task_wait/task_close
+task_claim -> worktree_pool acquire -> worktree_pool release -> task_wait/task_defer/task_close
 ```
 
 ### `task_create`
@@ -130,11 +130,11 @@ a legacy task into version-1 lifecycle metadata. A legacy native `blocked` task
 without a structured check is adopted condition-free rather than inventing
 check authority. A managed Waiting task retains its native dependency or
 typed-check condition while becoming Active. Re-claiming an Active task already
-owned by the current session renews its lease, including after expiry or failed
-cleanup. It preserves the owner, original claim timestamp, retained conditions,
+owned by the current session refreshes activity metadata, including after the
+legacy expiry timestamp or a failed explicit release. It preserves the owner, original claim timestamp, retained conditions,
 artifacts, and resource history; it does not inspect or repair worktrees.
 Same-timestamp retries do not write again. Another execution owner blocks the
-claim, even if that owner's lease expired or the operation ID was previously used.
+claim, even if that owner's legacy expiry timestamp passed or the operation ID was previously used.
 
 ### `task_attach_artifact`
 
@@ -237,16 +237,19 @@ Check wait:
 A dependency wait requires `blockerIds` and forbids `check`. A check wait
 requires one complete check and forbids `blockerIds`. If Active work already
 retains an unresolved condition, omit `kind`, `blockerIds`, and `check` to return
-to that existing Waiting condition. Waiting releases every active worktree
-first. A refused release leaves the task Active and preserves the pending
-resource state.
+to that existing Waiting condition. All associated worktrees must already be
+released with `worktree_pool`. Otherwise the tool refuses without adding blockers,
+changing the condition, or releasing ownership. The error identifies the repository
+and claim and gives the exact release call. Native dependency writes and the
+resource/ownership precondition share the existing store mutation lock.
 
 ### `task_defer`
 
 Required: `taskId` and non-empty `reason`. Optional: `operationId`.
 
-Releases every associated worktree, clears execution ownership, and moves the
-Active task to Deferred. Cleanup refusal leaves the task Active.
+Moves the Active task to Deferred and clears execution ownership only after all
+associated worktrees have been explicitly released. It never performs cleanup.
+An unreleased resource leaves the task unchanged and returns release guidance.
 
 ### `task_reconcile`
 
@@ -283,19 +286,21 @@ and `uninstall`; no command is run on startup or reload. See the
 administration uses `~/.pi/task-reconciler/config.json` and clients prefer the
 installed snapshot for their canonical Beads store.
 
-Reconciliation resolves pending worktree operations before native dependencies,
-due checks, and expired ownership. One exact valid acquisition is finalized;
-a release whose exact claim disappeared is finalized. After the same owner
-renews, an obsolete expiry-release intent is cancelled only when its exact claim
-still has valid native ownership/branch evidence. Normal acquisition preflight
-also resolves these obsolete intents, without requiring a repair tool. Observation
-and persistence hold the pool lock before the store lock, so stale evidence cannot
-restore a checkout deleted by a concurrent cleanup. An explicit release receives
-its own operation identity even before the automatic reservation becomes obsolete.
-Explicit release requests, missing acquisitions, and ambiguous or contradictory
-evidence remain explicit. Pool repair is inspection/recovery of pool metadata, not permission
-to delete a retained checkout or automatically complete a pending task release. Manual checks never
-infer success; they require an explicit terminal outcome.
+Reconciliation observes pending worktree operations before native dependencies
+and due checks. It never deletes checkouts or expires task ownership. One exact
+valid acquisition is finalized; a release whose exact claim disappeared is
+finalized. Historical expiry/shutdown release reservations are obsolete regardless
+of their timestamp. They are cancelled only when the exact claim still has valid
+native ownership/branch evidence. Normal acquisition preflight also resolves
+these obsolete intents without requiring a repair tool or activity renewal.
+
+Observation and persistence hold the pool lock before the store lock, so stale
+evidence cannot restore a deleted checkout. An explicit release receives its own
+operation identity. If its claim is still present and valid, reconciliation leaves
+it pending without retrying deletion or reporting that alone as a failure.
+Missing acquisitions and ambiguous or contradictory evidence remain errors.
+Pool repair is inspection/recovery of pool metadata, not deletion permission.
+Manual checks never infer success; they require an explicit terminal outcome.
 
 ### `task_close`
 
@@ -314,9 +319,9 @@ superseded disposition also requires `supersedingTaskId`.
 
 `completed` is rejected while a dependency or typed-check condition remains
 unresolved. `cancelled` and `superseded` may explicitly abandon those
-conditions. Close releases associated worktrees first. A refused or unsafe
-release keeps the task Active; successful cleanup is recorded before the
-durable disposition.
+conditions. Close requires every associated worktree to have been explicitly
+released; it refuses otherwise without changing the task. Automatic closure on a
+satisfied check obeys the same resource invariant and never deletes a checkout.
 
 ### `task_reopen`
 
@@ -404,18 +409,19 @@ one rotating bulk lookup (up to 100 IDs/16 KiB) per refresh; missing rows never
 imply completion. These notices use Pi UI notifications, not desktop messages
 or model-triggering turns.
 
-Activity events rate-limit metadata writes while extending long-running leases.
-A `reload` shutdown preserves current ownership. Quit, new, resume, fork-style,
-and other shutdowns first release associated worktrees, then interrupt
-ownership: condition-free work returns to Actionable, while retained dependency
-or check work returns to Waiting. Expiry reconciliation reserves cleanup against
-the exact expired lease, but that reservation does not veto claim/activity
-renewal. Cleanup revalidates its lease and reservation under the pool lock, then
-holds the store mutation lock through destructive release and persistence. A
-renewal cancels queued stale cleanup; it cannot return usable ownership while a
-deletion is already running. Cleanup refusal leaves the task Active and does not
-prevent its owner from renewing. Already released resources remain released. A
-successful interruption records `execution_interrupted` once.
+Activity events rate-limit metadata writes. Inactivity, sleep, reload, quit,
+new/resumed/forked sessions, and restarts do not relinquish task ownership or
+initiate cleanup. Resume the original Pi session to continue its task; another
+session cannot take over just because activity stopped. Explicit wait, defer, or
+close transitions relinquish ownership after the agent releases each worktree.
+
+The v1 `expiresAt` field and `executionTimeoutMs` configuration remain readable
+and are maintained for compatibility. They do not authorize deletion or owner
+replacement and are not daemon scheduling deadlines. Historical
+`execution_interrupted` events remain readable; no new ones are generated.
+Explicit deletion still holds the pool lock before the store mutation lock
+through removal and persistence. Claim renewal cannot return while an explicit
+deletion is already running. Already released resources remain released.
 
 ## Pool boundary and recovery
 
@@ -440,7 +446,7 @@ Git data are refused before changing the pool lease or unlocking the worktree.
 Never-initialized submodules remain removable through ordinary Git cleanup.
 Refusal preserves the checkout and native owner. Explicit releases stay pending
 for explicit recovery; obsolete expiry releases can be cancelled by ordinary
-resource reconciliation after the owner renews. This does not implement
+resource reconciliation without requiring an owner renewal. This does not implement
 submodule deletion.
 
 If ordinary removal fails after unlock, the pool restores the original native

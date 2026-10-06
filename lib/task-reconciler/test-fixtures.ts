@@ -167,7 +167,7 @@ export class MemoryLifecycleStore implements LifecycleStore {
   ) {
     return this.access(async () => {
       const current = structuredClone(this.issues.get(id)!);
-      const mutation = await operation(current);
+      const mutation = await operation(current, () => this.addBlocker());
       if (mutation !== null) {
         const saved = {
           ...current,

@@ -288,8 +288,15 @@ export function createLifecycleStore(
       join(store, "pi-task-lifecycle"),
       owner,
       async () => {
-        const current = await readOne(id, `read issue ${id}`);
-        const mutation = await operation(current.issue);
+        let current = await readOne(id, `read issue ${id}`);
+        const mutation = await operation(current.issue, async (blockerIds) => {
+          for (const blockerId of blockerIds)
+            assertIdentifier(blockerId, "blocker issue id");
+          for (const blockerId of blockerIds)
+            await addBlockerUnlocked(id, blockerId);
+          current = await readOne(id, `read blockers for ${id}`);
+          return current.issue;
+        });
         if (mutation === null) return current.issue;
         validateMutation(mutation, id, store);
         const mergedMetadata = mergeLifecycleMetadata(
@@ -319,6 +326,20 @@ export function createLifecycleStore(
     );
   }
 
+  async function addBlockerUnlocked(
+    dependentId: string,
+    blockerId: string,
+  ): Promise<void> {
+    await execute(`add blocker ${blockerId} to ${dependentId}`, [
+      "dep",
+      "add",
+      dependentId,
+      blockerId,
+      "--type",
+      "blocks",
+    ]);
+  }
+
   async function addBlocker(
     dependentId: string,
     blockerId: string,
@@ -330,14 +351,7 @@ export function createLifecycleStore(
       join(store, "pi-task-lifecycle"),
       owner,
       async () => {
-        await execute(`add blocker ${blockerId} to ${dependentId}`, [
-          "dep",
-          "add",
-          dependentId,
-          blockerId,
-          "--type",
-          "blocks",
-        ]);
+        await addBlockerUnlocked(dependentId, blockerId);
       },
       lockDependencies,
     );

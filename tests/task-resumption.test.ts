@@ -22,7 +22,7 @@ function signal() {
 
 for (const obstacle of ["initialized-submodule", "dirty-work"] as const) {
   test(
-    `normal acquisition resumes after expired ${obstacle} cleanup`,
+    `normal acquisition preserves ${obstacle} after legacy cleanup reservations`,
     { timeout: 120_000 },
     async (t) => {
       const h = await fixture(t, obstacle === "initialized-submodule");
@@ -62,14 +62,18 @@ for (const obstacle of ["initialized-submodule", "dirty-work"] as const) {
         uuid: randomUUID,
       });
       const daemon = { ...h.owner, sessionId: "fixture-reconciler" };
-      await assert.rejects(
-        resumed.reconcileExecutionTimeout(h.task.id, daemon),
-        /still owns worktree/,
+      await resumed.prepareWorktreeRelease(
+        h.task.id,
+        h.acquired.claimId,
+        h.owner,
+        `execution-interrupted:${original.sessionId}:${original.expiresAt}:release:${h.acquired.claimId}`,
       );
+      const observed = await resumed.reconcileTask(h.task.id, daemon);
+      assert.deepEqual(observed.lifecycle!.execution, original);
       const pending = (await store.show(h.task.id)).lifecycle!.resources;
       assert.deepEqual(
         pending.map((resource) => resource.cleanupState),
-        ["release_pending", "active"],
+        ["active", "active"],
       );
 
       const claimed = await resumed.claim(h.task.id, h.owner, "resume");
@@ -175,22 +179,26 @@ function lockedStore(
 }
 
 test(
-  "queued cleanup rechecks the renewed lease inside the real pool/store locks",
+  "idle reconciliation does not acquire the pool lock or relinquish ownership",
   { timeout: 120_000 },
   async (t) => {
     const h = await fixture(t);
-    const pending = signal();
-    const waited = signal();
     const releasePool = signal();
     const poolHeld = signal();
     const initial = await h.store.show(h.task.id);
-    const store = lockedStore(h, initial, pending.resolve, waited.resolve);
-    const now = Date.parse(initial.lifecycle!.execution!.expiresAt) + 1_000;
+    const store = lockedStore(
+      h,
+      initial,
+      () => {},
+      () => {},
+    );
     const service = new TaskLifecycleService({
       store,
       pool: h.runtime.pool,
       ...fixturePolicy,
-      now: () => now,
+      now: () =>
+        Date.parse(initial.lifecycle!.execution!.expiresAt) +
+        7 * 24 * 60 * 60_000,
       uuid: randomUUID,
     });
     const held = h.runtime.pool.withClaimObservation(
@@ -203,48 +211,30 @@ test(
       },
     );
     await poolHeld.promise;
-    const cleanup = service.reconcileExecutionTimeout(h.task.id, {
-      ...h.owner,
-      sessionId: "fixture-reconciler",
-    });
-    let claim: Promise<LifecycleIssue> | undefined;
+    const reconciliation = service.prepareReconciliation(
+      { taskId: h.task.id, requestId: "idle" },
+      { ...h.owner, sessionId: "daemon" },
+    );
     try {
-      await Promise.race([
-        pending.promise,
-        cleanup.then(() => {
-          throw new Error("cleanup finished without reserving release");
+      const result = await Promise.race([
+        reconciliation,
+        delay(1000).then(() => {
+          throw new Error("idle reconciliation waited on the pool");
         }),
       ]);
-      claim = service.claim(h.task.id, h.owner, "resume");
-      const claimed = await claim;
-      assert.ok(Date.parse(claimed.lifecycle!.execution!.expiresAt) > now);
-      releasePool.resolve();
-      await held;
-      const observed = await cleanup;
-      assert.equal(
-        observed.lifecycle!.execution!.expiresAt,
-        claimed.lifecycle!.execution!.expiresAt,
-      );
-      await service.preflightWorktreeAcquire(
-        { taskId: h.task.id, repository: "repo", branch: "jpriverar/next" },
-        h.owner,
-      );
-      assert.equal(
-        (await store.show(h.task.id)).lifecycle!.resources[0].cleanupState,
-        "active",
+      assert.equal(result.kind, "complete");
+      if (result.kind === "complete") assert.equal(result.outcome, "unchanged");
+      assert.deepEqual(
+        (await store.show(h.task.id)).lifecycle,
+        initial.lifecycle,
       );
       assert.equal(
         await h.mustGit(h.acquired.path, ["rev-parse", "HEAD"]),
         h.acquired.head,
       );
-      assert.equal(
-        (await h.runtime.pool.list("repo")).repositories[0].worktrees[0]
-          .evidence.nativeClaimMatches,
-        true,
-      );
     } finally {
       releasePool.resolve();
-      await Promise.allSettled([held, cleanup, ...(claim ? [claim] : [])]);
+      await Promise.allSettled([held, reconciliation]);
     }
   },
 );
@@ -277,10 +267,12 @@ test(
       now: () => now,
       uuid: randomUUID,
     });
-    const cleanup = service.reconcileExecutionTimeout(h.task.id, {
-      ...h.owner,
-      sessionId: "fixture-reconciler",
-    });
+    const cleanup = service.releaseWorktree(
+      h.task.id,
+      h.acquired.claimId,
+      h.owner,
+      "explicit-release",
+    );
     let claim: Promise<LifecycleIssue> | undefined;
     try {
       await Promise.race([

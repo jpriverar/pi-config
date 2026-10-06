@@ -67,13 +67,20 @@ for (const deinitialized of [false, true]) {
       (await h.runtime.pool.list("repo")).repositories[0].worktrees.length,
       1,
     );
-    await assert.rejects(
-      h.service.prepareReconciliation(
-        { taskId: h.task.id, requestId: "normal" },
-        h.owner,
-      ),
-      /worktree release remains pending/,
+    const before = await h.store.show(h.task.id);
+    const observed = await h.service.prepareReconciliation(
+      { taskId: h.task.id, requestId: "normal" },
+      h.owner,
     );
+    assert.equal(observed.kind, "complete");
+    if (observed.kind === "complete")
+      assert.equal(observed.outcome, "unchanged");
+    assert.deepEqual(await h.store.show(h.task.id), before);
+    const retained = (await h.runtime.pool.list("repo")).repositories[0]
+      .worktrees[0];
+    assert.equal(retained.claimId, h.acquired.claimId);
+    assert.equal(retained.evidence.nativeClaimMatches, true);
+    await fs.access(h.acquired.path);
   });
 }
 

@@ -11,7 +11,7 @@ import type {
 export interface ReconciliationCandidate {
   taskId: string;
   eligibleAtMs: number;
-  reasons: readonly ("execution" | "resource" | "dependency" | "check")[];
+  reasons: readonly ("resource" | "dependency" | "check")[];
 }
 
 export interface ReconciliationScan {
@@ -41,12 +41,7 @@ export function selectDueCandidates(
     const reasons: ReconciliationCandidate["reasons"][number][] = [];
     const deadlines: number[] = [];
     const enteredAt = Date.parse(lifecycle.stateEnteredAt);
-    const execution = lifecycle.execution;
     if (lifecycle.phase === "active") {
-      if (execution !== null && Date.parse(execution.expiresAt) <= nowMs) {
-        reasons.push("execution");
-        deadlines.push(Date.parse(execution.expiresAt));
-      }
       const pending = lifecycle.resources.filter(
         (r) =>
           r.cleanupState === "acquiring" ||

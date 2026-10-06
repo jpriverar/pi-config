@@ -29,6 +29,7 @@ export interface ExecutionLease {
   sessionId: string;
   claimedAt: string;
   lastActivityAt: string;
+  // Retained for v1 record compatibility, not ownership or cleanup authority.
   expiresAt: string;
   resourceSnapshot: { observedAt: string; resourceIds: string[] };
 }
@@ -212,6 +213,8 @@ export interface LifecycleStore {
     owner: LockOwner,
     operation: (
       issue: LifecycleIssue,
+      // Share the mutation lock so a refused transition cannot leave new edges.
+      addBlockers: (blockerIds: readonly string[]) => Promise<LifecycleIssue>,
     ) => Mutation | null | Promise<Mutation | null>,
   ): Promise<LifecycleIssue>;
   addBlocker(
@@ -257,12 +260,6 @@ export interface ReopenInput {
   now: string;
   reason: string;
   hasUnresolvedBlockers: boolean;
-}
-
-export interface InterruptInput {
-  operationId: string;
-  now: string;
-  expectedSessionId: string;
 }
 
 export interface BeginWorktreeAcquireInput {
