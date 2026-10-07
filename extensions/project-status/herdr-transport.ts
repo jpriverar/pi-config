@@ -88,7 +88,6 @@ export function createHerdrMetadataSender(
       const assignment = JSON.stringify([
         tokens.pi_task_state,
         tokens.pi_task_id,
-        tokens.pi_task_expires_at,
       ]);
       if (assignment === refreshedAssignment) return true;
 

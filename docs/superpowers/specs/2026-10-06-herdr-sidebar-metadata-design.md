@@ -122,14 +122,13 @@ Select severity from the unrounded percentage and display its floor as the whole
 
 Derive ownership from normalized lifecycle metadata and the current Pi session ID, not a task mentioned in a prompt, the project/workstream, or the session name.
 
-- Exactly one active claim for this session with an unexpired lease: show its title.
+- Exactly one active claim for this session: show its title, including after inactivity.
 - A successful authoritative lookup finds no active claim: `Unassigned`.
 - Ownership cannot be read or is ambiguous: `Task unavailable`.
-- One matching active record has an expired lease: `Lease expired`.
 
-Multiple matching active records are ambiguous even if one appears preferable. Do not choose one by recency or title. Expiry is not proof that cleanup or release succeeded.
+Multiple matching active records are ambiguous even if one appears preferable. Do not choose one by recency or title. Legacy expiry timestamps do not end ownership or prove cleanup/release.
 
-Refresh after task-changing tool execution using authoritative state, including failed/uncertain mutations where necessary; never optimistically apply a requested transition. Preserve the assignment when a failed close/release leaves the claim intact. Refresh on existing session interactions and before new work. Arm only a one-shot deadline for a known lease expiry, with session-generation guards; re-read before changing the display because activity may have renewed the lease. This display path never renews a lease.
+Refresh after task-changing tool execution using authoritative state, including failed/uncertain mutations where necessary; never optimistically apply a requested transition. Preserve the assignment when a failed close/release leaves the claim intact. Refresh on existing session interactions and before new work. Do not arm ownership-expiry timers; ownership persists until an explicit lifecycle transition. This display path never changes ownership.
 
 External mutations are observed at the next refresh/interaction, not promised as a continuous live stream. No background database polling is introduced.
 
@@ -152,7 +151,7 @@ Focused tests must cover:
 
 - Current model at startup; model switching; absent model; resume/reload; late previous-session work.
 - Context thresholds just below/at 75 and 90, unknown after compaction, warning-to-critical replacement, and indicator clearing.
-- Confirmed no claim, correct session ownership, another session's task, expired lease, conflicting claims, unavailable store, and failed claim/close/release.
+- Confirmed no claim, correct session ownership, another session's task, idle ownership past legacy expiry, conflicting claims, unavailable store, and failed claim/close/release.
 - Headless-child isolation and preservation of lifecycle/summary reporting.
 - Space tab creation, closure, focus, rename, movement, zero/one/many tabs, missing active-tab evidence, unchanged snapshots, command timeout, and overlapping refreshes.
 - Configuration contains no branch/ahead-behind tokens in space rows and preserves other agent layouts and theme styling.

@@ -6,9 +6,9 @@ import {
   normalizeMetadata,
   runtimeTokens,
   selectTaskAssignment,
+  taskTokens,
 } from "./herdr-values.js";
 
-const now = Date.parse("2026-10-06T12:00:00Z");
 function owned(
   sessionId = "session-1",
   expiresAt = "2026-10-06T13:00:00Z",
@@ -42,36 +42,35 @@ function owned(
   };
 }
 
-test("shows only the current session's authoritative unexpired claim", () => {
+test("shows only the current session's authoritative active claim", () => {
   assert.deepEqual(
-    selectTaskAssignment([owned("other"), owned()], "session-1", now),
+    selectTaskAssignment([owned("other"), owned()], "session-1"),
     {
       label: "Improve sidebar identity",
       state: "assigned",
       taskId: "jp-example",
-      expiresAt: Date.parse("2026-10-06T13:00:00Z"),
     },
   );
-  assert.deepEqual(selectTaskAssignment([owned("other")], "session-1", now), {
+  assert.deepEqual(selectTaskAssignment([owned("other")], "session-1"), {
     label: "Unassigned",
     state: "unassigned",
   });
-  assert.deepEqual(selectTaskAssignment([], "session-1", now), {
+  assert.deepEqual(selectTaskAssignment([], "session-1"), {
     label: "Unassigned",
     state: "unassigned",
   });
 });
 
 test("does not turn unavailable or ambiguous ownership into Unassigned", () => {
-  assert.deepEqual(selectTaskAssignment(undefined, "session-1", now), {
+  assert.deepEqual(selectTaskAssignment(undefined, "session-1"), {
     label: "Task unavailable",
     state: "unavailable",
   });
-  assert.deepEqual(selectTaskAssignment([owned(), owned()], "session-1", now), {
+  assert.deepEqual(selectTaskAssignment([owned(), owned()], "session-1"), {
     label: "Task unavailable",
     state: "unavailable",
   });
-  assert.deepEqual(selectTaskAssignment([owned()], "", now), {
+  assert.deepEqual(selectTaskAssignment([owned()], ""), {
     label: "Task unavailable",
     state: "unavailable",
   });
@@ -85,34 +84,35 @@ test("does not turn unavailable or ambiguous ownership into Unassigned", () => {
         },
       ],
       "session-1",
-      now,
     ),
     { label: "Task unavailable", state: "unavailable" },
   );
   assert.deepEqual(
-    selectTaskAssignment([{ ...owned(), status: "open" }], "session-1", now),
+    selectTaskAssignment([{ ...owned(), status: "open" }], "session-1"),
     { label: "Task unavailable", state: "unavailable" },
   );
 });
 
-test("distinguishes exact expiry and invalid lease evidence", () => {
+test("validates legacy timestamps without expiring ownership", () => {
   assert.deepEqual(
     selectTaskAssignment(
       [owned("session-1", "2026-10-06T12:00:00Z")],
       "session-1",
-      now,
     ),
-    { label: "Lease expired", state: "expired" },
+    {
+      label: "Improve sidebar identity",
+      state: "assigned",
+      taskId: "jp-example",
+    },
   );
   assert.deepEqual(
-    selectTaskAssignment([owned("session-1", "not-a-date")], "session-1", now),
+    selectTaskAssignment([owned("session-1", "not-a-date")], "session-1"),
     { label: "Task unavailable", state: "unavailable" },
   );
   assert.deepEqual(
     selectTaskAssignment(
       [owned(), owned("session-1", "2026-10-06T11:00:00Z")],
       "session-1",
-      now,
     ),
     { label: "Task unavailable", state: "unavailable" },
   );
@@ -130,17 +130,15 @@ test("normalizes display text without terminal controls or broken Unicode", () =
     selectTaskAssignment(
       [{ ...owned(), title: "\u001b[31mFix\n auth\u001b[0m" }],
       "session-1",
-      now,
     ),
     {
       label: "Fix auth",
       state: "assigned",
       taskId: "jp-example",
-      expiresAt: now + 3_600_000,
     },
   );
   assert.deepEqual(
-    selectTaskAssignment([{ ...owned(), title: "\n " }], "session-1", now),
+    selectTaskAssignment([{ ...owned(), title: "\n " }], "session-1"),
     { label: "Task unavailable", state: "unavailable" },
   );
 });
@@ -187,12 +185,11 @@ test("uses the actual model name or ID and clears unknown session values", () =>
 test("carries claim identity independently of task-title sentinel text", () => {
   for (const title of ["Unassigned", "Task unavailable", "Lease expired"]) {
     assert.deepEqual(
-      selectTaskAssignment([{ ...owned(), title }], "session-1", now),
+      selectTaskAssignment([{ ...owned(), title }], "session-1"),
       {
         label: title,
         state: "assigned",
         taskId: "jp-example",
-        expiresAt: now + 3_600_000,
       },
     );
   }
@@ -200,12 +197,32 @@ test("carries claim identity independently of task-title sentinel text", () => {
 
 test("does not publish a normalized or truncated task identity", () => {
   for (const id of ["", " task ", "task\nname", "x".repeat(81)]) {
+    assert.deepEqual(selectTaskAssignment([{ ...owned(), id }], "session-1"), {
+      label: "Task unavailable",
+      state: "unavailable",
+    });
+  }
+});
+
+for (const legacyExpiry of ["2026-10-06T12:00:00Z", "2026-09-29T12:00:00Z"]) {
+  test(`durable typed assignment survives legacy expiry ${legacyExpiry}`, () => {
     assert.deepEqual(
-      selectTaskAssignment([{ ...owned(), id }], "session-1", now),
+      selectTaskAssignment([owned("session-1", legacyExpiry)], "session-1"),
       {
-        label: "Task unavailable",
-        state: "unavailable",
+        state: "assigned",
+        label: "Improve sidebar identity",
+        taskId: "jp-example",
       },
     );
-  }
+  });
+}
+
+test("durable task tokens clear obsolete deadline metadata", () => {
+  const assignment = {
+    state: "assigned" as const,
+    label: "Owned",
+    taskId: "jp-one",
+    expiresAt: 2000,
+  };
+  assert.equal(taskTokens(assignment).pi_task_expires_at, null);
 });

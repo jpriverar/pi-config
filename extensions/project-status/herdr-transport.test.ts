@@ -169,7 +169,7 @@ test("refreshes space counts after ownership changes but not model-only writes",
     await send({ ...values, pi_task_expires_at: "3000000" }, 3, signal),
     true,
   );
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 5);
   assert.equal(
     await send(
       {
@@ -184,7 +184,7 @@ test("refreshes space counts after ownership changes but not model-only writes",
     ),
     true,
   );
-  assert.equal(calls.length, 10);
+  assert.equal(calls.length, 8);
 });
 
 for (const plugins of [[], [{ plugin_id: "jp.space-tabs", enabled: false }]]) {
@@ -225,4 +225,20 @@ test("a rejected metadata write never triggers count refresh", async () => {
   })!;
   assert.equal(await send(values, 1, new AbortController().signal), false);
   assert.equal(calls.length, 1);
+});
+
+test("obsolete deadline changes alone do not refresh task counts", async () => {
+  const calls: string[][] = [];
+  const send = createHerdrMetadataSender(environment, async (_file, args) => {
+    calls.push([...args]);
+    return replyFor(args);
+  })!;
+  const signal = new AbortController().signal;
+  assert.equal(await send(values, 1, signal), true);
+  assert.equal(calls.length, 3);
+  assert.equal(
+    await send({ ...values, pi_task_expires_at: "1" }, 2, signal),
+    true,
+  );
+  assert.equal(calls.length, 4);
 });

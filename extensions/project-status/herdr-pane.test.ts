@@ -18,13 +18,6 @@ function harness(
   const sent: Array<{ values: PaneTokens; seq: number }> = [];
   let percent: number | null = 12;
   let model = "model-one";
-  let now = 1000;
-  let refreshes = 0;
-  const timers: Array<{
-    callback: () => void;
-    delay: number;
-    cancelled: boolean;
-  }> = [];
   const context = {
     mode: options.mode ?? "tui",
     model: { id: model },
@@ -32,34 +25,15 @@ function harness(
   } as any;
   const reporter = createPaneReporter({
     context,
-    refreshTask: async () => {
-      refreshes++;
-    },
     send: async (values, seq, signal) => {
       sent.push({ values: { ...values }, seq });
       return options.send ? options.send(values, seq, signal) : true;
-    },
-    clock: {
-      now: () => now,
-      setTimeout(callback, delay) {
-        const timer = { callback, delay, cancelled: false };
-        timers.push(timer);
-        return timer;
-      },
-      clearTimeout(timer) {
-        (timer as (typeof timers)[number]).cancelled = true;
-      },
     },
   });
   return {
     reporter,
     context,
     sent,
-    timers,
-    refreshes: () => refreshes,
-    setNow: (n: number) => {
-      now = n;
-    },
     runtime: (name: string, value: number | null) => {
       model = name;
       context.model = { id: model };
@@ -85,7 +59,6 @@ test("initializes current runtime without falsely claiming Unassigned", async ()
     state: "assigned",
     taskId: "jp-task",
     label: "Review auth",
-    expiresAt: 2000,
   });
   await setImmediate();
   assert.equal(h.sent.at(-1)!.values.pi_task, "Review auth");
@@ -105,7 +78,6 @@ for (const mode of ["rpc", "json", "print"]) {
     await setImmediate();
     assert.equal(h.reporter, undefined);
     assert.deepEqual(h.sent, []);
-    assert.deepEqual(h.timers, []);
   });
 }
 
@@ -126,7 +98,6 @@ test("suppresses unchanged data and serializes bursts to the latest value", asyn
     state: "assigned",
     taskId: "jp-task",
     label: "Current task",
-    expiresAt: 2000,
   });
   assert.equal(h.sent.length, 1);
   finish(true);
@@ -137,7 +108,7 @@ test("suppresses unchanged data and serializes bursts to the latest value", asyn
     pi_task: "Current task",
     pi_task_state: "assigned",
     pi_task_id: "jp-task",
-    pi_task_expires_at: "2000",
+    pi_task_expires_at: null,
     pi_context_warning: null,
     pi_context_critical: "Context 91%",
   });
@@ -146,7 +117,6 @@ test("suppresses unchanged data and serializes bursts to the latest value", asyn
     state: "assigned",
     taskId: "jp-task",
     label: "Current task",
-    expiresAt: 2000,
   });
   await setImmediate();
   assert.equal(h.sent.length, 2);
@@ -166,37 +136,23 @@ test("failed delivery waits for a meaningful refresh instead of spinning", async
   await h.reporter!.stop();
 });
 
-test("lease renewal replaces one-shot expiry and shutdown suppresses stale callbacks", async () => {
+test("shutdown clears owned metadata and suppresses later updates", async () => {
   const h = harness();
   h.reporter!.updateTask({
     state: "assigned",
-    taskId: "jp-task",
+    taskId: "jp-one",
     label: "Owned",
-    expiresAt: 2000,
   });
-  assert.equal(h.timers[0].delay, 1000);
-  h.reporter!.updateTask({
-    state: "assigned",
-    taskId: "jp-task",
-    label: "Owned",
-    expiresAt: 3000,
-  });
-  assert.equal(h.timers[0].cancelled, true);
-  h.setNow(3000);
-  h.timers[1].callback();
   await setImmediate();
-  assert.equal(h.refreshes(), 1);
+  assert.equal(h.sent.at(-1)!.values.pi_task, "Owned");
   await h.reporter!.stop();
-  h.timers[1].callback();
   h.reporter!.updateTask({
     state: "assigned",
-    taskId: "jp-task",
+    taskId: "jp-one",
     label: "Stale",
-    expiresAt: 2000,
   });
   h.runtime("stale", 99);
   await setImmediate();
-  assert.equal(h.refreshes(), 1);
   assert.deepEqual(h.sent.at(-1)!.values, {
     pi_model: null,
     pi_task: null,
@@ -238,16 +194,15 @@ test("stop cancels an in-flight send before clearing only owned keys", async () 
 
 test("clears claim identity whenever ownership becomes non-assigned", async () => {
   const h = harness();
-  for (const state of ["unassigned", "unavailable", "expired"] as const) {
+  for (const state of ["unassigned", "unavailable"] as const) {
     h.reporter!.updateTask({
       state: "assigned",
       label: "Unassigned",
       taskId: "jp-owned",
-      expiresAt: 2000,
     });
     await setImmediate();
     assert.equal(h.sent.at(-1)!.values.pi_task_id, "jp-owned");
-    assert.equal(h.sent.at(-1)!.values.pi_task_expires_at, "2000");
+    assert.equal(h.sent.at(-1)!.values.pi_task_expires_at, null);
     h.reporter!.updateTask({ state, label: "No active claim" });
     await setImmediate();
     assert.equal(h.sent.at(-1)!.values.pi_task_state, state);
@@ -255,4 +210,24 @@ test("clears claim identity whenever ownership becomes non-assigned", async () =
     assert.equal(h.sent.at(-1)!.values.pi_task_expires_at, null);
   }
   await h.reporter!.stop();
+});
+
+test("durable typed assignment does not arm an expiry timer", async (t) => {
+  const h = harness();
+  await setImmediate();
+  const timers = t.mock.method(globalThis, "setTimeout");
+  try {
+    const assignment = {
+      state: "assigned" as const,
+      label: "Owned",
+      taskId: "jp-one",
+      expiresAt: Date.now() + 1000,
+    };
+    h.reporter!.updateTask(assignment);
+    assert.equal(timers.mock.callCount(), 0);
+    await setImmediate();
+    assert.equal(h.sent.at(-1)!.values.pi_task, "Owned");
+  } finally {
+    await h.reporter!.stop();
+  }
 });

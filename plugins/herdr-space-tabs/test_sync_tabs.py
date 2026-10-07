@@ -8,7 +8,6 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
 
 from sync_tabs import workspace_tokens
 
@@ -71,11 +70,6 @@ def pi_pane(pane_id="w1:p1", task_id="jp-one", state="assigned", expires="200000
 
 
 class ClaimCountTests(unittest.TestCase):
-    def setUp(self):
-        clock = patch("sync_tabs.time.time", return_value=1000)
-        clock.start()
-        self.addCleanup(clock.stop)
-
     def test_counts_distinct_claims_including_idle_but_not_unassigned_or_other_agents(self):
         value = snapshot()
         value["panes"] = [pi_pane(), pi_pane("w1:p2"), pi_pane("w1:p3", "jp-two"),
@@ -97,17 +91,25 @@ class ClaimCountTests(unittest.TestCase):
         value["panes"] = []
         self.assertEqual(workspace_tokens(value)["w2"].get("active_tasks"), "0 in-progress")
 
-    def test_exact_expiry_and_expired_state_are_not_active(self):
-        for pane in [pi_pane(expires="1000000"), pi_pane(expires="999999"), pi_pane(state="expired")]:
-            value = snapshot()
-            value["panes"] = [pane]
-            self.assertEqual(workspace_tokens(value)["w1"].get("active_tasks"), "0 in-progress")
+    def test_durable_claims_ignore_legacy_deadlines(self):
+        for expires in ["1000000", "999999", None, "not-a-date"]:
+            with self.subTest(expires=expires):
+                value = snapshot()
+                pane = pi_pane(expires=expires)
+                if expires is None:
+                    del pane["tokens"]["pi_task_expires_at"]
+                value["panes"] = [pane]
+                self.assertEqual(workspace_tokens(value)["w1"]["active_tasks"], "1 in-progress")
+
+    def test_legacy_expired_report_is_unknown_not_unassigned(self):
+        value = snapshot()
+        value["panes"] = [pi_pane(state="expired")]
+        self.assertEqual(workspace_tokens(value)["w1"]["active_tasks"], "tasks unavailable")
 
     def test_missing_or_malformed_claim_data_is_not_a_false_zero(self):
         for data in [{}, {"pi_task": "Unassigned"}, {"pi_task_state": "unavailable"},
-                     {"pi_task_state": "assigned", "pi_task_id": "jp-one"},
+                     {"pi_task_state": "assigned", "pi_task_id": " jp-one"},
                      {"pi_task_state": "assigned", "pi_task_id": "", "pi_task_expires_at": "2000000"},
-                     {"pi_task_state": "assigned", "pi_task_id": "jp-one", "pi_task_expires_at": "nan"},
                      {"pi_task_state": "mystery"}]:
             with self.subTest(data=data):
                 value = snapshot()

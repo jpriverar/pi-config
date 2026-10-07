@@ -1,5 +1,10 @@
 # Herdr Sidebar Metadata Implementation Plan
 
+> Integration update (`jp-szdo`): task ownership no longer expires. The expiry
+> scheduling and display entries below record the original implementation and
+> are superseded by [durable ownership](../../task-lifecycle.md). Current pane
+> reporting retains the active task label and uses interaction-driven refreshes.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Show each interactive Pi session's actual model, claimed task, and high context pressure, plus active-tab/tab-count space rows without Git information.
@@ -101,10 +106,21 @@ export interface PaneReporter {
 export function createPaneReporter(options: {
   context: ExtensionContext;
   refreshTask: () => Promise<void>;
-  send: (tokens: PaneTokens, sequence: number, signal: AbortSignal) => Promise<boolean>;
+  send: (
+    tokens: PaneTokens,
+    sequence: number,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
 }): PaneReporter | undefined;
-export function createHerdrMetadataSender(environment: NodeJS.ProcessEnv):
-  ((tokens: PaneTokens, sequence: number, signal: AbortSignal) => Promise<boolean>) | undefined;
+export function createHerdrMetadataSender(
+  environment: NodeJS.ProcessEnv,
+):
+  | ((
+      tokens: PaneTokens,
+      sequence: number,
+      signal: AbortSignal,
+    ) => Promise<boolean>)
+  | undefined;
 ```
 
 Keep clock/timer/executor injection local to these modules where required for deterministic tests; do not create a general framework.

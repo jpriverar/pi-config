@@ -14,24 +14,6 @@ export interface PaneReporter {
   stop(): Promise<void>;
 }
 
-interface Clock {
-  now(): number;
-  setTimeout(callback: () => void, delay: number): unknown;
-  clearTimeout(handle: unknown): void;
-}
-
-const clock: Clock = {
-  now: Date.now,
-  setTimeout(callback, delay) {
-    const timer = setTimeout(callback, delay);
-    timer.unref();
-    return timer;
-  },
-  clearTimeout(handle) {
-    clearTimeout(handle as ReturnType<typeof setTimeout>);
-  },
-};
-
 // A stable source must stay ordered across session replacement and reload.
 let sequence = Date.now() * 1000;
 const nextSequence = () =>
@@ -39,14 +21,9 @@ const nextSequence = () =>
 
 export function createPaneReporter(options: {
   context: ExtensionContext;
-  refreshTask: () => Promise<void>;
   send: MetadataSender;
-  clock?: Clock;
-  now?: () => number;
 }): PaneReporter | undefined {
   if (options.context.mode !== "tui") return undefined;
-  const timers = options.clock ?? clock;
-  const now = options.now ?? timers.now;
   let desired: PaneTokens = {
     ...runtimeTokens(options.context.model, options.context.getContextUsage()),
     ...taskTokens({ state: "unavailable", label: "Task unavailable" }),
@@ -56,8 +33,6 @@ export function createPaneReporter(options: {
   let stopped = false;
   let inFlight: Promise<void> | undefined;
   let activeSend: AbortController | undefined;
-  let expiry: unknown;
-  let expiryGeneration = 0;
   let stopping: Promise<void> | undefined;
 
   function queue(): void {
@@ -85,12 +60,6 @@ export function createPaneReporter(options: {
     }
   }
 
-  function cancelExpiry(): void {
-    expiryGeneration++;
-    if (expiry !== undefined) timers.clearTimeout(expiry);
-    expiry = undefined;
-  }
-
   const reporter: PaneReporter = {
     updateRuntime(ctx) {
       if (stopped) return;
@@ -103,32 +72,12 @@ export function createPaneReporter(options: {
     updateTask(assignment) {
       if (stopped) return;
       desired = { ...desired, ...taskTokens(assignment) };
-      cancelExpiry();
-      if (assignment.state === "assigned") {
-        const generation = expiryGeneration;
-        const delay = Math.min(
-          2_147_483_647,
-          Math.max(0, assignment.expiresAt - now()),
-        );
-        expiry = timers.setTimeout(() => {
-          if (stopped || generation !== expiryGeneration) return;
-          expiry = undefined;
-          void options.refreshTask().catch(() => {
-            if (!stopped && generation === expiryGeneration)
-              reporter.updateTask({
-                state: "unavailable",
-                label: "Task unavailable",
-              });
-          });
-        }, delay);
-      }
       queue();
     },
     stop() {
       if (stopping) return stopping;
       stopped = true;
       dirty = false;
-      cancelExpiry();
       activeSend?.abort();
       stopping = (async () => {
         await inFlight;

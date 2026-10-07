@@ -14,8 +14,8 @@ export type PaneTokens = Record<
 >;
 
 export type TaskAssignment =
-  | { state: "assigned"; label: string; taskId: string; expiresAt: number }
-  | { state: "unassigned" | "unavailable" | "expired"; label: string };
+  | { state: "assigned"; label: string; taskId: string }
+  | { state: "unassigned" | "unavailable"; label: string };
 
 export function taskTokens(
   assignment: TaskAssignment,
@@ -27,8 +27,8 @@ export function taskTokens(
     pi_task: assignment.label,
     pi_task_state: assignment.state,
     pi_task_id: assignment.state === "assigned" ? assignment.taskId : null,
-    pi_task_expires_at:
-      assignment.state === "assigned" ? String(assignment.expiresAt) : null,
+    // Clear the obsolete deadline left by pre-durable-ownership clients.
+    pi_task_expires_at: null,
   };
 }
 
@@ -46,13 +46,12 @@ export function normalizeMetadata(value: string): string {
 export function selectTaskAssignment(
   issues: readonly BeadsIssue[] | undefined,
   sessionId: string,
-  now: number,
 ): TaskAssignment {
   const unavailable: TaskAssignment = {
     state: "unavailable",
     label: "Task unavailable",
   };
-  if (!issues || !sessionId || !Number.isFinite(now)) return unavailable;
+  if (!issues || !sessionId) return unavailable;
   // Invalid active metadata could conceal this session's ownership.
   if (
     issues.some(
@@ -69,6 +68,7 @@ export function selectTaskAssignment(
     return { state: "unassigned", label: "Unassigned" };
   if (matching.length !== 1) return unavailable;
   const issue = matching[0];
+  // The v1 timestamp must be valid, but it no longer expires ownership.
   const expiresAt = Date.parse(issue.lifecycle!.execution!.expiresAt);
   if (
     issue.status !== "in_progress" ||
@@ -77,11 +77,8 @@ export function selectTaskAssignment(
     normalizeMetadata(issue.id) !== issue.id
   )
     return unavailable;
-  if (expiresAt <= now) return { state: "expired", label: "Lease expired" };
   const label = normalizeMetadata(issue.title);
-  return label
-    ? { state: "assigned", label, taskId: issue.id, expiresAt }
-    : unavailable;
+  return label ? { state: "assigned", label, taskId: issue.id } : unavailable;
 }
 
 export function runtimeTokens(

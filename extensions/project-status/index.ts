@@ -50,14 +50,12 @@ export default function projectStatus(
   pi: ExtensionAPI,
   dependencies: {
     metadataSender?: MetadataSender | null;
-    now?: () => number;
   } = {},
 ) {
   const metadataSender =
     dependencies.metadataSender === undefined
       ? createHerdrMetadataSender(process.env)
       : dependencies.metadataSender;
-  const now = dependencies.now ?? Date.now;
   let reporter: PaneReporter | undefined;
   let pendingRefresh: { ctx: ExtensionContext; generation: number } | undefined;
   let refreshing: Promise<void> | undefined;
@@ -85,11 +83,7 @@ export default function projectStatus(
     const listed = await client.listIssues();
     if (!isCurrentSession(generation)) return undefined;
     reporter?.updateTask(
-      selectTaskAssignment(
-        listed.ok ? listed.value : undefined,
-        sessionId,
-        now(),
-      ),
+      selectTaskAssignment(listed.ok ? listed.value : undefined, sessionId),
     );
     if (!listed.ok) return "unavailable";
 
@@ -246,8 +240,6 @@ export default function projectStatus(
       reporter = createPaneReporter({
         context: ctx,
         send: metadataSender,
-        now,
-        refreshTask: () => refresh(ctx, generation),
       });
     }
     await refresh(ctx, generation);

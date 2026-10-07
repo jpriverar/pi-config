@@ -160,7 +160,6 @@ function createHarness(
           return true;
         }
       : null,
-    now: () => Date.parse("2026-09-22T12:01:00Z"),
   });
   return {
     executionLimits,
@@ -677,4 +676,17 @@ test("task display queries pass a finite timeout to the process boundary", async
   await start(h);
   assert.equal(h.executionLimits.length, 3);
   assert.ok(h.executionLimits.every((limits) => limits?.timeout === 1500));
+});
+
+test("Herdr preserves an idle task label instead of reporting legacy lease expiry", async () => {
+  const owned = {
+    ...issue("jp-idle", "in_progress"),
+    lifecycle: activeLifecycle("session-1"),
+  };
+  owned.lifecycle.execution!.expiresAt = "2026-09-15T12:00:00Z";
+  const h = createHarness({ herdr: true, issues: [owned] });
+  await start(h);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.pi_task, "Task jp-idle");
+  await h.handlers.get("session_shutdown")?.({}, h.context);
 });

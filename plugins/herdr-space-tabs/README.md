@@ -24,11 +24,11 @@ labels are omitted; their metadata remains available for custom layouts.
 Context usage stays in Pi's footer. When Pi cannot yet estimate it after
 compaction, the footer shows `Context ?` until fresh usage becomes available.
 
-`pi_model` follows the actual selected model. `pi_task` shows a matching active,
-unexpired session claim's title. A successful lookup with no claim shows
-`Unassigned`; lookup failures/conflicting claims show `Task unavailable`, and
-an expired matching lease shows `Lease expired`. Idle/working is independent
-of task assignment. Normalized labels are capped at 80 characters; the sidebar
+`pi_model` follows the actual selected model. `pi_task` shows the title of the
+current session's matching active claim, including after inactivity. A successful
+lookup with no claim shows `Unassigned`; lookup failures or conflicting claims
+show `Task unavailable`. Legacy expiry timestamps do not end ownership.
+Idle/working is independent of task assignment. Normalized labels are capped at 80 characters; the sidebar
 may truncate further, and the task system retains the full title.
 
 `pi_context_warning` appears at 75–<90% and `pi_context_critical` at >=90%, with
@@ -39,14 +39,16 @@ labels and subagent summaries remain separate.
 
 The space plugin owns `active_tab` (`tab: <label>`), `tab_count`
 (`1 tab` / `N tabs`), and `active_tasks` (`M in-progress`). Task counts use
-structured `pi_task_state`, `pi_task_id`, and `pi_task_expires_at` pane fields,
-never task-title text. They count distinct, unexpired claims owned by Pi
-sessions present in that space, including idle sessions. Multiple panes showing
-the same claimed task count once. These are space-local counts, not the header's
-workstream-wide counts. Unassigned and expired claims count as zero.
+structured `pi_task_state` and `pi_task_id` pane fields, never task-title text.
+They count distinct active claims owned by Pi sessions present in that space,
+including idle sessions, without a deadline. Multiple panes showing the same
+claimed task count once. These are space-local counts, not the header's
+workstream-wide counts. Confirmed unassigned panes contribute zero. The publisher
+clears the obsolete `pi_task_expires_at` token; the counter does not use it.
 
 Missing or invalid ownership evidence on any Pi pane produces `tasks unavailable`
-for that space rather than a misleading zero or partial total. Existing Pi
+for that space rather than a misleading zero or partial total. This includes a
+legacy `expired` report, which no longer proves that the task is unassigned. Existing Pi
 sessions need `/reload` at an idle boundary to publish these fields. Non-Pi panes
 do not count. Missing or inconsistent active-tab evidence clears its label rather
 than guessing. Existing state icons remain visible.
@@ -99,8 +101,8 @@ or close succeeded. Space counts reuse this evidence without querying Beads agai
 Pane create/move/close/exit/detection/status events and the existing tab events
 also refresh space counts. Action acknowledgment means the bounded refresh was
 queued; completion/failure is visible in the plugin log. External task mutations appear at the next interaction or
-refresh. A known lease expiry triggers one authoritative re-read. Display
-refreshes do not renew leases.
+refresh. Legacy expiry timestamps do not schedule refreshes or clear a durable
+assignment. Display refreshes do not change task ownership.
 
 Space refreshes serialize before reading the authoritative snapshot. Each
 Herdr call is bounded to two seconds, the locked refresh to ten seconds, and
