@@ -2,7 +2,7 @@
 
 Task: `jp-w7cz` · Date: 2026-10-07
 
-Status: Simplified direction approved; revised written specification awaiting review. No implementation or external writes authorized yet.
+Status: Small-v1 written specification approved by JP on 2026-10-07. Implementation plan awaiting review; no implementation or external writes authorized yet.
 
 ## Goal and scope
 
@@ -122,4 +122,4 @@ Implementation entry points: `lib/task-lifecycle/{service,beads-store}.ts`, `lib
 - [Daemon operations](../../task-reconciler-operations.md)
 - Datadog API: [create](https://docs.datadoghq.com/api/latest/case-management/create-a-case/), [status](https://docs.datadoghq.com/api/latest/case-management/update-case-status/), [comment](https://docs.datadoghq.com/api/latest/case-management/comment-case/)
 
-API support is documented, not live-write tested. Review this revised specification before implementation planning. Approval permits planning, not execution or activation.
+API support is documented, not live-write tested. The written specification is approved for planning. Review the implementation plan and choose execution before code changes; activation remains separately gated.
