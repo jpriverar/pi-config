@@ -1,229 +1,125 @@
-# Workstream-linked Datadog work items
+# Workstream-linked Datadog work items — small v1
 
-Date: 2026-10-07
+Task: `jp-w7cz` · Date: 2026-10-07
 
-Task: `jp-w7cz` — Link Herdr workstreams to external projects
+Status: Simplified direction approved; revised written specification awaiting review. No implementation or external writes authorized yet.
 
-Status: Direction approved; written specification awaiting JP's review. No implementation or external writes authorized by this document.
+## Goal and scope
 
-## Intent and agreed scope
+For selected workstreams, keep Datadog Work Management informed without maintaining a second task list manually:
 
-JP wants selected workstreams to publish their tasks into a Datadog Work Management project without maintaining a second task list manually. Herdr is the presentation context, not the owner of the integration.
+1. A new local task creates a work item and retains its ID/link.
+2. Local lifecycle changes update that item's status.
+3. Explicit `task_log` entries become comments.
 
-Agreed behavior:
+Only tasks created after linking a workstream enroll. Existing and unlinked tasks remain unchanged. Datadog failure must not interrupt local work.
 
-- A workstream can opt into one Datadog project.
-- New managed tasks in that workstream create corresponding work items and retain their external IDs and links.
-- Local task lifecycle changes drive Datadog status changes, never the reverse.
-- Explicit `task_log` progress entries become individual work-item comments.
-- Datadog failure does not prevent local task creation, progress, or completion.
-- Existing tasks are not enrolled when a mapping is enabled.
-- Jira, two-way synchronization, and backlog enrollment are outside v1.
+Start with the smallest complete implementation of these behaviors. Add capabilities in response to observed problems, not hypothetical future providers or failure scenarios.
 
-Success means local task management remains authoritative and usable offline, while Datadog eventually reflects the latest status and each eligible progress entry, or visibly reports why delivery needs attention. The integration must not silently lose delivery intent or blindly repeat an uncertain external creation/comment.
+## Fit into the existing system
 
-## Evidence and existing boundaries
+Implement one Datadog-specific module in `pi-config`, called by the existing task-reconciliation daemon. No Herdr changes, separate service, generic provider framework, or new event system.
 
-Source baseline: `pi-config` commit `6f7875b5d7588b035d89a139e5f16f4147c0fad4`.
+The existing creation path stores task metadata atomically with the task. The native Beads comment journal supplies stable comment IDs. The daemon already scans and bounds background work, but its queue is in memory: task state and the journal, not that queue, must preserve unfinished work.
 
-- `extensions/task-lifecycle/index.ts` exposes task creation and logging.
-- `lib/task-lifecycle/service.ts` routes creation through the store and validates ownership before logging.
-- `lib/task-lifecycle/beads-store.ts` creates tasks with native `workstream:<value>` labels and `piLifecycle` metadata. Logging appends a native Beads comment. Store mutations preserve unrelated metadata.
-- `lib/task-lifecycle/types.ts` separates lifecycle metadata, artifacts, checks, and execution leases.
-- `lib/session-project.ts` resolves Pi's session workstream independently of Herdr workspace identity.
-- `plugins/herdr-space-tabs/sync_tabs.py` publishes presentation metadata; it does not own tasks or workstreams.
-- `lib/task-reconciler/runtime.ts` and `queue.ts` provide an existing per-store background process, periodic scans, and bounded execution. The current queue is in memory and is not a durable outbox.
-- A read of this task's native comment journal returned stable string IDs, issue IDs, authors, text, and creation timestamps. The current store discards the JSON result of comment insertion.
+Keep synchronization separate from lifecycle policy. It must not claim tasks, renew leases, change dependencies, or release worktrees.
 
-Datadog documents Work Management under the Case Management API. Documented endpoints cover case creation, status changes, comments, project reads, case reads/search, and timeline reads. The current conversational MCP catalog exposes Case Management reads, not the required writes. This integration therefore uses a typed, narrowly scoped API adapter rather than model-driven MCP calls.
+## Configuration
 
-API documentation is contract evidence, not evidence of working credentials or behavior in the target project. No live Datadog writes have been tested.
+Use one private configuration shared by task creation and the daemon. With no integration configured, behavior is unchanged. Each linked workstream specifies the Datadog site/org, project, required work-item type, and status mapping. Do not store credentials or duplicate mappings in Herdr/session state.
 
-## Alternatives and decision
+Provide mappings for actionable, active, waiting, deferred, and done. Done distinguishes completed, cancelled, and superseded; multiple outcomes may intentionally share one Datadog status. Both waiting reasons use the same mapping in v1. Use existing project statuses rather than creating them.
 
-1. **Pi-session worker:** fewer process changes, but delivery depends on a live session. Rejected because pending work must survive session closure.
-2. **Existing daemon with a separate sync module:** reuses process supervision and bounds while retaining a clear separation from lifecycle reconciliation. Selected.
-3. **Separate integration service:** independently deployable, but adds a process, configuration, and operational burden without a present requirement. Not selected.
+The target and mapping are captured when a task enrolls. Changing configuration or task labels affects no existing binding; it never moves or duplicates an external item. Removing a mapping stops new enrollment, not delivery for already enrolled tasks. Use the existing daemon stop/start controls for the initial operational off switch rather than adding integration-specific pause controls.
 
-The daemon remains a local process for one Beads store. External synchronization is a separate concern inside that process, not a new lifecycle check type and not an extension of worktree cleanup policy.
+Validate configuration locally before task creation. Malformed configured mappings produce an explicit error before creating the task, not a silently unlinked task. A Datadog network/authorization check is not part of local creation.
 
-## Configuration and enrollment
+## Minimal durable state
 
-Use one private, versioned integration configuration referenced by both task creation and the daemon. Do not duplicate authoritative mappings in Herdr, session metadata, packaged defaults, and installed daemon snapshots. Both clients read the same configuration; installed runtimes retain its path rather than a stale embedded copy.
+Add a small versioned task-metadata record, separate from `piLifecycle`, containing:
 
-Each enabled workstream mapping defines:
+- Captured target/mapping and initial title/description.
+- External item ID/link once created.
+- Last successfully sent local status and delivered native comment IDs.
+- At most one in-flight operation, plus a bounded error/retry indication.
 
-- Workstream key, matched against the explicit task creation workstream using the repository's existing matching conventions.
-- Explicit Datadog site and organization identity; no implicit use of the selected conversational MCP organization.
-- Project UUID and work-item type where required by the target project/API.
-- A complete mapping of local lifecycle outcomes to existing Datadog statuses.
-- Configuration revision and enrollment enablement.
+Write enrollment in the same native operation that creates the task. Use existing store locking and metadata-preserving writes; never hold a local lock across HTTP or credential retrieval.
 
-Configuration contains credential-provider references, never credentials. V1 does not create projects, work-item types, statuses, or custom attribute definitions remotely.
+No extra enrollment UUID, event IDs, remote correlation protocol, per-attempt history, or second copy of the journal. Native task/comment identities are sufficient for local tracking. An in-flight marker is necessary: after a crash, it prevents an uncertain write from being sent again blindly.
 
-A newly created task snapshots its binding in the same Beads creation operation as its native task and lifecycle metadata. The snapshot includes a random enrollment identity, configuration revision, site/org/project/type, status mapping, and initial title/description. This prevents a crash between local creation and queue publication from losing enrollment.
+## Normal synchronization
 
-Existing tasks, legacy task adoption, workstream renames, and later label changes do not enroll tasks. Moving an enrolled task to another workstream does not move its external item. Editing or removing a mapping changes enrollment for future tasks only; existing bindings remain stable.
+On the daemon's existing scan cadence, inspect enrolled tasks, including closed and deferred tasks. Process a bounded amount of work using existing concurrency/backoff controls; synchronization must not starve lifecycle reconciliation.
 
-An explicit delivery-pause control stops new outbound attempts without deleting bindings or receipts; already dispatched requests may still complete and must be reconciled. Pausing delivery does not discard local changes or prevent configured new tasks from recording enrollment. Disabling enrollment and pausing delivery are distinct controls.
+For each task:
 
-Configuration validation is required before activation. An unreadable or malformed configured registry must not silently behave like an unlinked workstream: reject creation before writing a task when its enrollment policy cannot be resolved. This is a local configuration error, not a Datadog outage. A valid stored mapping remains usable for local enrollment while Datadog is unavailable; network validation is not part of task creation.
+1. Create the item if absent, using its captured title/description and local task ID for human reference.
+2. Send the currently mapped status when it differs from the last successful delivery. Reopening updates the same item. Intermediate transitions may coalesce.
+3. Send undelivered eligible comments in native journal order, using native IDs to distinguish even identical messages.
 
-## Durable local model
+Perform one outbound mutation at a time per task. Persist its identity before sending and its successful result afterward. Record the status actually sent, not a newer state observed after the response; the next scan can pick up changes made during the request.
 
-Keep integration state in a versioned namespace such as `piWorkManagement`, separate from `piLifecycle`. It holds:
+There is no remote polling or drift correction. A Datadog status edited manually stays as edited until a later local change requires another status delivery. Remote changes never update Beads.
 
-- Immutable enrollment/binding and initial creation payload.
-- External case ID, display key, and URL when known.
-- Creation delivery state and stable correlation marker.
-- Last acknowledged status and the local lifecycle revision it represents.
-- Comment delivery receipts keyed by stable local journal identity.
-- A persisted in-flight attempt descriptor for non-idempotent writes.
-- Retry schedule, bounded diagnostic information, and attention reason.
+A task completed before initial delivery still gets its item and current terminal status. Pending work survives Pi-session closure and daemon restart; no extra wake-up mechanism is required for correctness.
 
-Native task state and the native progress journal remain the durable source of desired work. The daemon's in-memory queue is only a scheduling aid. Scanning durable state must reconstruct pending work after a crash, including tasks already closed or deferred.
+## Task-log comments
 
-All integration metadata writes use the store's existing operation lock and read/merge/write discipline, preserving concurrent lifecycle changes and unrelated metadata. Never hold a local mutation lock during credential retrieval or network I/O. Persist an attempt under the lock, release it, perform the bounded request, then persist its result under the lock after rechecking the binding and attempt identity.
+Publish explicit `task_log` entries only, not arbitrary native comments. For enrolled tasks, append a fixed versioned source tag with the native log entry in the same append operation. Use that entry's existing Beads ID for delivery tracking, not another generated event identity.
 
-Synchronization does not claim the task, renew its execution lease, close a lifecycle check, alter dependencies, release worktrees, or change task disposition.
+The verified Beads interface exposes comment text rather than structured provenance, so the tag can be a reserved footer. Strip it from external comment text and Pi-rendered messages; raw native journal output may show it. Unlinked task logging remains unchanged. The tag is not an authorization boundary against someone with direct store access.
 
-## Progress journal and comment identity
+Comments contain the authored message and original timestamp. Do not automatically add transcripts, tool output, session history, or host details. Enabling a workstream means its task titles/descriptions and explicit logs are publishable to that project; v1 does not provide automatic secret detection.
 
-Only entries produced by `task_log` after enrollment are eligible. Direct `bd comments add` entries, lifecycle diagnostics, and unrelated native comments must not be inferred to be publishable progress.
+No comment editing/deletion synchronization or historical replay for pre-existing tasks.
 
-For enrolled tasks only, add versioned provenance and a generated event identity to the native comment written by `task_log`, in the same native append operation as its message. The verified Beads interface does not establish structured comment metadata support, so v1 uses a reserved machine-readable footer. No second metadata write is required to discover a successfully appended log after a crash. Logging for unlinked tasks remains unchanged.
+## Failures: safe before clever
 
-The footer is integration metadata, not part of the user's progress message. Any Pi-rendered message and external comment formatting strip it; raw native journal output may display it. Entries without valid provenance are not auto-published. Generated IDs, not message text, distinguish entries, so identical messages remain separate legitimate comments. This marker is not an authorization boundary against an actor with direct write access to the local store.
+Local operations finish without waiting for Datadog. Show the external link and a compact pending/error indicator through existing task results/state displays; use existing daemon diagnostics rather than a new dashboard or command suite.
 
-Delivery receipts associate the event identity with the stable native comment ID and any returned remote identity. Validate uniqueness and issue association before publishing. Preserve native journal order, using a deterministic tie-break for equal timestamps. A malformed or conflicting event identity stops comment delivery for attention rather than skipping an entry silently.
+Reuse bounded retries for failures known not to have applied a remote mutation, including documented rate-limit rejections. Authentication or invalid-target errors need attention. Sanitize errors; never expose credentials or raw response bodies.
 
-An external comment contains the explicit progress message, its original timestamp, local task ID, and an unobtrusive visible correlation footer. It does not automatically append transcripts, tool results, environment values, host paths, or session history. Enabling a workstream means its new task titles/descriptions and explicit logs are publishable to that project; authors must not put secrets in those fields. V1 does not promise automatic secret detection or silently rewrite the authored text. Treat all message text as data, never as executable instructions.
+If a timeout, disconnect, crash, or lost acknowledgment leaves a write's outcome uncertain, persist that uncertainty and stop synchronization for that task. This conservative rule also applies to status writes: repeat transitions may have notification/automation effects.
 
-## Delivery behavior
+V1 does not search remote timelines, reconcile markers, or automatically recreate missing items. Manual investigation may be needed to confirm the external result and repair the sync record. Document targeted, explicitly approved recovery using existing Beads metadata operations, preserving lifecycle state; do not build recovery tools now. Never automatically clear an uncertain attempt and retry it. An uncertain comment can temporarily pause status delivery too; accept that limitation rather than introduce independent delivery queues.
 
-### Creation
+Stopping the daemon cannot undo a request already sent. Record its result if available; otherwise retain the uncertain attempt for manual attention.
 
-1. Scan for enrolled tasks without a confirmed remote identity, regardless of current lifecycle phase.
-2. Build the request from the stored binding and initial payload. Include a unique enrollment marker in the description and the local task ID for human recognition; do not assume a local file URL is usable by Datadog readers.
-3. Persist the attempt before sending it.
-4. On confirmed success, store the external identity and canonical URL.
-5. Synchronize the latest local status and queued progress comments.
+## API, credentials, and activation
 
-A task completed before first delivery still receives its item; it is then brought to the current terminal status. No state-dependent backlog filter may silently drop it.
+Use the documented Case Management endpoints for creation, status, and comments, with small request/response functions rather than a generalized adapter framework. Keep tests injectable without creating abstractions for unused providers.
 
-### Status
+Use `dd-auth` with explicit org/site selection and bounded execution, without shell interpolation, credential output, or persistent keys. Restrict requests to supported Datadog hosts; do not forward credentials across arbitrary redirects. Do not change the conversational MCP connection.
 
-Use an explicit mapping for every outcome:
+The installed helper's help confirms org/site selection but not unattended behavior with expired credentials. Verify that before enabling background writes. If it cannot run safely unattended, stop and discuss the credential mechanism rather than layering workarounds.
 
-| Local state           | Mapping key          |
-| --------------------- | -------------------- |
-| Actionable            | `actionable`         |
-| Active                | `active`             |
-| Waiting on dependency | `waiting_dependency` |
-| Waiting on check      | `waiting_check`      |
-| Deferred              | `deferred`           |
-| Done: completed       | `completed`          |
-| Done: cancelled       | `cancelled`          |
-| Done: superseded      | `superseded`         |
+JP must approve the actual project/status mapping and a disposable task before live validation. Then verify one creation, status update, and comment. No projects, statuses, or validation items are created during design; cleanup requires separate approval.
 
-Several keys may intentionally map to the same existing Datadog status. Do not invent statuses or silently select defaults. Validate project/type/status compatibility before enabling the mapping. A project URL, type, and actual status names are deployment inputs, not assumptions fixed in this generic specification.
+## Focused verification
 
-Local state is authoritative. Reopening a task updates the same external item rather than creating another. Status delivery may coalesce intermediate local transitions; v1 mirrors the current status, not every historical transition. Re-read local state after each acknowledgment so a newer transition is not marked delivered by an older response.
+Test the behavior at its real boundaries:
 
-Remote status edits never modify Beads. Periodic reads detect drift and restore the mapped local status; this one-way ownership policy must be explicit when enabling the integration. Repeated rejection or automation-driven drift becomes an attention condition rather than an unbounded write loop.
+- New linked tasks enroll atomically; unlinked/existing tasks do not. Configuration changes cannot reroute them.
+- Local work succeeds while Datadog fails, and scans recover unfinished work after restart, including completed tasks.
+- Status mapping, reopen, and concurrent local changes send the correct latest state without polling remote edits.
+- Only tagged logs publish, in order; identical messages are distinct and confirmed comments are not replayed.
+- Crashes before/after remote writes preserve in-flight uncertainty rather than cause blind retries.
+- Sync metadata writes preserve lifecycle state; work and errors remain bounded and credentials stay private.
 
-### Comments
+Use existing store/daemon fixtures, fake clocks, and stubbed API calls. Do not introduce a new testing framework.
 
-Creation must be confirmed before comments are sent. Deliver eligible entries in order, one external mutation at a time per task. Confirmed comment receipts prevent replay across daemon restarts. Editing/deleting an already delivered native entry does not edit/delete its Datadog comment in v1.
+## Explicitly outside v1
 
-An uncertain comment blocks subsequent comments to preserve ordering. Once creation is confirmed, status delivery may continue independently of a blocked comment queue. Status synchronization must not be held indefinitely behind a progress-comment problem.
+Jira; two-way sync; backlog import; remote drift correction; automatic duplicate reconciliation; custom recovery CLI; integration-specific pause machinery; live title/description/assignee/priority sync; project moves; remote deletion; complete status history; changes to Herdr or task ownership.
 
-### Scheduling
+These are possible future ideas, not tracked follow-up commitments. Revisit one only when use reveals a concrete need. V1 makes no exactly-once-delivery promise and deliberately trades automatic recovery for a smaller, safer implementation.
 
-Run synchronization independently of lifecycle-check eligibility. Include all enrolled tasks with pending work, and periodically check linked items for status drift. Bound scanning, network concurrency, per-task work, command duration, response size, and retries. Use fair scheduling so a noisy task or an outage cannot starve lifecycle reconciliation or other tasks.
+## References and next step
 
-The periodic scan provides correctness; an optional wake-up after local changes only reduces latency. A lost wake-up must never lose delivery. The daemon must recover enrollment, journal entries, and pending/in-flight attempts from persisted state without a running Pi session.
+Implementation entry points: `lib/task-lifecycle/{service,beads-store}.ts`, `lib/task-reconciler/{runtime,queue}.ts`, and the existing task extension. Inspected source baseline: `6f7875b`.
 
-## Failure and duplicate policy
-
-Persist explicit states: pending, in-flight, confirmed, retryable failure, paused, and attention/unknown outcome. Do not claim exactly-once delivery across Beads and Datadog.
-
-- Failures known to occur before a request is dispatched may be retried with bounded exponential backoff.
-- Rate limits respect the provider's retry guidance. Only treat a rejected response as safely retryable when its semantics establish that no mutation occurred.
-- Authentication/authorization failures or invalid project/type/status configuration require attention; they do not fail an already completed local task operation.
-- Transport timeout, disconnect, crash during an in-flight request, ambiguous server error, or success followed by lost local acknowledgment may represent a completed remote mutation.
-- For uncertain creation, read/search within the exact bound project and verify the enrollment marker. For uncertain comments, inspect the complete relevant timeline for the event marker.
-- Exactly one validated match can confirm delivery. Multiple matches require attention. Missing, incomplete, truncated, or not-yet-consistent read results do not prove absence.
-- Without provider-backed idempotency or authoritative non-delivery evidence, do not automatically repeat an uncertain create/comment. Surface explicit recovery instead.
-- Status requests are reconciled against current remote/local state before retrying; do not assume repeat updates lack notification or automation side effects.
-- Remote deletion, archival that prevents updates, project removal, and permissions loss do not recreate the item automatically.
-
-Recovery can confirm a matching existing item/comment, retry a provably unsent attempt, or leave delivery paused for operator investigation. A user-directed repeat of an uncertain write must disclose duplicate risk and bind approval to that exact attempt. Do not add general remote CRUD tools or a bulk recovery shortcut.
-
-## API and authentication boundary
-
-A focused Datadog adapter owns request/response validation, pagination, status translation, correlation markers, and error classification. The sync policy depends on adapter operations, not HTTP details. Use documented case endpoints; no browser automation or internal unauthenticated service calls.
-
-Use the existing `dd-auth` credential-injection mechanism with explicit `--org-uuid` and `--site`, invoking a bounded child process without shell interpolation. Credentials exist only in that child environment and HTTP headers. Never use `--output`, verbose credential logging, persistent credential files, or inherited ambient credentials as a silent fallback. Validate the configured site against supported Datadog API hosts; do not send credentials to arbitrary URLs or cross-host redirects.
-
-The installed `dd-auth --help` confirms org/site selection but does not advertise a noninteractive mode. Unattended authentication is therefore an activation gate: verify behavior with valid and expired credentials before enabling the worker. The daemon must not open login prompts repeatedly, block indefinitely, or require a model session. If supported unattended behavior cannot meet this contract, pause and ask JP about the credential mechanism rather than layering an unapproved workaround.
-
-Do not change the conversational Datadog connection or organization. New configuration and remote writes require explicit operator activation after implementation review.
-
-## Visibility and operational interface
-
-Expose external key/link and independent sync health in task details/tool results and scoped work-state summaries. Distinguish `pending create`, `pending status`, `pending comments`, `paused`, and `attention`; none is a lifecycle phase. Healthy linked tasks should remain compact.
-
-Extend the existing daemon administrative interface with focused integration configuration validation, status inspection, and exact-attempt reconciliation. Diagnostics include task ID, operation, target project, retry/attention state, and a bounded sanitized error. Never embed headers, credentials, full raw response bodies, or comment contents in routine diagnostics.
-
-A stopped or stale daemon must be distinguishable from a healthy worker with pending work. Authentication/configuration failures should be surfaced without changing task ownership or automatically posting diagnostic comments to Datadog.
-
-Configuration is the v1 setup surface; a Herdr settings UI and visual redesign are not included.
-
-## Verification and activation gates
-
-Automated coverage must establish:
-
-1. Unlinked and pre-existing tasks produce no integration metadata or remote writes.
-2. Enrollment is durable in the native task creation operation; config/label changes do not reroute it.
-3. Invalid local configuration is visible and never silently suppresses expected enrollment.
-4. Remote failure leaves local create, log, and lifecycle operations successful.
-5. All phase/disposition mappings, reopen, rapid transitions, and close-before-delivery converge correctly.
-6. Only explicit provenance-marked logs publish, in order; repeated identical messages remain distinct.
-7. Crashes after task/log persistence but before wake-up, after attempt persistence, and after remote success but before receipt are handled without blind replay.
-8. Ambiguous writes, incomplete pagination, duplicate markers, and eventual-consistency gaps stop unsafe retries.
-9. Closed/deferred tasks and a stopped/restarted daemon retain pending work.
-10. Concurrent local edits and sync receipts preserve both lifecycle and integration metadata, without network calls under a local store lock.
-11. Pause, authentication failures, rejected configuration, drift, deletion, and blocked comment delivery remain visible and do not starve other work.
-12. Credentials, payload text, URLs, redirects, and diagnostics respect the security boundary.
-
-Use fake clocks, injected API/credential adapters, and the repository's existing store/daemon test fixtures. Test policy separately from HTTP contracts and runtime scheduling.
-
-Before any live write, JP must choose and approve the target org/site/project, type/status mapping, publication behavior, and a disposable validation task. Run read-only project/permission checks first. Validate one create, status transition, and explicit comment, then inspect the remote item and local receipts. Any cleanup is a separate authorized action, not an implicit delete.
-
-Activation requires verified marker round-tripping/timeline visibility, valid status mappings, bounded unattended authentication, and correct daemon packaging/installation. If a provider capability cannot satisfy the safe baseline, report the blocker before replacing the mechanism. No real mapping or external item is created as part of writing this specification.
-
-## Non-goals and limitations
-
-- No Jira provider, bidirectional synchronization, import, migration, or automatic backlog enrollment.
-- No live title/description/assignee/priority synchronization after initial creation.
-- No external task deletion, project moves, comment edits/deletion, or exact historical status replay.
-- No guarantee of exactly-once external mutation, and no automatic repeat when the outcome is genuinely unknown.
-- No changes to task authorization, session ownership, cleanup, Herdr protocols, or unrelated task reconciliation policy.
-- No generalized integration framework; implement a Datadog-specific module with a narrow adapter.
-- Existing local `task_create`/`task_log` retry semantics are not globally redesigned. Two separately persisted local tasks or journal entries are two distinct sources for this integration.
-
-## References
-
-- [Work Management overview](https://docs.datadoghq.com/incident_response/work_management/)
-- [Create a case](https://docs.datadoghq.com/api/latest/case-management/create-a-case/)
-- [Update case status](https://docs.datadoghq.com/api/latest/case-management/update-case-status/)
-- [Comment case](https://docs.datadoghq.com/api/latest/case-management/comment-case/)
-- [Get case timeline](https://docs.datadoghq.com/api/latest/case-management/get-case-timeline/)
-- [Get all projects](https://docs.datadoghq.com/api/latest/case-management/get-all-projects/)
 - [Local lifecycle contract](../../task-lifecycle.md)
 - [Daemon operations](../../task-reconciler-operations.md)
+- Datadog API: [create](https://docs.datadoghq.com/api/latest/case-management/create-a-case/), [status](https://docs.datadoghq.com/api/latest/case-management/update-case-status/), [comment](https://docs.datadoghq.com/api/latest/case-management/comment-case/)
 
-## Next approval
-
-JP reviews this written specification. Approval permits implementation planning, not code changes, deployment, or live Datadog writes. The plan is reviewed separately and its execution method selected before implementation.
+API support is documented, not live-write tested. Review this revised specification before implementation planning. Approval permits planning, not execution or activation.
