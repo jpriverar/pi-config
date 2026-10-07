@@ -221,7 +221,10 @@ export default function projectStatus(
             await refreshOnce(next.ctx, next.generation);
           } catch {
             if (!isCurrentSession(next.generation)) continue;
-            reporter?.updateTask({ label: "Task unavailable" });
+            reporter?.updateTask({
+              state: "unavailable",
+              label: "Task unavailable",
+            });
             currentTaskState = "unavailable";
             renderStatus(next.ctx, currentSessionName, currentTaskState);
           }

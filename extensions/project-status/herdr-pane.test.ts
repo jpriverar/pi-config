@@ -75,10 +75,18 @@ test("initializes current runtime without falsely claiming Unassigned", async ()
   assert.deepEqual(h.sent[0].values, {
     pi_model: "model-one",
     pi_task: "Task unavailable",
+    pi_task_state: "unavailable",
+    pi_task_id: null,
+    pi_task_expires_at: null,
     pi_context_warning: null,
     pi_context_critical: null,
   });
-  h.reporter!.updateTask({ label: "Review auth" });
+  h.reporter!.updateTask({
+    state: "assigned",
+    taskId: "jp-task",
+    label: "Review auth",
+    expiresAt: 2000,
+  });
   await setImmediate();
   assert.equal(h.sent.at(-1)!.values.pi_task, "Review auth");
   h.runtime("model-two", 90);
@@ -114,7 +122,12 @@ test("suppresses unchanged data and serializes bursts to the latest value", asyn
   });
   h.runtime("superseded", 76);
   h.runtime("latest", 91);
-  h.reporter!.updateTask({ label: "Current task" });
+  h.reporter!.updateTask({
+    state: "assigned",
+    taskId: "jp-task",
+    label: "Current task",
+    expiresAt: 2000,
+  });
   assert.equal(h.sent.length, 1);
   finish(true);
   await setImmediate();
@@ -122,11 +135,19 @@ test("suppresses unchanged data and serializes bursts to the latest value", asyn
   assert.deepEqual(h.sent[1].values, {
     pi_model: "latest",
     pi_task: "Current task",
+    pi_task_state: "assigned",
+    pi_task_id: "jp-task",
+    pi_task_expires_at: "2000",
     pi_context_warning: null,
     pi_context_critical: "Context 91%",
   });
   h.runtime("latest", 91);
-  h.reporter!.updateTask({ label: "Current task" });
+  h.reporter!.updateTask({
+    state: "assigned",
+    taskId: "jp-task",
+    label: "Current task",
+    expiresAt: 2000,
+  });
   await setImmediate();
   assert.equal(h.sent.length, 2);
   assert.ok(h.sent[1].seq > h.sent[0].seq);
@@ -147,9 +168,19 @@ test("failed delivery waits for a meaningful refresh instead of spinning", async
 
 test("lease renewal replaces one-shot expiry and shutdown suppresses stale callbacks", async () => {
   const h = harness();
-  h.reporter!.updateTask({ label: "Owned", expiresAt: 2000 });
+  h.reporter!.updateTask({
+    state: "assigned",
+    taskId: "jp-task",
+    label: "Owned",
+    expiresAt: 2000,
+  });
   assert.equal(h.timers[0].delay, 1000);
-  h.reporter!.updateTask({ label: "Owned", expiresAt: 3000 });
+  h.reporter!.updateTask({
+    state: "assigned",
+    taskId: "jp-task",
+    label: "Owned",
+    expiresAt: 3000,
+  });
   assert.equal(h.timers[0].cancelled, true);
   h.setNow(3000);
   h.timers[1].callback();
@@ -157,13 +188,21 @@ test("lease renewal replaces one-shot expiry and shutdown suppresses stale callb
   assert.equal(h.refreshes(), 1);
   await h.reporter!.stop();
   h.timers[1].callback();
-  h.reporter!.updateTask({ label: "Stale" });
+  h.reporter!.updateTask({
+    state: "assigned",
+    taskId: "jp-task",
+    label: "Stale",
+    expiresAt: 2000,
+  });
   h.runtime("stale", 99);
   await setImmediate();
   assert.equal(h.refreshes(), 1);
   assert.deepEqual(h.sent.at(-1)!.values, {
     pi_model: null,
     pi_task: null,
+    pi_task_state: null,
+    pi_task_id: null,
+    pi_task_expires_at: null,
     pi_context_warning: null,
     pi_context_critical: null,
   });
@@ -187,9 +226,33 @@ test("stop cancels an in-flight send before clearing only owned keys", async () 
     "pi_context_warning",
     "pi_model",
     "pi_task",
+    "pi_task_expires_at",
+    "pi_task_id",
+    "pi_task_state",
   ]);
   assert.ok(h.sent[1].seq > h.sent[0].seq);
   assert.ok(Object.values(h.sent[1].values).every((value) => value === null));
   await h.reporter!.stop();
   assert.equal(h.sent.length, 2);
+});
+
+test("clears claim identity whenever ownership becomes non-assigned", async () => {
+  const h = harness();
+  for (const state of ["unassigned", "unavailable", "expired"] as const) {
+    h.reporter!.updateTask({
+      state: "assigned",
+      label: "Unassigned",
+      taskId: "jp-owned",
+      expiresAt: 2000,
+    });
+    await setImmediate();
+    assert.equal(h.sent.at(-1)!.values.pi_task_id, "jp-owned");
+    assert.equal(h.sent.at(-1)!.values.pi_task_expires_at, "2000");
+    h.reporter!.updateTask({ state, label: "No active claim" });
+    await setImmediate();
+    assert.equal(h.sent.at(-1)!.values.pi_task_state, state);
+    assert.equal(h.sent.at(-1)!.values.pi_task_id, null);
+    assert.equal(h.sent.at(-1)!.values.pi_task_expires_at, null);
+  }
+  await h.reporter!.stop();
 });

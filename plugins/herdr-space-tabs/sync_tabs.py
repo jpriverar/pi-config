@@ -45,6 +45,36 @@ def records(snapshot, key, id_key):
     return result
 
 
+def active_task_labels(snapshot, workspaces, tabs):
+    claims = {workspace_id: set() for workspace_id in workspaces}
+    unavailable = set()
+    now_ms = int(time.time() * 1000)
+    for pane in records(snapshot, "panes", "pane_id").values():
+        workspace_id, tab_id = pane.get("workspace_id"), pane.get("tab_id")
+        if (not isinstance(workspace_id, str) or workspace_id not in workspaces
+                or not isinstance(tab_id, str) or tab_id not in tabs
+                or tabs[tab_id]["workspace_id"] != workspace_id):
+            raise ValueError("snapshot pane has invalid workspace or tab")
+        if pane.get("agent") != "pi":
+            continue
+        data = pane.get("tokens")
+        if not isinstance(data, dict):
+            unavailable.add(workspace_id)
+            continue
+        state = data.get("pi_task_state")
+        if state in ("unassigned", "expired"):
+            continue
+        task_id, expires = data.get("pi_task_id"), data.get("pi_task_expires_at")
+        if (state != "assigned" or not isinstance(task_id, str) or not task_id
+                or display_text(task_id) != task_id or not isinstance(expires, str)
+                or not 1 <= len(expires) <= 16 or not expires.isascii() or not expires.isdigit()):
+            unavailable.add(workspace_id)
+        elif int(expires) > now_ms:
+            claims[workspace_id].add(task_id)
+    return {workspace_id: "tasks unavailable" if workspace_id in unavailable else f"{len(ids)} in-progress"
+            for workspace_id, ids in claims.items()}
+
+
 def workspace_tokens(snapshot):
     if not isinstance(snapshot, dict):
         raise ValueError("snapshot must be an object")
@@ -56,6 +86,7 @@ def workspace_tokens(snapshot):
         if not isinstance(workspace_id, str) or workspace_id not in workspaces or not isinstance(tab.get("label"), str):
             raise ValueError("snapshot tab has invalid workspace or label")
         counts[workspace_id] += 1
+    task_labels = active_task_labels(snapshot, workspaces, tabs)
     result = {}
     for workspace_id, workspace in workspaces.items():
         active_id = workspace.get("active_tab_id")
@@ -71,7 +102,7 @@ def workspace_tokens(snapshot):
             if normalized:
                 label = display_text(f"tab: {normalized}")
         count = counts[workspace_id]
-        result[workspace_id] = {"active_tab": label, "tab_count": f"{count} {'tab' if count == 1 else 'tabs'}"}
+        result[workspace_id] = {"active_tab": label, "tab_count": f"{count} {'tab' if count == 1 else 'tabs'}", "active_tasks": task_labels[workspace_id]}
     return result
 
 

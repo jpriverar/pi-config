@@ -6,4 +6,4 @@ pi = [
 ]
 
 [ui.sidebar.spaces]
-rows = [["state_icon", "workspace", "$tab_count"]]
+rows = [["state_icon", "workspace"], ["$tab_count", "$active_tasks"]]

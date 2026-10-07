@@ -3,13 +3,33 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { BeadsIssue } from "../../lib/beads.js";
 
 export type PaneTokens = Record<
-  "pi_model" | "pi_task" | "pi_context_warning" | "pi_context_critical",
+  | "pi_model"
+  | "pi_task"
+  | "pi_task_state"
+  | "pi_task_id"
+  | "pi_task_expires_at"
+  | "pi_context_warning"
+  | "pi_context_critical",
   string | null
 >;
 
-export interface TaskAssignment {
-  label: string;
-  expiresAt?: number;
+export type TaskAssignment =
+  | { state: "assigned"; label: string; taskId: string; expiresAt: number }
+  | { state: "unassigned" | "unavailable" | "expired"; label: string };
+
+export function taskTokens(
+  assignment: TaskAssignment,
+): Pick<
+  PaneTokens,
+  "pi_task" | "pi_task_state" | "pi_task_id" | "pi_task_expires_at"
+> {
+  return {
+    pi_task: assignment.label,
+    pi_task_state: assignment.state,
+    pi_task_id: assignment.state === "assigned" ? assignment.taskId : null,
+    pi_task_expires_at:
+      assignment.state === "assigned" ? String(assignment.expiresAt) : null,
+  };
 }
 
 export function normalizeMetadata(value: string): string {
@@ -28,7 +48,10 @@ export function selectTaskAssignment(
   sessionId: string,
   now: number,
 ): TaskAssignment {
-  const unavailable = { label: "Task unavailable" };
+  const unavailable: TaskAssignment = {
+    state: "unavailable",
+    label: "Task unavailable",
+  };
   if (!issues || !sessionId || !Number.isFinite(now)) return unavailable;
   // Invalid active metadata could conceal this session's ownership.
   if (
@@ -42,15 +65,23 @@ export function selectTaskAssignment(
       issue.lifecycle?.phase === "active" &&
       issue.lifecycle.execution?.sessionId === sessionId,
   );
-  if (matching.length === 0) return { label: "Unassigned" };
+  if (matching.length === 0)
+    return { state: "unassigned", label: "Unassigned" };
   if (matching.length !== 1) return unavailable;
   const issue = matching[0];
   const expiresAt = Date.parse(issue.lifecycle!.execution!.expiresAt);
-  if (issue.status !== "in_progress" || !Number.isFinite(expiresAt))
+  if (
+    issue.status !== "in_progress" ||
+    !Number.isFinite(expiresAt) ||
+    !issue.id ||
+    normalizeMetadata(issue.id) !== issue.id
+  )
     return unavailable;
-  if (expiresAt <= now) return { label: "Lease expired" };
+  if (expiresAt <= now) return { state: "expired", label: "Lease expired" };
   const label = normalizeMetadata(issue.title);
-  return label ? { label, expiresAt } : unavailable;
+  return label
+    ? { state: "assigned", label, taskId: issue.id, expiresAt }
+    : unavailable;
 }
 
 export function runtimeTokens(

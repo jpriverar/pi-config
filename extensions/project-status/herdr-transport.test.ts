@@ -16,9 +16,25 @@ const environment = {
 const values: PaneTokens = {
   pi_model: "Model $(touch nope)",
   pi_task: "Review auth; stay safe",
+  pi_task_state: "assigned",
+  pi_task_id: "jp-one",
+  pi_task_expires_at: "2000000",
   pi_context_warning: null,
   pi_context_critical: "Context 90%",
 };
+
+function replyFor(args: readonly string[]) {
+  return {
+    stdout: JSON.stringify({
+      result:
+        args[0] === "pane"
+          ? { type: "pane_metadata" }
+          : args[1] === "list"
+            ? { plugins: [{ plugin_id: "jp.space-tabs", enabled: true }] }
+            : { type: "plugin_action_invoked" },
+    }),
+  };
+}
 
 test("requires complete Herdr caller context before creating a sender", () => {
   assert.equal(createHerdrMetadataSender({}), undefined);
@@ -42,11 +58,11 @@ test("publishes only owned keys with argv, sequence and finite execution limits"
     environment,
     async (file, args, options) => {
       calls.push({ file, args, options });
-      return { stdout: JSON.stringify({ result: { type: "pane_metadata" } }) };
+      return replyFor(args);
     },
   )!;
   assert.equal(await send(values, 12, new AbortController().signal), true);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 3);
   assert.equal(calls[0].file, "/test/herdr");
   assert.deepEqual(calls[0].args, [
     "pane",
@@ -60,6 +76,12 @@ test("publishes only owned keys with argv, sequence and finite execution limits"
     "pi_model=Model $(touch nope)",
     "--token",
     "pi_task=Review auth; stay safe",
+    "--token",
+    "pi_task_state=assigned",
+    "--token",
+    "pi_task_id=jp-one",
+    "--token",
+    "pi_task_expires_at=2000000",
     "--clear-token",
     "pi_context_warning",
     "--token",
@@ -120,8 +142,87 @@ test("the real subprocess adapter terminates a hung command", async (t) => {
 });
 
 test("accepts the installed Herdr CLI's silent successful metadata write", async () => {
-  const send = createHerdrMetadataSender(environment, async () => ({
-    stdout: "",
-  }))!;
+  const send = createHerdrMetadataSender(environment, async (_file, args) =>
+    args[0] === "pane" ? { stdout: "" } : replyFor(args),
+  )!;
   assert.equal(await send(values, 1, new AbortController().signal), true);
+});
+
+test("refreshes space counts after ownership changes but not model-only writes", async () => {
+  const calls: string[][] = [];
+  const send = createHerdrMetadataSender(environment, async (_file, args) => {
+    calls.push([...args]);
+    return replyFor(args);
+  })!;
+  const signal = new AbortController().signal;
+  assert.equal(await send(values, 1, signal), true);
+  assert.deepEqual(calls.slice(1), [
+    ["plugin", "list", "--json"],
+    ["plugin", "action", "invoke", "jp.space-tabs.refresh"],
+  ]);
+  assert.equal(
+    await send({ ...values, pi_model: "Another model" }, 2, signal),
+    true,
+  );
+  assert.equal(calls.length, 4);
+  assert.equal(
+    await send({ ...values, pi_task_expires_at: "3000000" }, 3, signal),
+    true,
+  );
+  assert.equal(calls.length, 7);
+  assert.equal(
+    await send(
+      {
+        ...values,
+        pi_task: "Unassigned",
+        pi_task_state: "unassigned",
+        pi_task_id: null,
+        pi_task_expires_at: null,
+      },
+      4,
+      signal,
+    ),
+    true,
+  );
+  assert.equal(calls.length, 10);
+});
+
+for (const plugins of [[], [{ plugin_id: "jp.space-tabs", enabled: false }]]) {
+  test(`keeps pane metadata usable with optional plugin state ${JSON.stringify(plugins)}`, async () => {
+    const calls: string[][] = [];
+    const send = createHerdrMetadataSender(environment, async (_file, args) => {
+      calls.push([...args]);
+      return args[0] === "pane"
+        ? { stdout: "" }
+        : { stdout: JSON.stringify({ result: { plugins } }) };
+    })!;
+    assert.equal(await send(values, 1, new AbortController().signal), true);
+    assert.deepEqual(calls.slice(1), [["plugin", "list", "--json"]]);
+  });
+}
+
+test("failed refresh is retried only on the next delivery, after metadata acknowledgment", async () => {
+  let fail = true;
+  const calls: string[][] = [];
+  const send = createHerdrMetadataSender(environment, async (_file, args) => {
+    calls.push([...args]);
+    if (args[1] === "action" && fail) throw new Error("socket timeout");
+    return replyFor(args);
+  })!;
+  const signal = new AbortController().signal;
+  assert.equal(await send(values, 1, signal), false);
+  assert.equal(calls.length, 3);
+  fail = false;
+  assert.equal(await send(values, 2, signal), true);
+  assert.equal(calls.length, 6);
+});
+
+test("a rejected metadata write never triggers count refresh", async () => {
+  const calls: string[][] = [];
+  const send = createHerdrMetadataSender(environment, async (_file, args) => {
+    calls.push([...args]);
+    return { stdout: '{"error":{"code":"not_found"}}' };
+  })!;
+  assert.equal(await send(values, 1, new AbortController().signal), false);
+  assert.equal(calls.length, 1);
 });

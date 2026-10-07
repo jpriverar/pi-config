@@ -4,8 +4,9 @@ An optional Herdr 0.8.0+ integration for the expanded desktop sidebar:
 
 - The Pi package's existing `project-status` extension publishes the current
   model, claimed task title, and context pressure for interactive Pi panes.
-- This Herdr plugin publishes each space's active tab and total tab count,
-  including spaces with no agents. It requires Python 3.9+ on macOS/Linux.
+- This Herdr plugin publishes each space's tab count, active-task count, and
+  optional active-tab label, including spaces with no agents. It requires
+  Python 3.9+ on macOS/Linux.
 - Space rows show no Git branch or ahead/behind information.
 
 The pane publisher requires `HERDR_ENV=1`, a pane ID, a socket path, and Pi's
@@ -16,9 +17,9 @@ The plugin runs from Herdr events, with no daemon or database polling.
 ## Display semantics
 
 The example layout shows Pi panes in three rows: state icon, tab, and space;
-task; then state text, Pi, and model. Spaces show their state icon, name, and
-tab count in one row. Sidebar context and active-tab labels are omitted;
-their metadata remains available for custom layouts.
+task; then state text, Pi, and model. Spaces show their state icon and name,
+then `N tabs` and `M in-progress` on the next row. Sidebar context and active-tab
+labels are omitted; their metadata remains available for custom layouts.
 
 Context usage stays in Pi's footer. When Pi cannot yet estimate it after
 compaction, the footer shows `Context ?` until fresh usage becomes available.
@@ -36,9 +37,19 @@ only one set at a time. The displayed percentage is floored. Unknown usage
 mirrors Pi's context estimate, not an exact token counter. Existing state
 labels and subagent summaries remain separate.
 
-The space plugin owns `active_tab` (`tab: <label>`) and `tab_count`
-(`1 tab` / `N tabs`). Missing or inconsistent active-tab evidence clears its
-label rather than guessing. Existing state icons remain visible.
+The space plugin owns `active_tab` (`tab: <label>`), `tab_count`
+(`1 tab` / `N tabs`), and `active_tasks` (`M in-progress`). Task counts use
+structured `pi_task_state`, `pi_task_id`, and `pi_task_expires_at` pane fields,
+never task-title text. They count distinct, unexpired claims owned by Pi
+sessions present in that space, including idle sessions. Multiple panes showing
+the same claimed task count once. These are space-local counts, not the header's
+workstream-wide counts. Unassigned and expired claims count as zero.
+
+Missing or invalid ownership evidence on any Pi pane produces `tasks unavailable`
+for that space rather than a misleading zero or partial total. Existing Pi
+sessions need `/reload` at an idle boundary to publish these fields. Non-Pi panes
+do not count. Missing or inconsistent active-tab evidence clears its label rather
+than guessing. Existing state icons remain visible.
 
 ## Explicit activation
 
@@ -71,15 +82,23 @@ read metadata with `herdr plugin list --json`, `herdr workspace list`, and
 
 ## Failures and freshness
 
-Pane metadata commands have a 1500ms timeout, an output bound, and no automatic
-retry loop. Publication is asynchronous and coalesced. The next meaningful Pi
+Each pane-side Herdr command has a 1500ms timeout and an output bound, with no
+automatic retry loop. After an ownership metadata write succeeds, the publisher
+checks whether `jp.space-tabs` is installed/enabled and invokes its existing
+refresh action. Model/context-only writes do not invoke it. This is event-driven,
+not database polling, and does not rely on metadata-change hooks. Publication
+remains asynchronous and coalesced; the optional plugin is not required for
+pane metadata. The next meaningful Pi
 event can retry a failed delivery. Shutdown attempts to clear only owned keys;
 forced termination cannot guarantee cleanup. Startup reconstructs values.
 
 Task display queries have a 1500ms process timeout. The prompt-start display
 refresh is asynchronous and cannot hold up the model while Beads is slow.
 Task operations re-read actual ownership rather than assume a requested claim
-or close succeeded. External task mutations appear at the next interaction or
+or close succeeded. Space counts reuse this evidence without querying Beads again.
+Pane create/move/close/exit/detection/status events and the existing tab events
+also refresh space counts. Action acknowledgment means the bounded refresh was
+queued; completion/failure is visible in the plugin log. External task mutations appear at the next interaction or
 refresh. A known lease expiry triggers one authoritative re-read. Display
 refreshes do not renew leases.
 

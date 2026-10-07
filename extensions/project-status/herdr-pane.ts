@@ -3,6 +3,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { MetadataSender } from "./herdr-transport.js";
 import {
   runtimeTokens,
+  taskTokens,
   type PaneTokens,
   type TaskAssignment,
 } from "./herdr-values.js";
@@ -48,7 +49,7 @@ export function createPaneReporter(options: {
   const now = options.now ?? timers.now;
   let desired: PaneTokens = {
     ...runtimeTokens(options.context.model, options.context.getContextUsage()),
-    pi_task: "Task unavailable",
+    ...taskTokens({ state: "unavailable", label: "Task unavailable" }),
   };
   let delivered: string | undefined;
   let dirty = false;
@@ -101,9 +102,9 @@ export function createPaneReporter(options: {
     },
     updateTask(assignment) {
       if (stopped) return;
-      desired.pi_task = assignment.label;
+      desired = { ...desired, ...taskTokens(assignment) };
       cancelExpiry();
-      if (assignment.expiresAt !== undefined) {
+      if (assignment.state === "assigned") {
         const generation = expiryGeneration;
         const delay = Math.min(
           2_147_483_647,
@@ -114,7 +115,10 @@ export function createPaneReporter(options: {
           expiry = undefined;
           void options.refreshTask().catch(() => {
             if (!stopped && generation === expiryGeneration)
-              reporter.updateTask({ label: "Task unavailable" });
+              reporter.updateTask({
+                state: "unavailable",
+                label: "Task unavailable",
+              });
           });
         }, delay);
       }
@@ -133,6 +137,9 @@ export function createPaneReporter(options: {
             {
               pi_model: null,
               pi_task: null,
+              pi_task_state: null,
+              pi_task_id: null,
+              pi_task_expires_at: null,
               pi_context_warning: null,
               pi_context_critical: null,
             },

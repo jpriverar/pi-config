@@ -38,6 +38,7 @@ export function createHerdrMetadataSender(
   if (env.HERDR_ENV !== "1" || !pane || !env.HERDR_SOCKET_PATH)
     return undefined;
   const binary = env.HERDR_BIN_PATH || "herdr";
+  let refreshedAssignment: string | undefined;
   return async (tokens, sequence, signal) => {
     if (signal.aborted) return false;
     const args = [
@@ -52,6 +53,9 @@ export function createHerdrMetadataSender(
     for (const key of [
       "pi_model",
       "pi_task",
+      "pi_task_state",
+      "pi_task_id",
+      "pi_task_expires_at",
       "pi_context_warning",
       "pi_context_critical",
     ] as const) {
@@ -61,23 +65,58 @@ export function createHerdrMetadataSender(
       );
     }
     try {
-      const { stdout } = await run(binary, args, {
+      const options = {
         env,
         signal,
         timeout: 1500,
         maxBuffer: 64 * 1024,
-        killSignal: "SIGKILL",
-        encoding: "utf8",
-      });
+        killSignal: "SIGKILL" as const,
+        encoding: "utf8" as const,
+      };
+      const { stdout } = await run(binary, args, options);
       // Herdr 0.8's metadata CLI acknowledges success with exit 0 and no output.
-      if (!stdout.trim()) return true;
-      const reply = JSON.parse(stdout);
-      return (
-        !reply.error &&
-        reply.result !== null &&
-        typeof reply.result === "object" &&
-        !Array.isArray(reply.result)
+      if (stdout.trim()) {
+        const reply = JSON.parse(stdout);
+        if (
+          reply.error ||
+          reply.result === null ||
+          typeof reply.result !== "object" ||
+          Array.isArray(reply.result)
+        )
+          return false;
+      }
+      const assignment = JSON.stringify([
+        tokens.pi_task_state,
+        tokens.pi_task_id,
+        tokens.pi_task_expires_at,
+      ]);
+      if (assignment === refreshedAssignment) return true;
+
+      // Do not rely on metadata-change hooks to refresh the optional plugin.
+      const listed = JSON.parse(
+        (await run(binary, ["plugin", "list", "--json"], options)).stdout,
       );
+      const plugins = listed.result?.plugins;
+      if (listed.error || !Array.isArray(plugins)) return false;
+      const plugin = plugins.find(
+        (entry) => entry?.plugin_id === "jp.space-tabs",
+      );
+      if (plugin && typeof plugin.enabled !== "boolean") return false;
+      if (plugin?.enabled) {
+        const invoked = JSON.parse(
+          (
+            await run(
+              binary,
+              ["plugin", "action", "invoke", "jp.space-tabs.refresh"],
+              options,
+            )
+          ).stdout,
+        );
+        if (invoked.error || invoked.result?.type !== "plugin_action_invoked")
+          return false;
+      }
+      refreshedAssignment = assignment;
+      return true;
     } catch {
       // Display delivery is best effort; the next meaningful event can retry.
       return false;

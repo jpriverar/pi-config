@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from sync_tabs import workspace_tokens
 
@@ -16,6 +17,7 @@ SCRIPT = Path(__file__).with_name("sync_tabs.py")
 
 def snapshot():
     return {
+        "panes": [],
         "workspaces": [
             {"workspace_id": "w1", "active_tab_id": "w1:t2", "tokens": dict()},
             {"workspace_id": "w2", "active_tab_id": "w2:t1", "tokens": dict()},
@@ -31,8 +33,8 @@ def snapshot():
 class TokenTests(unittest.TestCase):
     def test_counts_all_tabs_and_uses_each_spaces_active_id(self):
         self.assertEqual(workspace_tokens(snapshot()), {
-            "w1": {"active_tab": "tab: review", "tab_count": "2 tabs"},
-            "w2": {"active_tab": "tab: research", "tab_count": "1 tab"},
+            "w1": {"active_tab": "tab: review", "tab_count": "2 tabs", "active_tasks": "0 in-progress"},
+            "w2": {"active_tab": "tab: research", "tab_count": "1 tab", "active_tasks": "0 in-progress"},
         })
 
     def test_missing_foreign_and_zero_tab_states_never_guess(self):
@@ -42,7 +44,7 @@ class TokenTests(unittest.TestCase):
             self.assertEqual(workspace_tokens(value)["w1"]["active_tab"], "")
         value = snapshot()
         value["tabs"] = []
-        self.assertEqual(workspace_tokens(value)["w1"], {"active_tab": "", "tab_count": "0 tabs"})
+        self.assertEqual(workspace_tokens(value)["w1"], {"active_tab": "", "tab_count": "0 tabs", "active_tasks": "0 in-progress"})
 
     def test_sanitizes_control_sequences_and_caps_the_complete_label(self):
         value = snapshot()
@@ -59,6 +61,68 @@ class TokenTests(unittest.TestCase):
         value["tabs"].append(copy.deepcopy(value["tabs"][0]))
         with self.assertRaises(ValueError):
             workspace_tokens(value)
+
+
+
+def pi_pane(pane_id="w1:p1", task_id="jp-one", state="assigned", expires="2000000", workspace="w1"):
+    data = {"pi_task_state": state, "pi_task_id": task_id, "pi_task_expires_at": expires}
+    return {"pane_id": pane_id, "workspace_id": workspace, "tab_id": workspace + ":t1", "agent": "pi", "agent_status": "idle",
+            "tokens": data}
+
+
+class ClaimCountTests(unittest.TestCase):
+    def setUp(self):
+        clock = patch("sync_tabs.time.time", return_value=1000)
+        clock.start()
+        self.addCleanup(clock.stop)
+
+    def test_counts_distinct_claims_including_idle_but_not_unassigned_or_other_agents(self):
+        value = snapshot()
+        value["panes"] = [pi_pane(), pi_pane("w1:p2"), pi_pane("w1:p3", "jp-two"),
+                          pi_pane("w1:p4", state="unassigned"),
+                          {**pi_pane("w1:p5", "jp-three"), "agent": "claude"}]
+        self.assertEqual(workspace_tokens(value)["w1"].get("active_tasks"), "2 in-progress")
+        self.assertEqual(workspace_tokens(value)["w2"].get("active_tasks"), "0 in-progress")
+
+    def test_claims_follow_pane_membership_not_workstream_or_task_title(self):
+        value = snapshot()
+        pane = pi_pane()
+        pane["tokens"]["pi_task"] = "Unassigned"
+        value["panes"] = [pane]
+        self.assertEqual(workspace_tokens(value)["w1"].get("active_tasks"), "1 in-progress")
+        pane.update(workspace_id="w2", tab_id="w2:t1")
+        result = workspace_tokens(value)
+        self.assertEqual(result["w1"].get("active_tasks"), "0 in-progress")
+        self.assertEqual(result["w2"].get("active_tasks"), "1 in-progress")
+        value["panes"] = []
+        self.assertEqual(workspace_tokens(value)["w2"].get("active_tasks"), "0 in-progress")
+
+    def test_exact_expiry_and_expired_state_are_not_active(self):
+        for pane in [pi_pane(expires="1000000"), pi_pane(expires="999999"), pi_pane(state="expired")]:
+            value = snapshot()
+            value["panes"] = [pane]
+            self.assertEqual(workspace_tokens(value)["w1"].get("active_tasks"), "0 in-progress")
+
+    def test_missing_or_malformed_claim_data_is_not_a_false_zero(self):
+        for data in [{}, {"pi_task": "Unassigned"}, {"pi_task_state": "unavailable"},
+                     {"pi_task_state": "assigned", "pi_task_id": "jp-one"},
+                     {"pi_task_state": "assigned", "pi_task_id": "", "pi_task_expires_at": "2000000"},
+                     {"pi_task_state": "assigned", "pi_task_id": "jp-one", "pi_task_expires_at": "nan"},
+                     {"pi_task_state": "mystery"}]:
+            with self.subTest(data=data):
+                value = snapshot()
+                unknown = pi_pane("w1:p2")
+                unknown["tokens"] = data
+                value["panes"] = [pi_pane(), unknown]
+                result = workspace_tokens(value)
+                self.assertEqual(result["w1"].get("active_tasks"), "tasks unavailable")
+                self.assertEqual(result["w2"].get("active_tasks"), "0 in-progress")
+
+    def test_invalid_pane_membership_or_absent_panes_cannot_silently_zero_counts(self):
+        for value in [{k: v for k, v in snapshot().items() if k != "panes"},
+                      {**snapshot(), "panes": [{**pi_pane(), "tab_id": "w2:t1"}]}]:
+            with self.assertRaises(ValueError):
+                workspace_tokens(value)
 
 
 FAKE = r'''
