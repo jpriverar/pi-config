@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { isDeepStrictEqual } from "node:util";
 
 import { fingerprintCheck } from "./reconciliation.js";
+import { createLifecycleStore } from "./beads-store.js";
 
 import type { OwnerIdentity } from "../../extensions/worktree-pool/operation-lock.js";
 import type {
@@ -244,7 +248,7 @@ class FakeStore implements LifecycleStore {
 }
 
 function service(
-  store: FakeStore,
+  store: LifecycleStore,
   options: {
     pool?: TaskLifecyclePoolPort;
     now?: () => number;
@@ -946,7 +950,7 @@ test("stale reconciliation cannot revive a checkout deleted before renewal", asy
     now: () => Date.parse("2026-09-17T17:00:00.000Z"),
   });
   const pending = await reserveLegacyCleanup(resumed, store, claimId);
-  store.beforeMutate = async () => {
+  pool.beforeClaimObservation = async () => {
     await pool.release(request.repository, claimId, session("s1"));
     store.failReleasedResourceOnce = true;
     await assert.rejects(
@@ -965,6 +969,202 @@ test("stale reconciliation cannot revive a checkout deleted before renewal", asy
   assert.equal(store.saved.lifecycle!.resources[0].cleanupState, "released");
   assert.equal(pool.entries.has(claimId), false);
   await resumed.preflightWorktreeAcquire(request, session("s1"));
+});
+
+test("slow release observation does not block an unrelated task mutation", async () => {
+  const { store: fixture, pool, sut } = await activeServiceWithPool();
+  const acquired = await sut.acquireWorktree(
+    {
+      taskId: "jp-1",
+      repository: "repo",
+      branch: "jpriverar/slow-observation",
+    },
+    session("s1"),
+    "acquire",
+  );
+  const claimId = acquired.lifecycle!.resources[0].claimId;
+  await sut.prepareWorktreeRelease("jp-1", claimId, session("s1"), "release");
+  pool.entries.delete(claimId);
+  const root = await mkdtemp(join(tmpdir(), "task-observation-"));
+  const records = new Map([
+    ["jp-1", { ...fixture.saved }],
+    ["jp-2", { ...issue(), id: "jp-2" }],
+  ]);
+  const store = createLifecycleStore(
+    async (_command, args) => {
+      const id = args[1];
+      const current = records.get(id)!;
+      if (args[0] === "update") {
+        const metadata = JSON.parse(args[args.indexOf("--metadata") + 1]);
+        records.set(id, {
+          ...current,
+          metadata,
+          status: args[args.indexOf("-s") + 1] as LifecycleStatus,
+          lifecycle: metadata.piLifecycle,
+        });
+      } else {
+        assert.equal(args[0], "show");
+      }
+      return { code: 0, stdout: JSON.stringify([records.get(id)]), stderr: "" };
+    },
+    {
+      store: root,
+      lockDependencies: {
+        now: Date.now,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        isPidAlive: () => "live",
+        hostname: "host",
+        timeoutMs: 200,
+      },
+    },
+  );
+  let entered!: () => void;
+  let resume!: () => void;
+  const inspecting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const finishInspection = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const list = pool.list.bind(pool);
+  pool.list = async (repository) => {
+    entered();
+    await finishInspection;
+    return list(repository);
+  };
+  const resumed = service(store, { pool });
+  const reconciliation = resumed.reconcileTask("jp-1", session("daemon"));
+  try {
+    await inspecting;
+    const unrelated = await store.mutate("jp-2", session("other"), () => ({
+      operationId: "unrelated-claim",
+      status: "in_progress",
+      lifecycle: {
+        ...activeIssue("jp-2", "other").lifecycle!,
+        transitionHistory: [
+          {
+            operationId: "unrelated-claim",
+            type: "claim",
+            at: NOW,
+            from: "actionable",
+            to: "active",
+            sessionId: "other",
+          },
+        ],
+      },
+    }));
+    assert.equal(unrelated.lifecycle?.execution?.sessionId, "other");
+    assert.equal(
+      (await store.show("jp-1")).lifecycle?.resources[0].cleanupState,
+      "release_pending",
+    );
+  } finally {
+    resume();
+    await reconciliation;
+    await rm(root, { recursive: true, force: true });
+  }
+  assert.equal(
+    records.get("jp-1")!.lifecycle!.resources[0].cleanupState,
+    "released",
+  );
+});
+
+test("release reconciliation discards changed task bindings", async (t) => {
+  const changes: Record<string, (state: LifecycleMetadataV1) => void> = {
+    owner: (s) => {
+      s.execution!.sessionId = "other";
+    },
+    ownershipGeneration: (s) => {
+      s.execution!.claimedAt = new Date(NOW_MS + 1).toISOString();
+    },
+    phase: (s) => {
+      s.phase = "actionable";
+      s.execution = null;
+    },
+    claim: (s) => {
+      s.resources[0].claimId = "replacement";
+    },
+    repository: (s) => {
+      s.resources[0].repository = "other-repo";
+    },
+    path: (s) => {
+      s.resources[0].path = "/pool/replacement";
+    },
+    pathId: (s) => {
+      s.resources[0].pathId = "replacement-path";
+    },
+    branch: (s) => {
+      s.resources[0].branch = "jpriverar/replacement";
+    },
+    operation: (s) => {
+      s.resources[0].operationId = "new-release";
+    },
+    cleanupState: (s) => {
+      s.resources[0].cleanupState = "active";
+    },
+    removed: (s) => {
+      s.resources = [];
+    },
+  };
+  for (const [name, change] of Object.entries(changes)) {
+    await t.test(name, async () => {
+      const { store, pool, sut } = await activeServiceWithPool();
+      const acquired = await sut.acquireWorktree(
+        {
+          taskId: "jp-1",
+          repository: "repo",
+          branch: "jpriverar/race",
+        },
+        session("s1"),
+        "acquire",
+      );
+      const claimId = acquired.lifecycle!.resources[0].claimId;
+      await sut.prepareWorktreeRelease(
+        "jp-1",
+        claimId,
+        session("s1"),
+        "release",
+      );
+      pool.entries.delete(claimId);
+      let expected!: LifecycleIssue;
+      store.beforeMutate = () => {
+        expected = structuredClone(store.saved);
+        change(expected.lifecycle!);
+        store.saved = expected;
+      };
+      const writes = store.writes;
+      const result = await sut.reconcileTask("jp-1", session("daemon"));
+      assert.deepEqual(result, expected);
+      assert.deepEqual(store.saved, expected);
+      assert.equal(store.writes, writes);
+    });
+  }
+});
+
+test("release reconciliation preserves concurrent activity renewal", async () => {
+  const { store, pool, sut } = await activeServiceWithPool();
+  const acquired = await sut.acquireWorktree(
+    {
+      taskId: "jp-1",
+      repository: "repo",
+      branch: "jpriverar/renewal",
+    },
+    session("s1"),
+    "acquire",
+  );
+  const claimId = acquired.lifecycle!.resources[0].claimId;
+  await sut.prepareWorktreeRelease("jp-1", claimId, session("s1"), "release");
+  pool.entries.delete(claimId);
+  const renewed = new Date(NOW_MS + 1_000).toISOString();
+  store.beforeMutate = () => {
+    store.saved = structuredClone(store.saved);
+    store.saved.lifecycle!.execution!.lastActivityAt = renewed;
+    store.saved.title = "Concurrent title update";
+  };
+  const result = await sut.reconcileTask("jp-1", session("daemon"));
+  assert.equal(result.lifecycle!.resources[0].cleanupState, "released");
+  assert.equal(result.lifecycle!.execution!.lastActivityAt, renewed);
+  assert.equal(result.title, "Concurrent title update");
 });
 
 test("explicit release supersedes current automatic intent before activity renewal", async () => {
@@ -1288,12 +1488,17 @@ class FakeTaskPool {
     };
   }
 
+  beforeClaimObservation?: () => Promise<void>;
+
   async withClaimObservation<T>(
     repository: string,
     claimId: string,
     _owner: OwnerIdentity,
     operation: ClaimObservationTransaction<T>,
   ): Promise<T> {
+    const before = this.beforeClaimObservation;
+    this.beforeClaimObservation = undefined;
+    await before?.();
     return operation(async () =>
       (await this.list(repository)).repositories
         .flatMap((candidate) => candidate.worktrees)

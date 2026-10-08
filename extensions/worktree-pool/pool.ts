@@ -294,13 +294,7 @@ export class WorktreePool {
     return withOperationLock(
       repository,
       owner,
-      () =>
-        operation(async () => {
-          const listing = await this.list(repositoryName);
-          return listing.repositories
-            .flatMap((candidate) => candidate.worktrees)
-            .filter((worktree) => worktree.claimId === claimId);
-        }),
+      () => operation(() => this.listRecords(repository, claimId)),
       this.deps.operationLock,
     );
   }
@@ -541,10 +535,14 @@ export class WorktreePool {
 
   private async listRecords(
     repository: ResolvedRepository,
+    claimId?: string,
   ): Promise<PoolWorktreeListing[]> {
-    const gates = await listRepositoryLeaseRecords(
-      repository.poolRoot,
-      repository.name,
+    const gates = (
+      await listRepositoryLeaseRecords(repository.poolRoot, repository.name)
+    ).filter(
+      (gate) =>
+        claimId === undefined ||
+        (gate.state === "valid" && gate.record.claimId === claimId),
     );
     const indexed = await Promise.all(
       gates.map(async (gate): Promise<PoolWorktreeListing> => {
@@ -590,6 +588,7 @@ export class WorktreePool {
         };
       }),
     );
+    if (claimId !== undefined) return indexed;
     const unindexed = await this.unindexedManagedRegistrations(
       repository,
       gates,

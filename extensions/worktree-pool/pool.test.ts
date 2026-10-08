@@ -85,6 +85,7 @@ async function createHarness(
     afterNativeLock?: (path: string) => Promise<void>;
     interceptGit?: (
       args: string[],
+      cwd: string,
     ) => { code: number; stdout: string; stderr: string } | undefined;
     removeLeaseRecord?: (root: string, claimId: string) => Promise<void>;
   } = {},
@@ -116,7 +117,7 @@ async function createHarness(
   };
   let next = 0;
   const poolRunGit: GitRunner = async (cwd, args) =>
-    options.interceptGit?.(args) ?? runGit(cwd, args);
+    options.interceptGit?.(args, cwd) ?? runGit(cwd, args);
   const pool = new WorktreePool({
     repositories: [repository],
     runGit: poolRunGit,
@@ -165,6 +166,139 @@ async function leaseFiles(poolRoot: string): Promise<string[]> {
     return [];
   }
 }
+
+describe("claim observation", () => {
+  test("does not Git-probe unrelated indexed or unindexed worktrees", async () => {
+    const probed = new Set<string>();
+    const h = await createHarness({
+      interceptGit: (_args, cwd) => {
+        probed.add(cwd);
+        return undefined;
+      },
+    });
+    try {
+      const alice = owner(100, "alice");
+      const requested = await h.pool.acquire(
+        { repository: "repo", branch: "requested" },
+        alice,
+      );
+      const unrelated = await h.pool.acquire(
+        { repository: "repo", branch: "unrelated" },
+        alice,
+      );
+      const unindexed = join(h.repository.poolDir, `worktree-${UUIDS[9]}`);
+      await git(h.primary, ["worktree", "add", "-b", "unindexed", unindexed]);
+      probed.clear();
+
+      const matches = await h.pool.withClaimObservation(
+        "repo",
+        requested.claimId,
+        alice,
+        (observe) => observe(),
+      );
+
+      expect(matches).toHaveLength(1);
+      expect(matches[0]).toMatchObject({
+        claimId: requested.claimId,
+        path: requested.path,
+        clean: true,
+        branchProtectsHead: true,
+        state: "active",
+      });
+      expect(probed.has(requested.path)).toBe(true);
+      expect(probed.has(unrelated.path)).toBe(false);
+      expect(probed.has(unindexed)).toBe(false);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("preserves missing and duplicate claim observations", async () => {
+    const h = await createHarness();
+    try {
+      const alice = owner(100, "alice");
+      const requested = await h.pool.acquire(
+        { repository: "repo", branch: "requested" },
+        alice,
+      );
+      expect(
+        await h.pool.withClaimObservation("repo", UUIDS[8], alice, (observe) =>
+          observe(),
+        ),
+      ).toEqual([]);
+      const [file] = await leaseFiles(h.poolRoot);
+      const record = JSON.parse(
+        await readFile(join(h.poolRoot, ".leases", file), "utf8"),
+      );
+      await createLeaseRecord(h.poolRoot, {
+        ...record,
+        pathId: UUIDS[9],
+        path: join(h.repository.poolDir, `worktree-${UUIDS[9]}`),
+      });
+      const matches = await h.pool.withClaimObservation(
+        "repo",
+        requested.claimId,
+        alice,
+        (observe) => observe(),
+      );
+      expect(matches).toHaveLength(2);
+      expect(matches.map((match) => match.claimId)).toEqual([
+        requested.claimId,
+        requested.claimId,
+      ]);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("retains the repository lock until the observation callback finishes", async () => {
+    const h = await createHarness();
+    try {
+      const alice = owner(100, "alice");
+      const requested = await h.pool.acquire(
+        { repository: "repo", branch: "requested" },
+        alice,
+      );
+      const impatient = new WorktreePool({
+        repositories: [h.repository],
+        runGit,
+        operationLock: {
+          now: Date.now,
+          sleep: async () => {},
+          isPidAlive: () => "live",
+          hostname: "test-host",
+          timeoutMs: 0,
+        },
+      });
+      await h.pool.withClaimObservation(
+        "repo",
+        requested.claimId,
+        alice,
+        async (observe) => {
+          expect(await observe()).toHaveLength(1);
+          await expect(
+            impatient.withClaimObservation(
+              "repo",
+              requested.claimId,
+              owner(101, "bob"),
+              (inspect) => inspect(),
+            ),
+          ).rejects.toThrow(/lock/);
+        },
+      );
+      expect(
+        await impatient.withClaimObservation(
+          "repo",
+          requested.claimId,
+          owner(101, "bob"),
+          (inspect) => inspect(),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await h.cleanup();
+    }
+  });
+});
 
 describe("bounded allocation", () => {
   test("uses supplied opaque identities and lists complete observations", async () => {

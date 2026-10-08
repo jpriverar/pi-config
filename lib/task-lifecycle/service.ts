@@ -1364,20 +1364,25 @@ export class TaskLifecycleService {
           resource.repository,
           resource.claimId,
           owner,
-          (observe) =>
-            this.deps.store.mutate(taskId, owner, async (issue) => {
-              const latest = requireManaged(issue);
-              requireCurrentOwnerSession(taskId, latest, expectedSessionId);
+          async (observe) => {
+            // Keep the pool lock through persistence, but not the shared task lock during Git inspection.
+            const matches = await observe();
+            return this.deps.store.mutate(taskId, owner, (issue) => {
+              const latest = issue.lifecycle;
+              if (
+                latest?.phase !== "active" ||
+                latest.execution?.sessionId !== expectedSessionId ||
+                latest.execution.claimedAt !== lifecycle.execution!.claimedAt
+              )
+                return null;
               const pending = latest.resources.find(
                 (candidate) => candidate.claimId === resource.claimId,
               );
               if (
                 pending?.cleanupState !== "release_pending" ||
-                pending.operationId !== resource.operationId
+                !isDeepStrictEqual(pending, resource)
               )
                 return null;
-              // Keep evidence fresh through persistence, including failed-delete completion.
-              const matches = await observe();
               if (matches.length > 1)
                 throw new WorktreeAssociationError(
                   "ambiguous",
@@ -1406,7 +1411,8 @@ export class TaskLifecycleService {
                 issue.status,
                 next,
               );
-            }),
+            });
+          },
         );
         continue;
       }
