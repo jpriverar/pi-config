@@ -121,6 +121,7 @@ export async function sendDatadogOperation(
         request.target.orgUuid,
         "--site",
         request.target.site,
+        "--non-interactive",
         "--",
         runtime.curlPath,
         "-q",
@@ -164,6 +165,9 @@ export async function sendDatadogOperation(
         maxOutputBytes: runtime.maxOutputBytes,
       },
     );
+    // dd-auth reserves 78 for unavailable credentials before child dispatch.
+    if (result.code === 78)
+      return { kind: "retryable", code: "authentication_required" };
     if (result.code !== 0) return { kind: "unknown", code: "command_failed" };
     const match = /\n(\d{3})\n([^\r\n]*)\r?\n?$/.exec(result.stdout);
     if (!match) return { kind: "unknown", code: "invalid_response" };
