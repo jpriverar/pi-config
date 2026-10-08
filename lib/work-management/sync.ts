@@ -7,7 +7,11 @@ import {
   type WorkManagementState,
   type WorkManagementStore,
 } from "./model.js";
-import type { DatadogOperationRequest, DatadogOutcome } from "./datadog.js";
+import type {
+  DatadogOperationRequest,
+  DatadogOutcome,
+  DatadogPreparation,
+} from "./datadog.js";
 
 export type SyncResult = "idle" | "delivered" | "retry" | "attention";
 export interface WorkManagementSync {
@@ -18,10 +22,10 @@ export interface SyncDependencies {
   store: LifecycleStore & WorkManagementStore;
   owner: LockOwner;
   readConfig(): WorkManagementConfig | null;
-  send(
+  prepare(
     request: DatadogOperationRequest,
     signal?: AbortSignal,
-  ): Promise<DatadogOutcome>;
+  ): Promise<DatadogPreparation>;
   now(): number;
   retryBaseMs: number;
   retryMaxMs: number;
@@ -82,8 +86,11 @@ export function createWorkManagementSync(
         before.remote && !before.inFlight
           ? await deps.store.comments(taskId)
           : [];
-      const pending: { request?: DatadogOperationRequest; result: SyncResult } =
-        { result: "idle" };
+      const pending: {
+        request?: DatadogOperationRequest;
+        state?: WorkManagementState;
+        result: SyncResult;
+      } = { result: "idle" };
       await deps.store.mutateWorkManagement(taskId, deps.owner, (issue) => {
         const state = decodeWorkManagement(issue.metadata.piWorkManagement);
         if (!state) return null;
@@ -134,23 +141,49 @@ export function createWorkManagementSync(
           }
         }
         pending.request = request;
-        return { ...state, inFlight: request.operation };
+        pending.state = state;
+        return null;
       });
       const request = pending.request;
       if (!request) return pending.result;
-      let outcome: DatadogOutcome;
+      let prepared: DatadogPreparation;
       try {
-        outcome = signal?.aborted
-          ? { kind: "unknown", code: "interrupted" }
-          : await deps.send(request, signal);
+        prepared = signal?.aborted
+          ? { kind: "retryable", code: "interrupted" }
+          : await deps.prepare(request, signal);
       } catch {
-        outcome = { kind: "unknown", code: "outcome_unknown" };
+        prepared = { kind: "retryable", code: "preparation_failed" };
       }
-      let result: SyncResult = "attention";
+      let expected = pending.state!;
+      let reserved = false;
+      let outcome: DatadogOutcome;
+      if (prepared.kind === "ready") {
+        if (signal?.aborted) return "idle";
+        await deps.store.mutateWorkManagement(taskId, deps.owner, (issue) => {
+          const state = decodeWorkManagement(issue.metadata.piWorkManagement);
+          if (!isDeepStrictEqual(state, expected)) return null;
+          expected = { ...expected, inFlight: request.operation };
+          reserved = true;
+          return expected;
+        });
+        if (!reserved) return "idle";
+        try {
+          outcome = signal?.aborted
+            ? { kind: "unknown", code: "interrupted" }
+            : await prepared.send();
+        } catch {
+          outcome = { kind: "unknown", code: "outcome_unknown" };
+        }
+      } else outcome = prepared;
+      let result: SyncResult = "idle";
       await deps.store.mutateWorkManagement(taskId, deps.owner, (issue) => {
         const state = decodeWorkManagement(issue.metadata.piWorkManagement)!;
-        if (!isDeepStrictEqual(state.inFlight, request.operation))
-          throw new Error(`work management attempt changed for ${taskId}`);
+        if (!isDeepStrictEqual(state, expected)) {
+          if (reserved)
+            throw new Error(`work management attempt changed for ${taskId}`);
+          return null;
+        }
+        result = "attention";
         if (outcome.kind === "success") {
           if (request.operation.kind === "create") {
             if (!outcome.remote)

@@ -580,3 +580,15 @@ Reopening uses the same item. Confirmed comments are not replayed after restart.
 An uncertain write pauses that task's entire sync, including status updates.
 See [daemon operations](task-reconciler-operations.md#work-management-delivery)
 for activation and manual recovery.
+
+### Datadog browser login
+
+Work Management authentication uses stock `dd-auth`; browser login is normal.
+Authentication runs before the durable write reservation. If it times out or
+cannot obtain credentials, local work stays independent and queued for retry.
+`WM login needed` and the existing Pi task notice provide the configured
+org/site login command. Finish login with that command and allow the existing
+backoff to expire; no task-state repair is needed for an authentication failure.
+Credentials stay in process memory and stock dd-auth's cache, never in task
+metadata, configuration, notices, or reports. An ambiguous **write** still pauses
+sync for manual inspection; logging in does not replay it.

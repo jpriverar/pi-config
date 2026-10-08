@@ -226,12 +226,18 @@ export function decodeWorkManagement(
 export function summarizeWorkManagement(
   metadata: Record<string, unknown>,
   lifecycle: import("../task-lifecycle/types.js").LifecycleMetadataV1 | null,
-): { url?: string; text: string } | null {
+): {
+  url?: string;
+  text: string;
+  auth?: { command: string; required: boolean };
+} | null {
   try {
     const state = decodeWorkManagement(metadata.piWorkManagement);
     if (!state) return null;
     let text = "WM linked";
     if (state.failure?.kind === "attention") text = "WM attention";
+    else if (state.failure?.code === "authentication_required")
+      text = "WM login needed";
     else if (state.failure) text = "WM retry pending";
     else if (state.inFlight) text = `WM pending ${state.inFlight.kind}`;
     else if (!state.remote) text = "WM pending create";
@@ -244,7 +250,14 @@ export function summarizeWorkManagement(
       else if (state.lastSentStatus !== state.target.statuses[key])
         text = "WM pending status";
     }
-    return { text, ...(state.remote ? { url: state.remote.url } : {}) };
+    return {
+      text,
+      auth: {
+        command: `dd-auth --org-uuid ${state.target.orgUuid} --site ${state.target.site} -- true`,
+        required: state.failure?.code === "authentication_required",
+      },
+      ...(state.remote ? { url: state.remote.url } : {}),
+    };
   } catch {
     return { text: "WM attention: invalid state" };
   }

@@ -116,7 +116,12 @@ else process.exit(9);\n`,
       );
       await writeFile(
         auth,
-        `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nprocess.stdin.resume(); process.stdin.on('end',()=>{writeFileSync(${JSON.stringify(response)},'');process.stdout.write(JSON.stringify({data:{id:'case-1'}})+'\\n201\\n');});\n`,
+        `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';
+if(process.argv.includes('--output')) process.stdout.write('DD_API_KEY=your_api_key_here\\nDD_APP_KEY=your_secret_here\\n');
+else {
+  if(process.env.DD_API_KEY!=='your_api_key_here'||process.env.DD_APP_KEY!=='your_secret_here') process.exit(9);
+  process.stdin.resume(); process.stdin.on('end',()=>{writeFileSync(${JSON.stringify(response)},'');process.stdout.write(JSON.stringify({data:{id:'case-1'}})+'\\n201\\n');});
+}\n`,
         { mode: 0o755 },
       );
       f.raw.executables = {
@@ -133,7 +138,7 @@ else process.exit(9);\n`,
         JSON.stringify({
           version: 1,
           ddAuthPath: auth,
-          curlPath: process.execPath,
+          curlPath: auth,
           workstreams: {},
         }),
       );

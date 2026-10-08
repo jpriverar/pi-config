@@ -173,3 +173,18 @@ Deliver code and test evidence with integration disabled. Before live validation
 ## Review and Execution Choice
 
 This plan is awaiting JP's review. Recommend direct execution in this session followed by one independent whole-branch review: the four tasks share store/runtime interfaces, so fresh implementers per task add handoff cost without useful parallelism. JP must choose/approve the execution approach before code changes or delegation.
+
+## Approved stock-auth correction — 2026-10-08
+
+The initial unattended-auth activation gate above is superseded. JP approved
+ordinary browser authentication with stock dd-auth and a visible login-needed
+flow. Authentication now precedes the durable write reservation; credentials
+remain inside the prepared transport in memory. Authentication failures use
+existing retry/backoff. Existing task notices show the exact org/site login
+command, deduplicated until recovery. Unknown write outcomes still pause.
+
+The original implementation and independent whole-branch review are complete.
+The auth correction is being implemented and tested directly under `jp-w7cz`.
+Local integration, the `recs` → RECS mapping, exact status mapping, and one labeled
+live create/active/comment/completed validation task are already approved.
+No additional activation approval, upstream publication, or deletion is implied.

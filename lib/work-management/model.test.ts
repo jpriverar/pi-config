@@ -29,6 +29,10 @@ test("summary exposes pending and attention without trusting stored URLs", () =>
   );
   assert.deepEqual(summarizeWorkManagement({ piWorkManagement: state }, null), {
     text: "WM pending create",
+    auth: {
+      command: `dd-auth --org-uuid ${target.orgUuid} --site datadoghq.com -- true`,
+      required: false,
+    },
   });
   state.remote = { id: "case-1", url: "https://github.com/unsafe" };
   assert.deepEqual(summarizeWorkManagement({ piWorkManagement: state }, null), {
@@ -46,6 +50,10 @@ test("summary exposes pending and attention without trusting stored URLs", () =>
   };
   assert.deepEqual(summarizeWorkManagement({ piWorkManagement: state }, null), {
     text: "WM attention",
+    auth: {
+      command: `dd-auth --org-uuid ${target.orgUuid} --site datadoghq.com -- true`,
+      required: false,
+    },
     url: "https://app.datadoghq.com/cases/case-1",
   });
 });

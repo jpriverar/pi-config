@@ -204,6 +204,30 @@ export function selectReconciliationNotices(
       known.delete(issue.id);
     else known.add(issue.id);
   }
+  const authTargets = new Map<string, { command: string; required: boolean }>();
+  for (const issue of rows) {
+    const auth = issue.workManagement?.auth;
+    if (!auth) continue;
+    const key = `$wm-auth:${hash(auth.command)}`;
+    authTargets.set(key, {
+      ...auth,
+      required: auth.required || authTargets.get(key)?.required === true,
+    });
+  }
+  for (const [key, auth] of authTargets) {
+    if (!auth.required) {
+      delete lastSeen[key];
+      continue;
+    }
+    const signature = `authentication:${hash(auth.command)}`;
+    if (lastSeen[key] === signature || notices.length >= 10) continue;
+    notices.push({
+      key,
+      level: "warning",
+      message: `Datadog login needed for Work Management. Work remains pending. Run: ${auth.command} — complete browser login; sync retries automatically.`,
+    });
+    lastSeen[key] = signature;
+  }
   let cursor: NoticeCursor = {
     version: 1,
     knownTaskIds: [...known],

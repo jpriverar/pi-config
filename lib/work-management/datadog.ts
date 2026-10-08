@@ -24,6 +24,9 @@ export type DatadogOutcome =
   | { kind: "retryable"; code: string; retryAfterMs?: number }
   | { kind: "rejected"; code: string }
   | { kind: "unknown"; code: string };
+export type DatadogPreparation =
+  | { kind: "ready"; send(): Promise<DatadogOutcome> }
+  | Extract<DatadogOutcome, { kind: "retryable" | "rejected" }>;
 export interface DatadogRuntime {
   ddAuthPath: string;
   curlPath: string;
@@ -94,11 +97,11 @@ function payload(request: DatadogOperationRequest): {
   };
 }
 
-export async function sendDatadogOperation(
+export async function prepareDatadogOperation(
   request: DatadogOperationRequest,
   runtime: DatadogRuntime,
   signal?: AbortSignal,
-): Promise<DatadogOutcome> {
+): Promise<DatadogPreparation> {
   let input: string;
   let url: string;
   try {
@@ -113,6 +116,7 @@ export async function sendDatadogOperation(
   } catch {
     return { kind: "rejected", code: "invalid_request" };
   }
+  let authEnv: NodeJS.ProcessEnv;
   try {
     const result = await (runtime.run ?? runBoundedCommand)(
       runtime.ddAuthPath,
@@ -121,8 +125,52 @@ export async function sendDatadogOperation(
         request.target.orgUuid,
         "--site",
         request.target.site,
-        "--",
-        runtime.curlPath,
+        "--output",
+      ],
+      {
+        env: runtime.env,
+        signal,
+        timeoutMs: runtime.timeoutMs,
+        maxOutputBytes: runtime.maxOutputBytes,
+      },
+    );
+    if (result.code !== 0) throw new Error("authentication unavailable");
+    authEnv = {};
+    for (const name of ["DD_API_KEY", "DD_APP_KEY"]) {
+      const lines = result.stdout
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith(`${name}=`));
+      const value = lines[0]?.slice(name.length + 1);
+      if (lines.length !== 1 || !value || /[\s\x00-\x1f\x7f]/.test(value))
+        throw new Error("invalid credential output");
+      authEnv[name] = value;
+    }
+  } catch {
+    return {
+      kind: "retryable",
+      code: signal?.aborted ? "interrupted" : "authentication_required",
+    };
+  }
+  // Only the prepared sender holds credentials; no keys enter durable state or diagnostics.
+  const authenticated = { ...runtime, env: { ...runtime.env, ...authEnv } };
+  return {
+    kind: "ready",
+    send: () =>
+      sendDatadogOperation(request, authenticated, input, url, signal),
+  };
+}
+
+async function sendDatadogOperation(
+  request: DatadogOperationRequest,
+  runtime: DatadogRuntime,
+  input: string,
+  url: string,
+  signal?: AbortSignal,
+): Promise<DatadogOutcome> {
+  try {
+    const result = await (runtime.run ?? runBoundedCommand)(
+      runtime.curlPath,
+      [
         "-q",
         "--silent",
         "--show-error",

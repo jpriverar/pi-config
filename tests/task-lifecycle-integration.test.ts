@@ -280,20 +280,21 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
         curlPath: "/usr/bin/curl",
         workstreams: {},
       }),
-      send: async (
-        request: DatadogOperationRequest,
-      ): Promise<DatadogOutcome> => {
-        deliveries.push(request);
-        return request.operation.kind === "create"
-          ? {
-              kind: "success",
-              remote: {
-                id: "case-native",
-                url: "https://app.datadoghq.com/cases/case-native",
-              },
-            }
-          : { kind: "success" };
-      },
+      prepare: async (request: DatadogOperationRequest) => ({
+        kind: "ready" as const,
+        send: async (): Promise<DatadogOutcome> => {
+          deliveries.push(request);
+          return request.operation.kind === "create"
+            ? {
+                kind: "success",
+                remote: {
+                  id: "case-native",
+                  url: "https://app.datadoghq.com/cases/case-native",
+                },
+              }
+            : { kind: "success" };
+        },
+      }),
     };
     const sync = createWorkManagementSync(syncDependencies);
     for (let i = 0; i < 4; i++)

@@ -80,10 +80,13 @@ async function harness(t: TestContext) {
       curlPath: "/usr/bin/curl",
       workstreams: {},
     }),
-    send: async (request: DatadogOperationRequest) => {
-      calls.push(request);
-      return respond(request);
-    },
+    prepare: async (request: DatadogOperationRequest) => ({
+      kind: "ready" as const,
+      send: async () => {
+        calls.push(request);
+        return respond(request);
+      },
+    }),
   };
   return {
     raw,
@@ -223,9 +226,8 @@ test("safe rejections back off and missing configuration requires attention", as
 test("remote success followed by a lost local receipt cannot create a second item", async (t) => {
   const h = await harness(t);
   const original = h.store.mutateWorkManagement;
-  let writes = 0;
   h.store.mutateWorkManagement = async (...args) => {
-    if (++writes === 2) throw new Error("crash before acknowledgment");
+    if (h.calls.length === 1) throw new Error("crash before acknowledgment");
     return original(...args);
   };
   await assert.rejects(h.sync.step("jp-test"), /crash before acknowledgment/);
@@ -259,4 +261,101 @@ test("reopening a task updates its existing item rather than creating another", 
     kind: "status",
     statusName: "In Progress",
   });
+});
+
+test("unfinished authentication stays retryable without reserving or sending a write", async (t) => {
+  const h = await harness(t);
+  const sync = createWorkManagementSync({
+    ...h.deps,
+    prepare: async () => ({
+      kind: "retryable" as const,
+      code: "authentication_required",
+    }),
+  });
+  assert.equal(await sync.step("jp-test"), "retry");
+  assert.equal(h.state().inFlight, null);
+  assert.equal(h.state().failure?.code, "authentication_required");
+  assert.equal(h.calls.length, 0);
+  h.clock(now + 1000);
+  assert.equal(await h.sync.step("jp-test"), "delivered");
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.state().failure, null);
+});
+
+test("authentication completes before the durable write reservation", async (t) => {
+  const h = await harness(t);
+  let prepared = false;
+  const sync = createWorkManagementSync({
+    ...h.deps,
+    prepare: async () => {
+      assert.equal(h.state().inFlight, null);
+      prepared = true;
+      return {
+        kind: "ready" as const,
+        send: async () => {
+          assert.deepEqual(h.state().inFlight, { kind: "create" });
+          return {
+            kind: "success" as const,
+            remote: {
+              id: "case-1",
+              url: "https://app.datadoghq.com/cases/case-1",
+            },
+          };
+        },
+      };
+    },
+  });
+  assert.equal(await sync.step("jp-test"), "delivered");
+  assert.equal(prepared, true);
+});
+
+test("changed delivery state during login prevents dispatch from the stale snapshot", async (t) => {
+  const h = await harness(t);
+  let sent = false;
+  const sync = createWorkManagementSync({
+    ...h.deps,
+    prepare: async () => {
+      h.raw.metadata.piWorkManagement.failure = {
+        kind: "attention",
+        code: "operator_pause",
+        count: 1,
+        retryAt: null,
+      };
+      return {
+        kind: "ready" as const,
+        send: async () => {
+          sent = true;
+          return { kind: "success" as const };
+        },
+      };
+    },
+  });
+  assert.equal(await sync.step("jp-test"), "idle");
+  assert.equal(sent, false);
+  assert.equal(h.state().failure?.code, "operator_pause");
+  assert.equal(h.state().inFlight, null);
+});
+
+test("shutdown during authentication leaves work pending without an in-flight marker", async (t) => {
+  const h = await harness(t);
+  const controller = new AbortController();
+  let sent = false;
+  const sync = createWorkManagementSync({
+    ...h.deps,
+    prepare: async () => {
+      controller.abort();
+      return {
+        kind: "ready" as const,
+        send: async () => {
+          sent = true;
+          return { kind: "success" as const };
+        },
+      };
+    },
+  });
+  assert.equal(await sync.step("jp-test", controller.signal), "idle");
+  assert.equal(h.state().inFlight, null);
+  assert.equal(h.state().failure, null);
+  assert.equal(sent, false);
+  assert.deepEqual(await h.sync.candidates(), ["jp-test"]);
 });

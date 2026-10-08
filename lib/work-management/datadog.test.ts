@@ -1,11 +1,26 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  sendDatadogOperation,
+  prepareDatadogOperation,
+  type DatadogRuntime,
   type DatadogOperationRequest,
 } from "./datadog.js";
 import { target } from "./test-fixtures.js";
 import type { runBoundedCommand } from "../task-reconciler/commands.js";
+
+const authenticated = {
+  code: 0,
+  stdout:
+    "DD_API_KEY=your_api_key_here\nDD_APP_KEY=your_secret_here\nDD_SITE=datadoghq.com\n",
+  stderr: "",
+};
+async function sendDatadogOperation(
+  request: DatadogOperationRequest,
+  runtime: DatadogRuntime,
+) {
+  const prepared = await prepareDatadogOperation(request, runtime);
+  return prepared.kind === "ready" ? prepared.send() : prepared;
+}
 
 const runtime = {
   ddAuthPath: "/test/dd-auth",
@@ -29,10 +44,23 @@ const reply = (code: number, body: unknown = {}, retry = "") => ({
 test("create, status and comment requests preserve their exact API contract without leaking payloads into argv", async () => {
   const calls: Array<{ args: readonly string[]; input: string }> = [];
   const run: typeof runBoundedCommand = async (file, args, options) => {
-    assert.equal(file, "/test/dd-auth");
-    assert.equal(args[0], "--org-uuid");
-    assert.equal(args[1], target.orgUuid);
-    assert.equal(args[args.indexOf("/usr/bin/curl") + 1], "-q");
+    if (file === "/test/dd-auth") {
+      assert.deepEqual(args, [
+        "--org-uuid",
+        target.orgUuid,
+        "--site",
+        "datadoghq.com",
+        "--output",
+      ]);
+      assert.equal(options.input, undefined);
+      return authenticated;
+    }
+    assert.equal(file, "/usr/bin/curl");
+    assert.equal(args[0], "-q");
+    assert.equal(options.env.DD_API_KEY, "your_api_key_here");
+    assert.equal(options.env.DD_APP_KEY, "your_secret_here");
+    assert.ok(!args.join(" ").includes("your_api_key_here"));
+    assert.ok(!args.join(" ").includes("your_secret_here"));
     assert.ok(args.includes("--no-location"));
     assert.equal(args[args.indexOf("--retry") + 1], "0");
     assert.ok(args.includes("%DD_APP_KEY"));
@@ -111,7 +139,8 @@ test("ambiguous writes are not classified as retryable", async () => {
   ] as const) {
     const result = await sendDatadogOperation(request, {
       ...runtime,
-      run: async () => response,
+      run: async (file) =>
+        file === runtime.ddAuthPath ? authenticated : response,
     });
     assert.equal(result.kind, kind);
     assert.ok(!JSON.stringify(result).includes("secret"));
@@ -121,7 +150,8 @@ test("ambiguous writes are not classified as retryable", async () => {
     (
       await sendDatadogOperation(request, {
         ...runtime,
-        run: async () => {
+        run: async (file) => {
+          if (file === runtime.ddAuthPath) return authenticated;
           throw new Error("secret timeout");
         },
       })
@@ -149,8 +179,9 @@ test("a command error without dispatch proof remains unknown", async () => {
   );
   const outcome = await sendDatadogOperation(request, {
     ...runtime,
-    run: async () => {
-      throw new CommandExecutionError("dd-auth", "spawn_failed");
+    run: async (file) => {
+      if (file === runtime.ddAuthPath) return authenticated;
+      throw new CommandExecutionError("curl", "spawn_failed");
     },
   });
   assert.equal(outcome.kind, "unknown");
@@ -196,15 +227,7 @@ test("real curl consumes injected variables and stdin but never follows redirect
   const auth = join(root, "fake-auth");
   await writeFile(
     auth,
-    `#!${process.execPath}\nconst fs = require('fs'), cp = require('child_process');
-const args = process.argv.slice(2), sep = args.indexOf('--'), curl = args.slice(sep + 2);
-if (!curl[curl.indexOf('--url') + 1].startsWith('https://api.datadoghq.com/')) process.exit(2);
-curl[curl.indexOf('--url') + 1] = process.env.TEST_BASE;
-curl[curl.indexOf('--proto') + 1] = '=http';
-const env = {...process.env};
-if (!env.TEST_MISSING) { env.DD_API_KEY='fake-api'; env.DD_APP_KEY='fake-app'; }
-const r=cp.spawnSync(args[sep+1],curl,{env,input:fs.readFileSync(0),encoding:'utf8'});
-process.stdout.write(r.stdout||''); process.stderr.write(r.stderr||''); process.exit(r.status||0);\n`,
+    `#!${process.execPath}\nif (!process.env.TEST_MISSING) process.stdout.write('DD_API_KEY=your_api_key_here\\nDD_APP_KEY=your_secret_here\\n');\n`,
     { mode: 0o700 },
   );
   await writeFile(join(root, ".curlrc"), "location\n");
@@ -213,12 +236,27 @@ process.stdout.write(r.stdout||''); process.stderr.write(r.stderr||''); process.
   const local = {
     ...runtime,
     ddAuthPath: auth,
-    env: { HOME: root, TEST_BASE: localUrl.toString() },
+    env: { HOME: root },
+    run: (async (file, args, options) => {
+      const { runBoundedCommand } = await import(
+        "../task-reconciler/commands.js"
+      );
+      if (file === auth) return runBoundedCommand(file, args, options);
+      const localArgs = [...args];
+      assert.ok(
+        localArgs[localArgs.indexOf("--url") + 1].startsWith(
+          "https://api.datadoghq.com/",
+        ),
+      );
+      localArgs[localArgs.indexOf("--url") + 1] = localUrl.toString();
+      localArgs[localArgs.indexOf("--proto") + 1] = "=http";
+      return runBoundedCommand(file, localArgs, options);
+    }) satisfies typeof runBoundedCommand,
   };
   assert.equal((await sendDatadogOperation(request, local)).kind, "success");
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].api, "fake-api");
-  assert.equal(requests[0].app, "fake-app");
+  assert.equal(requests[0].api, "your_api_key_here");
+  assert.equal(requests[0].app, "your_secret_here");
   assert.equal(
     JSON.parse(requests[0].body).data.attributes.title,
     "$(private title)",
@@ -233,7 +271,68 @@ process.stdout.write(r.stdout||''); process.stderr.write(r.stderr||''); process.
         env: { ...local.env, TEST_MISSING: "1" },
       })
     ).kind,
-    "unknown",
+    "retryable",
   );
   assert.equal(requests.length, 2);
+});
+
+test("stock authentication failure is safe to retry without running curl or exposing output", async () => {
+  let curls = 0;
+  const result = await sendDatadogOperation(request, {
+    ...runtime,
+    run: async (file) => {
+      if (file === runtime.curlPath) curls++;
+      return {
+        code: 1,
+        stdout: "private credentials",
+        stderr: "private credentials",
+      };
+    },
+  });
+  assert.deepEqual(result, {
+    kind: "retryable",
+    code: "authentication_required",
+  });
+  assert.equal(curls, 0);
+});
+
+test("preparation holds credentials privately and sends only when requested", async () => {
+  let curls = 0;
+  const prepared = await prepareDatadogOperation(request, {
+    ...runtime,
+    run: async (file) => {
+      if (file === runtime.ddAuthPath) return authenticated;
+      curls++;
+      return reply(201, { data: { id: "case-1" } });
+    },
+  });
+  assert.equal(curls, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(prepared)), { kind: "ready" });
+  assert.equal(prepared.kind, "ready");
+  if (prepared.kind !== "ready") throw new Error("expected prepared sender");
+  assert.equal((await prepared.send()).kind, "success");
+  assert.equal(curls, 1);
+});
+
+test("partial, duplicate, and malformed credentials never reach curl", async () => {
+  for (const stdout of [
+    "DD_API_KEY=your_api_key_here\n",
+    "DD_API_KEY=your_api_key_here\nDD_APP_KEY=\n",
+    "DD_API_KEY=your_api_key_here\nDD_APP_KEY=bad value\n",
+    "DD_API_KEY=your_api_key_here\nDD_APP_KEY=your_secret_here\nDD_APP_KEY=duplicate\n",
+  ]) {
+    let curls = 0;
+    const prepared = await prepareDatadogOperation(request, {
+      ...runtime,
+      run: async (file) => {
+        if (file === runtime.curlPath) curls++;
+        return { code: 0, stdout, stderr: "" };
+      },
+    });
+    assert.deepEqual(prepared, {
+      kind: "retryable",
+      code: "authentication_required",
+    });
+    assert.equal(curls, 0);
+  }
 });

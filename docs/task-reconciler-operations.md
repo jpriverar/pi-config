@@ -182,18 +182,35 @@ retried blindly. There is no separate service or integration-specific pause CLI.
 
 Before activation, obtain explicit approval for the org, site, project, type,
 status mapping, and a disposable validation task. Verify the configured curl
-supports variables (`curl --version`, minimum 8.3.0). Verify `dd-auth` forwards
-stdin and behaves within a bounded deadline with both valid and expired
-credentials using a read-only probe. Do not enable background writes if it opens
-repeated login prompts, cannot run unattended, or ignores the deadline; resolve
-that credential issue first. Unit tests use fake credentials and do not establish
-live authentication compatibility.
+supports variables (`curl --version`, minimum 8.3.0). Use unmodified stock
+`dd-auth`. Browser authentication is supported: authentication is completed
+before the daemon reserves or sends a write. Verify the stock helper with a
+read-only probe; unit tests use fake credentials and do not establish live
+compatibility.
+
+If login does not complete within the command deadline, work remains pending
+with bounded retry/backoff. Pi shows `WM login needed` and an existing task notice
+with the exact org/site login command, once per affected org until recovery.
+Run that command in a terminal (or ask the agent to run it) and finish browser
+login; pending work resumes on a subsequent retry. For example:
+
+```sh
+dd-auth --org-uuid ORG_UUID --site datadoghq.com -- true
+```
+
+Stock `dd-auth` owns browser login and credential caching. Pi captures its
+supported `--output` privately in process memory, then passes the two keys only
+in curl's environment. Authentication never receives the write payload. A
+restart while authenticating leaves work pending; a restart after the durable
+write reservation remains conservative and requires outcome inspection.
 
 The helper uses explicit org/site selection, native curl environment-variable
 expansion, and JSON on stdin. It ignores curlrc, disallows redirects and automatic
 curl retries, restricts targets to supported HTTPS API hosts, and imposes input,
 output, and time bounds. It does not use shell interpolation or print credentials.
-Do not turn on credential-helper verbose/output flags or log raw command output.
+Do not enable verbose authentication logging or log raw command output. Never
+run `dd-auth --output` directly in a visible terminal or attach its output to a
+report; it contains credentials.
 A configured helper must be trusted local software, not an unreviewed script.
 
 Installing/updating the daemon runtime and enabling a real configuration are

@@ -32,7 +32,7 @@ export interface BeadsIssue {
   updatedAt?: string;
   lifecycle?: LifecycleMetadataV1 | null;
   lifecycleWarning?: string;
-  workManagement?: { text: string; url?: string };
+  workManagement?: NonNullable<ReturnType<typeof summarizeWorkManagement>>;
   blockingDependencyIds?: string[];
   blockingDependencies?: NativeDependency[];
 }

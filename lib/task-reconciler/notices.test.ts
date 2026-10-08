@@ -199,3 +199,59 @@ test("claiming actionable work does not replay its archived check success", asyn
     0,
   );
 });
+
+test("login-needed notices give the target-specific stock command once per org until recovery", async () => {
+  const { newWorkManagementState, summarizeWorkManagement } = await import(
+    "../work-management/model.js"
+  );
+  const { target } = await import("../work-management/test-fixtures.js");
+  const state = newWorkManagementState(
+    target,
+    "private title",
+    "private description",
+  );
+  state.failure = {
+    kind: "retryable",
+    code: "authentication_required",
+    count: 1,
+    retryAt: 1,
+  };
+  const tasks = () =>
+    [issue("jp-auth-1"), issue("jp-auth-2")].map((t) => ({
+      ...t,
+      workManagement: summarizeWorkManagement(
+        { piWorkManagement: state },
+        t.lifecycle!,
+      )!,
+    }));
+  const first = selectReconciliationNotices(tasks(), health, null);
+  assert.equal(first.notices.length, 1);
+  assert.match(first.notices[0].message, /Datadog login needed/);
+  assert.ok(
+    first.notices[0].message.includes(
+      `dd-auth --org-uuid ${target.orgUuid} --site datadoghq.com -- true`,
+    ),
+  );
+  assert.ok(!first.notices[0].message.includes("private"));
+  assert.ok(readNoticeCursor(first.cursor));
+  assert.match(tasks()[0].workManagement.text, /login needed/);
+  state.failure.count++;
+  state.failure.retryAt = 2;
+  assert.equal(
+    selectReconciliationNotices(tasks(), health, first.cursor).notices.length,
+    0,
+  );
+  state.failure = null;
+  const recovered = selectReconciliationNotices(tasks(), health, first.cursor);
+  state.failure = {
+    kind: "retryable",
+    code: "authentication_required",
+    count: 1,
+    retryAt: 1,
+  };
+  assert.equal(
+    selectReconciliationNotices(tasks(), health, recovered.cursor).notices
+      .length,
+    1,
+  );
+});

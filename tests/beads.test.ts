@@ -957,6 +957,10 @@ test("projects work management health without changing task readiness or exposin
   assert.ok(result.ok);
   assert.deepEqual(result.value[0].workManagement, {
     text: "WM pending create",
+    auth: {
+      command: `dd-auth --org-uuid ${wmTarget.orgUuid} --site datadoghq.com -- true`,
+      required: false,
+    },
   });
   assert.equal(result.value[0].status, "open");
   assert.ok(!JSON.stringify(result.value).includes("private initial"));

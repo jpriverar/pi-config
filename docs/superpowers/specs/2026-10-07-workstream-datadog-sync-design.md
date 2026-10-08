@@ -91,7 +91,7 @@ Use the documented Case Management endpoints for creation, status, and comments,
 
 Use `dd-auth` with explicit org/site selection and bounded execution, without shell interpolation, credential output, or persistent keys. Restrict requests to supported Datadog hosts; do not forward credentials across arbitrary redirects. Do not change the conversational MCP connection.
 
-The installed helper's help confirms org/site selection but not unattended behavior with expired credentials. Verify that before enabling background writes. If it cannot run safely unattended, stop and discuss the credential mechanism rather than layering workarounds.
+**2026-10-08 approved correction:** use unmodified stock `dd-auth`; browser authentication is acceptable. Complete authentication before recording an in-flight write. Capture supported `--output` privately in memory, then invoke curl with keys only in its environment. If login does not complete, keep work pending with existing retry/backoff, show `WM login needed`, and use the existing Pi notice channel for the exact org/site login command. Deduplicate notices per org until recovery. No helper fork, new credential store, auth service, or automatic replay of uncertain writes is permitted. A read-only stock-helper probe remains part of activation verification, not an unattended-auth approval gate.
 
 JP must approve the actual project/status mapping and a disposable task before live validation. Then verify one creation, status update, and comment. No projects, statuses, or validation items are created during design; cleanup requires separate approval.
 

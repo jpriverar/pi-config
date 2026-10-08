@@ -1,6 +1,6 @@
 import { loadWorkManagementConfig } from "../work-management/config.js";
 import { createWorkManagementSync } from "../work-management/sync.js";
-import { sendDatadogOperation } from "../work-management/datadog.js";
+import { prepareDatadogOperation } from "../work-management/datadog.js";
 import type { ClaimObservationTransaction } from "../../extensions/worktree-pool/pool.js";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
@@ -162,14 +162,14 @@ export async function createDaemonRuntime(
       readConfig: () => loadWorkManagementConfig(config.store),
       retryBaseMs: config.limits.localFailureBaseMs,
       retryMaxMs: config.limits.localFailureMaxMs,
-      send: (request, signal) => {
+      prepare: (request, signal) => {
         const integration = loadWorkManagementConfig(config.store);
         if (!integration)
           return Promise.resolve({
             kind: "rejected",
             code: "configuration_unavailable",
           });
-        return sendDatadogOperation(
+        return prepareDatadogOperation(
           request,
           {
             ddAuthPath: integration.ddAuthPath,
