@@ -517,8 +517,7 @@ for Datadog. Existing tasks are never enrolled automatically.
 The private configuration lives at `<Beads store>/pi-work-management.json` (the
 same store selected by `BEADS_DIR`). Do not commit it to this package. No file
 means no new enrollment. An invalid file fails task creation explicitly before a
-task is written. Configure absolute paths for `dd-auth` with `--non-interactive`
-(pre-dispatch authentication-needed exit 78) and curl >= 8.3.0:
+task is written. Configure absolute paths for `dd-auth` and curl >= 8.3.0:
 
 ```json
 {

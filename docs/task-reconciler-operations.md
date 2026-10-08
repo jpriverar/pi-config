@@ -182,23 +182,12 @@ retried blindly. There is no separate service or integration-specific pause CLI.
 
 Before activation, obtain explicit approval for the org, site, project, type,
 status mapping, and a disposable validation task. Verify the configured curl
-supports variables (`curl --version`, minimum 8.3.0). The configured `dd-auth`
-must support `--non-interactive` and reserve exit 78 for unavailable cached
-credentials **before child dispatch**. Older versions are not supported; do not
-fall back to interactive authentication in the daemon.
-
-Verify stdin forwarding and bounded behavior with valid and unavailable cached
-credentials using read-only probes. The OS credential store must be accessible;
-the daemon does not unlock it. Unit tests use fake credentials and do not
-establish live authentication compatibility.
-
-When WM reports `authentication_required`, run the configured `dd-auth` manually
-with the same `--org-uuid` and `--site`, without `--non-interactive`, and complete
-browser login. For example, append `-- true` to perform authentication without an
-API write. Pending delivery retries through the existing backoff and resumes
-after authentication; no metadata repair is needed for this pre-dispatch result.
-Other command failures and timeouts remain uncertain and must not be replayed
-blindly.
+supports variables (`curl --version`, minimum 8.3.0). Verify `dd-auth` forwards
+stdin and behaves within a bounded deadline with both valid and expired
+credentials using a read-only probe. Do not enable background writes if it opens
+repeated login prompts, cannot run unattended, or ignores the deadline; resolve
+that credential issue first. Unit tests use fake credentials and do not establish
+live authentication compatibility.
 
 The helper uses explicit org/site selection, native curl environment-variable
 expansion, and JSON on stdin. It ignores curlrc, disallows redirects and automatic

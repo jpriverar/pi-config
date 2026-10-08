@@ -32,7 +32,6 @@ test("create, status and comment requests preserve their exact API contract with
     assert.equal(file, "/test/dd-auth");
     assert.equal(args[0], "--org-uuid");
     assert.equal(args[1], target.orgUuid);
-    assert.ok(args.slice(0, args.indexOf("--")).includes("--non-interactive"));
     assert.equal(args[args.indexOf("/usr/bin/curl") + 1], "-q");
     assert.ok(args.includes("--no-location"));
     assert.equal(args[args.indexOf("--retry") + 1], "0");
@@ -237,19 +236,4 @@ process.stdout.write(r.stdout||''); process.stderr.write(r.stderr||''); process.
     "unknown",
   );
   assert.equal(requests.length, 2);
-});
-
-test("authentication-required is safe to retry only before child dispatch", async () => {
-  const outcome = await sendDatadogOperation(request, {
-    ...runtime,
-    run: async () => ({
-      code: 78,
-      stdout: "",
-      stderr: "cached credentials unavailable",
-    }),
-  });
-  assert.deepEqual(outcome, {
-    kind: "retryable",
-    code: "authentication_required",
-  });
 });

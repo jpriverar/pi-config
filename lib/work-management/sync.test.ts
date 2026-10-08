@@ -13,11 +13,7 @@ import {
   type WorkManagementState,
 } from "./model.js";
 import { target } from "./test-fixtures.js";
-import {
-  sendDatadogOperation,
-  type DatadogOperationRequest,
-  type DatadogOutcome,
-} from "./datadog.js";
+import type { DatadogOperationRequest, DatadogOutcome } from "./datadog.js";
 
 const now = Date.parse("2026-10-07T12:00:00Z");
 async function harness(t: TestContext) {
@@ -263,41 +259,4 @@ test("reopening a task updates its existing item rather than creating another", 
     kind: "status",
     statusName: "In Progress",
   });
-});
-
-test("login-needed work survives restart and retries after manual authentication", async (t) => {
-  const h = await harness(t);
-  let authenticated = false,
-    writes = 0;
-  h.respond((request) =>
-    sendDatadogOperation(request, {
-      ddAuthPath: "/test/dd-auth",
-      curlPath: "/usr/bin/curl",
-      env: {},
-      timeoutMs: 1000,
-      maxOutputBytes: 10000,
-      run: async () => {
-        if (!authenticated)
-          return { code: 78, stdout: "", stderr: "login needed" };
-        writes++;
-        return {
-          code: 0,
-          stdout: JSON.stringify({ data: { id: "case-1" } }) + "\n201\n",
-          stderr: "",
-        };
-      },
-    }),
-  );
-  assert.equal(await h.sync.step("jp-test"), "retry");
-  assert.equal(h.state().inFlight, null);
-  assert.equal(h.state().failure?.code, "authentication_required");
-  const restarted = createWorkManagementSync(h.deps);
-  assert.equal(await restarted.step("jp-test"), "idle");
-  assert.equal(writes, 0);
-  authenticated = true;
-  h.clock(now + 1000);
-  assert.equal(await restarted.step("jp-test"), "delivered");
-  assert.equal(writes, 1);
-  assert.equal(h.state().remote?.id, "case-1");
-  assert.equal(h.state().failure, null);
 });
