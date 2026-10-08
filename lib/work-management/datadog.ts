@@ -54,6 +54,7 @@ function payload(request: DatadogOperationRequest): {
             title: request.initial.title,
             description: `${request.initial.description}\n\nLocal task: ${request.taskId}`,
             type_id: target.typeId,
+            priority: "NOT_DEFINED",
             status_name: target.statuses.actionable,
           },
           relationships: {

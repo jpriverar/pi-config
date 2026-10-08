@@ -86,6 +86,7 @@ test("create, status and comment requests preserve their exact API contract with
         title: "$(private title)",
         description: "private description\n\nLocal task: jp-test",
         type_id: target.typeId,
+        priority: "NOT_DEFINED",
         status_name: "Open",
       },
       relationships: {
@@ -335,4 +336,21 @@ test("partial, duplicate, and malformed credentials never reach curl", async () 
     });
     assert.equal(curls, 0);
   }
+});
+
+test("create supplies the required priority without assigning a severity", async () => {
+  const result = await sendDatadogOperation(request, {
+    ...runtime,
+    run: async (file, _args, options) => {
+      if (file === runtime.ddAuthPath) return authenticated;
+      const attributes = JSON.parse(options.input!).data.attributes;
+      const accepted = ["NOT_DEFINED", "P1", "P2", "P3", "P4", "P5"].includes(
+        attributes.priority,
+      );
+      if (!accepted) return reply(400, { errors: ["invalid priority"] });
+      assert.equal(attributes.priority, "NOT_DEFINED");
+      return reply(201, { data: { id: "case-unprioritized" } });
+    },
+  });
+  assert.equal(result.kind, "success");
 });
