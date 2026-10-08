@@ -1,3 +1,4 @@
+import { summarizeWorkManagement } from "./work-management/model.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -31,6 +32,7 @@ export interface BeadsIssue {
   updatedAt?: string;
   lifecycle?: LifecycleMetadataV1 | null;
   lifecycleWarning?: string;
+  workManagement?: { text: string; url?: string };
   blockingDependencyIds?: string[];
   blockingDependencies?: NativeDependency[];
 }
@@ -202,6 +204,11 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
         decoded.lifecycleWarning = lifecycle.warning;
       }
     }
+    const summary = summarizeWorkManagement(
+      record.metadata as Record<string, unknown>,
+      decoded.lifecycle ?? null,
+    );
+    if (summary) decoded.workManagement = summary;
   }
   if (isDependencyEdgeSummaryList(record.dependencies)) {
     decoded.blockingDependencyIds = record.dependencies

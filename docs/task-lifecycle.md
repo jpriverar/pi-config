@@ -505,3 +505,75 @@ This repository is the sole implementation source. Any historical copy under a
 Datadog `experimental` checkout is non-authoritative and must not be edited as
 the lifecycle or worktree-pool implementation. Consumers should load this
 package instead.
+
+## Optional Datadog work items
+
+A workstream can opt new tasks into a Datadog Work Management project. The local
+Beads task remains authoritative: creation produces a linked item, local lifecycle
+changes update its status, and explicit `task_log` entries become comments. The
+existing reconciliation daemon performs delivery; local operations do not wait
+for Datadog. Existing tasks are never enrolled automatically.
+
+The private configuration lives at `<Beads store>/pi-work-management.json` (the
+same store selected by `BEADS_DIR`). Do not commit it to this package. No file
+means no new enrollment. An invalid file fails task creation explicitly before a
+task is written. Configure absolute paths for `dd-auth` and curl >= 8.3.0:
+
+```json
+{
+  "version": 1,
+  "ddAuthPath": "/opt/homebrew/bin/dd-auth",
+  "curlPath": "/usr/bin/curl",
+  "workstreams": {
+    "example-workstream": {
+      "site": "datadoghq.com",
+      "orgUuid": "11111111-1111-1111-1111-111111111111",
+      "projectId": "22222222-2222-2222-2222-222222222222",
+      "typeId": "33333333-3333-3333-3333-333333333333",
+      "statuses": {
+        "actionable": "Open",
+        "active": "In Progress",
+        "waiting": "Open",
+        "deferred": "Open",
+        "completed": "Done",
+        "cancelled": "Done",
+        "superseded": "Done"
+      }
+    }
+  }
+}
+```
+
+Replace every sample UUID and status with explicitly approved values for the
+actual project/type. Nothing creates projects or statuses for you. Supported
+sites are `datadoghq.com`, `datadoghq.eu`, and the `us3`, `us5`, `ap1`, `ap2`, and
+`uk1` subdomains of `datadoghq.com`. Workstream matching is case-insensitive;
+duplicate names differing only by case are rejected. No credentials belong in
+this file. Both waiting reasons share a status; done outcomes can differ.
+
+The task snapshots the project and status mapping at creation. Editing/removing
+a mapping or changing labels does not reroute previously enrolled tasks. Keep the
+configuration file and executable paths available for those tasks even if the
+`workstreams` object becomes empty.
+
+`piWorkManagement` metadata stores only the binding, current external identity,
+delivery receipts, and pending/error state. It is separate from `piLifecycle` and
+has no ownership authority. Tool results, scoped work state, and the existing
+startup table display compact WM status and a validated link when available.
+`WM linked` means an item exists, not that the native journal has just been
+scanned. New log entries are discovered on the daemon's next scan.
+
+For enrolled tasks, native progress entries carry a `[pi-task-log:v1]` footer.
+The external comment omits it; native journal output may display it. Only these
+entries publish, identified by native comment ID, so identical messages can be
+legitimate separate comments. Neither transcripts nor arbitrary native comments
+are published. Enabling a workstream makes its new titles/descriptions and
+explicit logs publishable; do not put secrets in them. There is no automatic
+secret detection.
+
+There is no remote polling, drift correction, backlog import, or comment editing.
+Remote manual edits remain until a later local status change requires delivery.
+Reopening uses the same item. Confirmed comments are not replayed after restart.
+An uncertain write pauses that task's entire sync, including status updates.
+See [daemon operations](task-reconciler-operations.md#work-management-delivery)
+for activation and manual recovery.

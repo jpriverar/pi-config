@@ -169,3 +169,63 @@ mutating service or queue and reports aggregate selection reasons, diagnostics,
 command counts and elapsed time. An eligible candidate is not a promise that
 reconciliation will mutate it: checks still require observation and fresh-state
 validation. Run against a real store only with read-only inspection approval.
+
+## Work Management delivery
+
+The daemon can deliver work items using the optional
+[workstream configuration](task-lifecycle.md#optional-datadog-work-items). It uses
+the existing scan interval and shares the external concurrency limit with check
+observations. It scans enrolled closed/deferred tasks too. A transient rejection
+with a known non-applied outcome (such as HTTP 429) is retried with bounded
+backoff, respecting a longer Retry-After. Network/command uncertainty is never
+retried blindly. There is no separate service or integration-specific pause CLI.
+
+Before activation, obtain explicit approval for the org, site, project, type,
+status mapping, and a disposable validation task. Verify the configured curl
+supports variables (`curl --version`, minimum 8.3.0). Verify `dd-auth` forwards
+stdin and behaves within a bounded deadline with both valid and expired
+credentials using a read-only probe. Do not enable background writes if it opens
+repeated login prompts, cannot run unattended, or ignores the deadline; resolve
+that credential issue first. Unit tests use fake credentials and do not establish
+live authentication compatibility.
+
+The helper uses explicit org/site selection, native curl environment-variable
+expansion, and JSON on stdin. It ignores curlrc, disallows redirects and automatic
+curl retries, restricts targets to supported HTTPS API hosts, and imposes input,
+output, and time bounds. It does not use shell interpolation or print credentials.
+Do not turn on credential-helper verbose/output flags or log raw command output.
+A configured helper must be trusted local software, not an unreviewed script.
+
+Installing/updating the daemon runtime and enabling a real configuration are
+separate operator actions; building this package does neither. Use the existing
+`stop`/`start` commands for an operational off switch. Stopping affects other
+reconciliation work too and cannot undo a request already dispatched.
+
+### Inspect and recover an uncertain operation
+
+1. Inspect the task's compact WM indicator and existing daemon diagnostics.
+   `work_management_scan_failed` or `work_management_sync_failed` is a local
+   inspection failure; `work_management_attention` covers a delivery problem.
+   Check daemon health as well: a stopped worker cannot update task indicators.
+2. For manual repair, stop the daemon, allow bounded child requests to finish, and
+   pause concurrent changes to the affected task. Read the current task using
+   `bd show TASK --long --json --db STORE`. Inspect only its `piWorkManagement`
+   binding, `inFlight`, `failure`, and receipts; do not reset lifecycle state.
+3. Confirm the actual result in the exact Datadog org/project. An absent item in
+   an incomplete search is not proof of non-delivery. If still uncertain, leave
+   the task paused; repeating it requires explicit approval of duplicate risk.
+4. With the exact repair reviewed and authorized, use Beads' supported
+   `bd update TASK --metadata '<complete current metadata JSON>' --db STORE`.
+   Preserve all other metadata, especially `piLifecycle`, and do not supply `-s`.
+   For a confirmed create, record the remote ID/link and actual sent status; for
+   a confirmed comment, add only the in-flight native comment ID to receipts;
+   for a confirmed status update, record the in-flight `statusName`, not a newer
+   local status. Only then clear `inFlight` and `failure`. For a provably unsent
+   operation, clearing those fields permits a new attempt without adding a receipt.
+5. Re-read and verify the repair, then restart the daemon. Do not change the
+   captured project/mapping to repair delivery. Native comments and local
+   lifecycle changes remain the source of pending work.
+
+No automatic search/recovery tool is supplied in v1. Remote item deletion or lost
+permissions do not cause automatic recreation. Cleanup of a live validation item
+requires separate approval; it is not an implicit activation step.

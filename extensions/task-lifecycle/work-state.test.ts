@@ -1,3 +1,5 @@
+import { newWorkManagementState } from "../../lib/work-management/model.js";
+import { target as wmTarget } from "../../lib/work-management/test-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -1150,4 +1152,38 @@ test("closed tasks moved to another project leave the notice cursor without a co
   await h.handlers.get("before_agent_start")!({}, h.context);
   assert.ok(!h.notifications.some((n) => n.message.includes("completed")));
   assert.ok(!h.cursors.at(-1)!.data.cursor.knownTaskIds.includes(row.id));
+});
+
+test("work management is visible in existing startup and scoped state without a new lifecycle phase", async () => {
+  const state = newWorkManagementState(
+    wmTarget,
+    "private title",
+    "private why",
+  );
+  const h = createHarness({
+    sessionName: "alpha",
+    exec: async (_command, args) => ({
+      code: 0,
+      stderr: "",
+      stdout: JSON.stringify(
+        args[0] === "ready" || args[0] === "list"
+          ? [
+              {
+                id: "jp-wm",
+                title: "task",
+                status: "open",
+                labels: ["workstream:alpha"],
+                metadata: { piWorkManagement: state },
+              },
+            ]
+          : [],
+      ),
+    }),
+  });
+  await start(h);
+  assert.match(renderCard(h), /WM pending create/);
+  const hidden = await h.handlers.get("before_agent_start")?.({}, h.context);
+  assert.match(hidden.message.content, /WM pending create/);
+  assert.match(hidden.message.content, /Actionable/);
+  assert.doesNotMatch(hidden.message.content, /private title|private why/);
 });

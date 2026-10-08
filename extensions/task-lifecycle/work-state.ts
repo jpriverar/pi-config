@@ -126,15 +126,20 @@ function workstreamTag(issue: ClassifiedIssue): string {
     : `[${issue.workstreams.map(escapeMetadata).join(",")}]`;
 }
 
+function workManagementAnnotation(issue: ClassifiedIssue): string {
+  const sync = issue.workManagement;
+  return sync ? ` · ${sync.text}${sync.url ? ` ${sync.url}` : ""}` : "";
+}
+
 function issueLine(issue: ClassifiedIssue, insideNeedsYou = false): string {
-  return `- ${escapeMetadata(issue.id)} ${escapeMetadata(issue.title)}${escapeMetadata(lifecycleAnnotation(issue))}${needsJpTag(issue, insideNeedsYou)}`;
+  return `- ${escapeMetadata(issue.id)} ${escapeMetadata(issue.title)}${escapeMetadata(lifecycleAnnotation(issue))}${escapeMetadata(workManagementAnnotation(issue))}${needsJpTag(issue, insideNeedsYou)}`;
 }
 
 function issueLineWithWorkstream(
   issue: ClassifiedIssue,
   insideNeedsYou = false,
 ): string {
-  return `- ${escapeMetadata(issue.id)} ${workstreamTag(issue)} ${escapeMetadata(issue.title)}${escapeMetadata(lifecycleAnnotation(issue))}${needsJpTag(issue, insideNeedsYou)}`;
+  return `- ${escapeMetadata(issue.id)} ${workstreamTag(issue)} ${escapeMetadata(issue.title)}${escapeMetadata(lifecycleAnnotation(issue))}${escapeMetadata(workManagementAnnotation(issue))}${needsJpTag(issue, insideNeedsYou)}`;
 }
 
 function section(

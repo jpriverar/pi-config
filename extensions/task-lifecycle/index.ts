@@ -1,3 +1,4 @@
+import { summarizeWorkManagement } from "../../lib/work-management/model.js";
 import { loadWorkManagementConfig } from "../../lib/work-management/config.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -1153,11 +1154,13 @@ function lifecycleFinalizationError(
 
 function toolResult(issue: LifecycleIssue) {
   const phase = issue.lifecycle?.phase ?? "legacy";
+  const sync = summarizeWorkManagement(issue.metadata, issue.lifecycle);
+  const suffix = sync ? ` · ${sync.text}${sync.url ? ` ${sync.url}` : ""}` : "";
   return {
     content: [
       {
         type: "text" as const,
-        text: `${issue.id}: ${phase} (${issue.status})`,
+        text: `${issue.id}: ${phase} (${issue.status})${suffix}`,
       },
     ],
     details: issue,

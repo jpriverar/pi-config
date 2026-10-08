@@ -1,3 +1,5 @@
+import { newWorkManagementState } from "../lib/work-management/model.js";
+import { target as wmTarget } from "../lib/work-management/test-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -929,4 +931,33 @@ test("renders overdue checks and retained resources as waiting warnings", () => 
   assert.match(rendered, /check overdue/);
   assert.match(rendered, /retained worktree claim-1/);
   assert.equal(classified.readiness, "waiting");
+});
+
+test("projects work management health without changing task readiness or exposing mutable state", async () => {
+  const state = newWorkManagementState(
+    wmTarget,
+    "private initial title",
+    "private why",
+  );
+  const exec = fakeExec(
+    success([
+      {
+        id: "jp-wm",
+        title: "task",
+        status: "open",
+        labels: [],
+        metadata: { piWorkManagement: state },
+      },
+    ]),
+  );
+  const client = createBeadsClient(exec.exec, {
+    env: { BEADS_DIR: "/test/.beads" },
+  });
+  const result = await client.listIssues();
+  assert.ok(result.ok);
+  assert.deepEqual(result.value[0].workManagement, {
+    text: "WM pending create",
+  });
+  assert.equal(result.value[0].status, "open");
+  assert.ok(!JSON.stringify(result.value).includes("private initial"));
 });

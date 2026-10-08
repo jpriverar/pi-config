@@ -1,3 +1,5 @@
+import { newWorkManagementState } from "../../lib/work-management/model.js";
+import { target as wmTarget } from "../../lib/work-management/test-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -265,6 +267,7 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
     ...overrides,
   })(pi as any);
   return {
+    service,
     calls,
     execCalls,
     guardState,
@@ -1336,4 +1339,37 @@ test("shutdown events never relinquish task ownership or initiate cleanup", asyn
       await handler({ reason }, h.context);
   }
   assert.deepEqual(h.calls, []);
+});
+
+test("task result includes independent work management health without changing its phase", async () => {
+  const h = harness();
+  const unlinked = await h.tools
+    .get("task_create")!
+    .execute(
+      "before",
+      { title: "task", why: "why", needs_jp: false },
+      undefined,
+      undefined,
+      h.context,
+    );
+  const result = normalizedIssue("actionable");
+  result.metadata.piWorkManagement = newWorkManagementState(
+    wmTarget,
+    "task",
+    "why",
+  );
+  h.service.create = async () => result;
+  const linked = await h.tools
+    .get("task_create")!
+    .execute(
+      "after",
+      { title: "task", why: "why", needs_jp: false },
+      undefined,
+      undefined,
+      h.context,
+    );
+  assert.equal(
+    linked.content[0].text,
+    unlinked.content[0].text + " · WM pending create",
+  );
 });

@@ -47,6 +47,16 @@ const allowedUrlHosts = new Set([
   "protesilaos.com",
   "www.apple.com",
 ]);
+const workManagementHosts = new Set([
+  "api.datadoghq.com",
+  "app.datadoghq.com",
+  "api.datadoghq.eu",
+  "app.datadoghq.eu",
+  ...["us3", "us5", "ap1", "ap2", "uk1"].flatMap((site) => [
+    `api.${site}.datadoghq.com`,
+    `${site}.datadoghq.com`,
+  ]),
+]);
 const bootstrapArtifacts = new Set(["README.md", "scripts/bootstrap-macos.sh"]);
 const forbiddenWorkMarker = ["data", "dog"].join("");
 const approvedMetricKeys = new Set(["totalTokens"]);
@@ -209,6 +219,13 @@ function validateCredentials(path, text, errors) {
     if (!sensitiveKey.test(match[1])) continue;
     if (/(?:_PATTERN|Pattern)$/.test(match[1])) continue;
     if (approvedMetricKeys.has(match[1])) continue;
+    // This literal is expanded by curl from its injected environment, not a key.
+    if (
+      path === "lib/work-management/datadog.ts" &&
+      match[1] === "DD-API-KEY" &&
+      match[2].trim() === '{{DD_API_KEY}}"'
+    )
+      continue;
     if (approvedCredentialIdentifiersByPath.get(path)?.has(match[1])) continue;
     if (!isPlaceholder(match[2])) {
       report(
@@ -304,7 +321,27 @@ function validateUrl(path, value, errors) {
     report(errors, path, `invalid URL ${JSON.stringify(value)}`);
     return;
   }
-  if (!allowedUrlHosts.has(url.hostname.toLowerCase())) {
+  const host = url.hostname.toLowerCase();
+  if (
+    url.protocol === "https:" &&
+    (path.startsWith("lib/work-management/") ||
+      path === "tests/task-lifecycle-integration.test.ts") &&
+    workManagementHosts.has(host)
+  )
+    return;
+  if (
+    url.protocol === "https:" &&
+    path.startsWith("docs/") &&
+    host === "docs.datadoghq.com"
+  )
+    return;
+  if (
+    path === "lib/work-management/datadog.test.ts" &&
+    url.protocol === "http:" &&
+    host === "127.0.0.1"
+  )
+    return;
+  if (!allowedUrlHosts.has(host)) {
     report(errors, path, `URL host is not reviewed: ${url.hostname}`);
   }
 }

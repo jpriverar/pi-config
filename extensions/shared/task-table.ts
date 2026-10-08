@@ -78,17 +78,29 @@ function artifactLabel(artifact: Artifact): string {
 
 function artifactLines(issue: ClassifiedIssue, theme: Theme): string[] {
   const artifacts = issue.lifecycle?.artifacts ?? [];
-  if (artifacts.length === 0) return [theme.fg("dim", "—")];
+  const sync = issue.workManagement;
+  const linked = sync
+    ? [
+        sync.url
+          ? hyperlink(theme.fg("dim", sync.text), sync.url)
+          : theme.fg("dim", sync.text),
+      ]
+    : [];
+  if (artifacts.length === 0)
+    return linked.length ? linked : [theme.fg("dim", "—")];
 
-  return artifacts.map((artifact) => {
-    const label = artifactLabel(artifact);
-    const styled =
-      artifact.supersededAt === null
-        ? theme.fg("text", label)
-        : theme.fg("dim", label);
-    const uri = normalizeMetadata(artifact.uri, 4_000);
-    return uri.length === 0 ? styled : hyperlink(styled, uri);
-  });
+  return [
+    ...linked,
+    ...artifacts.map((artifact) => {
+      const label = artifactLabel(artifact);
+      const styled =
+        artifact.supersededAt === null
+          ? theme.fg("text", label)
+          : theme.fg("dim", label);
+      const uri = normalizeMetadata(artifact.uri, 4_000);
+      return uri.length === 0 ? styled : hyperlink(styled, uri);
+    }),
+  ];
 }
 
 function blockerLines(issue: ClassifiedIssue, now: number): string[] {

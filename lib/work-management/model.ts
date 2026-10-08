@@ -10,15 +10,26 @@ export const SITES: Readonly<Record<string, { api: string; app: string }>> = {
     api: "https://api.datadoghq.eu",
     app: "https://app.datadoghq.eu",
   },
-  ...Object.fromEntries(
-    ["us3", "us5", "ap1", "ap2", "uk1"].map((site) => [
-      `${site}.datadoghq.com`,
-      {
-        api: `https://api.${site}.datadoghq.com`,
-        app: `https://${site}.datadoghq.com`,
-      },
-    ]),
-  ),
+  "us3.datadoghq.com": {
+    api: "https://api.us3.datadoghq.com",
+    app: "https://us3.datadoghq.com",
+  },
+  "us5.datadoghq.com": {
+    api: "https://api.us5.datadoghq.com",
+    app: "https://us5.datadoghq.com",
+  },
+  "ap1.datadoghq.com": {
+    api: "https://api.ap1.datadoghq.com",
+    app: "https://ap1.datadoghq.com",
+  },
+  "ap2.datadoghq.com": {
+    api: "https://api.ap2.datadoghq.com",
+    app: "https://ap2.datadoghq.com",
+  },
+  "uk1.datadoghq.com": {
+    api: "https://api.uk1.datadoghq.com",
+    app: "https://uk1.datadoghq.com",
+  },
 };
 export const STATUS_KEYS = [
   "actionable",
@@ -210,4 +221,31 @@ export function decodeWorkManagement(
     inFlight,
     failure,
   };
+}
+
+export function summarizeWorkManagement(
+  metadata: Record<string, unknown>,
+  lifecycle: import("../task-lifecycle/types.js").LifecycleMetadataV1 | null,
+): { url?: string; text: string } | null {
+  try {
+    const state = decodeWorkManagement(metadata.piWorkManagement);
+    if (!state) return null;
+    let text = "WM linked";
+    if (state.failure?.kind === "attention") text = "WM attention";
+    else if (state.failure) text = "WM retry pending";
+    else if (state.inFlight) text = `WM pending ${state.inFlight.kind}`;
+    else if (!state.remote) text = "WM pending create";
+    else {
+      const key =
+        lifecycle?.phase === "done"
+          ? lifecycle.disposition?.kind
+          : lifecycle?.phase;
+      if (!key) text = "WM attention";
+      else if (state.lastSentStatus !== state.target.statuses[key])
+        text = "WM pending status";
+    }
+    return { text, ...(state.remote ? { url: state.remote.url } : {}) };
+  } catch {
+    return { text: "WM attention: invalid state" };
+  }
 }

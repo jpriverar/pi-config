@@ -598,3 +598,43 @@ test("accepts only the reviewed Herdr plugin paths without relaxing content chec
     /non-placeholder credential/,
   );
 });
+
+test("work management permits only scoped public hosts and exact curl variable references", () => {
+  const url = (host: string) => ["https:", "", host, "api/v2/cases"].join("/");
+  const header = ["DD", "API", "KEY"].join("-");
+  const envReference = ["{{DD_", "API_KEY}}"].join("");
+  const source = (host: string, value = envReference) =>
+    `const url = ${JSON.stringify(url(host))};\nconst args = [\n  ${JSON.stringify(header + ": " + value)},\n];\n`;
+  const good = createFixture({
+    "lib/work-management/datadog.ts": source("api.datadoghq.com"),
+    "lib/work-management/model.ts": `const url = ${JSON.stringify(url("api.us3.datadoghq.com"))};`,
+    "docs/integration.md": url("docs.datadoghq.com"),
+  }).run();
+  assert.equal(good.status, 0, String(good.stderr));
+  assertRejectedWithRule(
+    { "lib/unrelated.ts": source("api.datadoghq.com") },
+    /URL host is not reviewed/,
+  );
+  assertRejectedWithRule(
+    { "lib/work-management/datadog.ts": source("tenant.datadoghq.com") },
+    /URL host is not reviewed/,
+  );
+  assertRejectedWithRule(
+    {
+      "lib/work-management/datadog.ts": source(
+        "api.datadoghq.com",
+        "not-a-placeholder-secret",
+      ),
+    },
+    /non-placeholder credential/,
+  );
+  assertRejectedWithRule(
+    {
+      "lib/work-management/datadog.ts": source(
+        "api.datadoghq.com",
+        envReference + "suffix",
+      ),
+    },
+    /non-placeholder credential/,
+  );
+});

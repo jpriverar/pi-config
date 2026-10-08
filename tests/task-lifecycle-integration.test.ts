@@ -1,3 +1,8 @@
+import { createWorkManagementSync } from "../lib/work-management/sync.js";
+import type {
+  DatadogOperationRequest,
+  DatadogOutcome,
+} from "../lib/work-management/datadog.js";
 import { target as workManagementTarget } from "../lib/work-management/test-fixtures.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -262,6 +267,64 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
     assert.notEqual(journal[0].id, journal[1].id);
     assert.equal(journal[0].text, "same progress\n\n[pi-task-log:v1]");
     assert.deepEqual(await store.comments(linked.id), journal);
+    const deliveries: DatadogOperationRequest[] = [];
+    const syncDependencies = {
+      store,
+      owner,
+      now: () => now,
+      retryBaseMs: 1000,
+      retryMaxMs: 60_000,
+      readConfig: () => ({
+        version: 1 as const,
+        ddAuthPath: "/bin/dd-auth",
+        curlPath: "/usr/bin/curl",
+        workstreams: {},
+      }),
+      send: async (
+        request: DatadogOperationRequest,
+      ): Promise<DatadogOutcome> => {
+        deliveries.push(request);
+        return request.operation.kind === "create"
+          ? {
+              kind: "success",
+              remote: {
+                id: "case-native",
+                url: "https://app.datadoghq.com/cases/case-native",
+              },
+            }
+          : { kind: "success" };
+      },
+    };
+    const sync = createWorkManagementSync(syncDependencies);
+    for (let i = 0; i < 4; i++)
+      assert.equal(await sync.step(linked.id), "delivered");
+    assert.equal(await sync.step(linked.id), "idle");
+    await service.close(
+      linked.id,
+      {
+        kind: "completed",
+        reason: "native sync test",
+        evidenceArtifactIds: [],
+      },
+      owner,
+      "close-linked",
+    );
+    assert.equal(
+      await createWorkManagementSync(syncDependencies).step(linked.id),
+      "delivered",
+    );
+    assert.equal(
+      await createWorkManagementSync(syncDependencies).step(linked.id),
+      "idle",
+    );
+    assert.deepEqual(
+      deliveries.map((d) => d.operation.kind),
+      ["create", "status", "comment", "comment", "status"],
+    );
+    assert.deepEqual(deliveries.at(-1)?.operation, {
+      kind: "status",
+      statusName: "Done",
+    });
 
     const primary = await createTask("multi repository lifecycle");
     await service.claim(primary, owner, "claim-primary");

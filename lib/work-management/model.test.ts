@@ -1,3 +1,4 @@
+import { summarizeWorkManagement } from "./model.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decodeWorkManagement, newWorkManagementState } from "./model.js";
@@ -13,8 +14,38 @@ test("state validation preserves binding and rejects malformed persisted receipt
     { ...state, version: 2 },
     { ...state, deliveredCommentIds: ["x", "x"] },
     { ...state, inFlight: { kind: "delete" } },
-    { ...state, remote: { id: "x", url: "https://attacker.example" } },
+    { ...state, remote: { id: "x", url: "https://github.com/unsafe" } },
   ]) {
     assert.throws(() => decodeWorkManagement(invalid));
   }
+});
+
+test("summary exposes pending and attention without trusting stored URLs", () => {
+  assert.equal(summarizeWorkManagement({}, null), null);
+  const state = newWorkManagementState(
+    target,
+    "private title",
+    "private description",
+  );
+  assert.deepEqual(summarizeWorkManagement({ piWorkManagement: state }, null), {
+    text: "WM pending create",
+  });
+  state.remote = { id: "case-1", url: "https://github.com/unsafe" };
+  assert.deepEqual(summarizeWorkManagement({ piWorkManagement: state }, null), {
+    text: "WM attention: invalid state",
+  });
+  state.remote = {
+    id: "case-1",
+    url: "https://app.datadoghq.com/cases/case-1",
+  };
+  state.failure = {
+    kind: "attention",
+    code: "hostile <instruction>",
+    count: 1,
+    retryAt: null,
+  };
+  assert.deepEqual(summarizeWorkManagement({ piWorkManagement: state }, null), {
+    text: "WM attention",
+    url: "https://app.datadoghq.com/cases/case-1",
+  });
 });

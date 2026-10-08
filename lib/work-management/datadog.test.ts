@@ -208,10 +208,12 @@ process.stdout.write(r.stdout||''); process.stderr.write(r.stderr||''); process.
     { mode: 0o700 },
   );
   await writeFile(join(root, ".curlrc"), "location\n");
+  const localUrl = new URL("http://127.0.0.1/create");
+  localUrl.port = String(address.port);
   const local = {
     ...runtime,
     ddAuthPath: auth,
-    env: { HOME: root, TEST_BASE: `http://127.0.0.1:${address.port}/create` },
+    env: { HOME: root, TEST_BASE: localUrl.toString() },
   };
   assert.equal((await sendDatadogOperation(request, local)).kind, "success");
   assert.equal(requests.length, 1);
