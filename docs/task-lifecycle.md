@@ -342,8 +342,24 @@ Use the ordinary pool tool after `task_claim`:
 
 ```text
 worktree_pool acquire(repository, branch, startPoint?)
-worktree_pool release(repository, claimId)
+worktree_pool release(repository, claimId, force?)
 ```
+
+Normal release supports clean initialized and deinitialized submodules. It
+reports tracked changes, non-ignored untracked files, and submodule commits or
+stashes not reachable from local remote-tracking refs, without deleting them.
+Status checks override submodule-ignore and untracked-file display settings.
+No fetch or backup is performed; dangling objects/reflogs are not an archive.
+Ignored files are disposable in either release mode, as with ordinary Git
+worktree removal. The parent repository's branches and shared Git data remain.
+
+Use `force: true` only to intentionally discard local work within the approved
+task. It removes those files and worktree-local submodule Git data, without a
+second terminal prompt. It never bypasses managed-path, repository, claim, or
+task-ownership checks. Submodule Git data outside the worktree's ownership, or
+used by another checkout outside it, remains protected even with force.
+A refusal never automatically retries with force, and the flag is not persisted
+as permission for later calls. No background cleanup is introduced.
 
 Before acquisition, the lifecycle hook verifies that the session owns exactly
 one Active task and performs a read-only check of its existing worktree
@@ -447,21 +463,24 @@ fails after allocation, the checkout is retained; do not acquire another copy
 as a recovery shortcut.
 
 Associated release still persists `release_pending` before pool mutation and
-reconciles exact safe evidence. Initialized submodules or retained submodule
-Git data are refused before changing the pool lease or unlocking the worktree.
-Never-initialized submodules remain removable through ordinary Git cleanup.
-Refusal preserves the checkout and native owner. Explicit releases stay pending
-for explicit recovery; obsolete expiry releases can be cancelled by ordinary
-resource reconciliation without requiring an owner renewal. This does not implement
-submodule deletion.
+reconciles exact safe evidence. Normal release inspects local work before
+changing the pool lease or unlocking, then rechecks before removal. For clean
+submodules, the pool uses Git's required `--force` removal option internally;
+this does not grant permission to discard local work. That requires the separate
+explicit `force: true` tool argument. A local-work refusal preserves the checkout
+and native owner and explains how to save the work or intentionally discard it.
+Explicit releases stay pending for explicit recovery; obsolete expiry releases
+can be cancelled by ordinary resource reconciliation without an owner renewal.
 
-If ordinary removal fails after unlock, the pool restores the original native
-claim only when the exact managed registration, branch, HEAD, cleanliness, and
-lack of another lock still match. It retains the `removing` journal so an exact
-release retry can finish after the cause is resolved. Changed, dirty, missing,
-unverifiable, or newly locked state is not relocked. This does not adopt or
-repair historical unlocked claims. No automated path deletes dirty, occupied, malformed, contradictory,
-missing, or ambiguous worktrees.
+If removal fails after unlock, the pool restores the original native claim only
+when the exact managed registration, branch, HEAD, and lack of another lock
+still match. Ordinary release also requires cleanliness before restoring the
+claim; an explicitly forced release may restore ownership of dirty content it
+was already authorized to discard. It retains the `removing` journal so an exact
+release retry can finish after the cause is resolved. A later call must opt into
+force again. Missing, unverifiable, changed-HEAD, or newly locked state is not
+relocked. This does not adopt or repair historical unlocked claims. Reconciliation
+never retries deletion; no background path gains forced-discard authority.
 
 ## Verification and migration
 

@@ -26,7 +26,7 @@ test("ordinary acquire rejects pending task resources before allocating", async 
 });
 
 for (const deinitialized of [false, true]) {
-  test(`submodule release preserves ownership before refusal (deinitialized=${deinitialized})`, async (t) => {
+  test(`clean submodule release frees capacity (deinitialized=${deinitialized})`, async (t) => {
     const h = await fixture(t, true);
     await h.mustGit(h.acquired.path, [
       "-c",
@@ -47,40 +47,33 @@ for (const deinitialized of [false, true]) {
       claimId: h.acquired.claimId,
     });
     assert.equal(await h.hook("tool_call", release), undefined);
-    await assert.rejects(
-      h.runtime.pool.release("repo", h.acquired.claimId, h.owner),
-      /submodule.*unsupported/i,
-    );
-    await h.hook("tool_result", { ...release, isError: true });
-    const listing = (await h.runtime.pool.list("repo")).repositories[0]
-      .worktrees[0];
-    assert.equal(listing.state, "active");
-    assert.equal(listing.evidence.nativeClaimMatches, true);
-    assert.equal(listing.clean, true);
-    assert.equal(
-      (await h.store.show(h.task.id)).lifecycle!.resources[0].cleanupState,
-      "release_pending",
-    );
-    const next = await h.acquire("jpriverar/second");
-    assert.equal(next.guard?.block, true);
-    assert.equal(
-      (await h.runtime.pool.list("repo")).repositories[0].worktrees.length,
-      1,
-    );
-    const before = await h.store.show(h.task.id);
-    const observed = await h.service.prepareReconciliation(
-      { taskId: h.task.id, requestId: "normal" },
+    const result = await h.runtime.pool.release(
+      "repo",
+      h.acquired.claimId,
       h.owner,
     );
-    assert.equal(observed.kind, "complete");
-    if (observed.kind === "complete")
-      assert.equal(observed.outcome, "unchanged");
-    assert.deepEqual(await h.store.show(h.task.id), before);
-    const retained = (await h.runtime.pool.list("repo")).repositories[0]
-      .worktrees[0];
-    assert.equal(retained.claimId, h.acquired.claimId);
-    assert.equal(retained.evidence.nativeClaimMatches, true);
-    await fs.access(h.acquired.path);
+    assert.equal(result.released, true);
+    await h.hook("tool_result", {
+      ...release,
+      details: result,
+      isError: false,
+    });
+    assert.equal(
+      (await h.store.show(h.task.id)).lifecycle!.resources[0].cleanupState,
+      "released",
+    );
+    assert.equal((await h.runtime.pool.list("repo")).repositories[0].used, 0);
+    await assert.rejects(fs.access(h.acquired.path), { code: "ENOENT" });
+    assert.ok(
+      await h.mustGit(h.repo, [
+        "show-ref",
+        "--verify",
+        "refs/heads/jpriverar/first",
+      ]),
+    );
+    const next = await h.acquire("jpriverar/second");
+    assert.equal(next.guard, undefined);
+    assert.ok(next.acquired);
   });
 }
 

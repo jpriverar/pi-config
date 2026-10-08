@@ -159,9 +159,10 @@ export async function removeManagedWorktree(
   repository: ResolvedRepository,
   path: string,
   deps: ManagedWorktreeDependencies,
+  force = false,
 ): Promise<void> {
   await verifyManagedWorktree(repository, path, deps);
-  const args = ["worktree", "remove", path];
+  const args = ["worktree", "remove", ...(force ? ["--force"] : []), path];
   const result = await deps.runGit(repository.path, args);
   if (result.code !== 0) throw gitError(repository.path, args, result);
 }

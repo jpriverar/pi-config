@@ -266,6 +266,7 @@ describe("worktree_pool tool", () => {
       startPoint: "",
       claimId: "",
       slot: "",
+      force: false,
     });
 
     expect(h.pool.calls).toHaveLength(1);
@@ -273,6 +274,24 @@ describe("worktree_pool tool", () => {
       name: "acquire",
       args: [{ repository: "demo", branch: "topic" }],
     });
+  });
+
+  test("force is a boolean opt-in for release only", async () => {
+    const h = harness();
+    for (const force of ["true", 1, null]) {
+      await expect(
+        h.call({
+          action: "release",
+          repository: "demo",
+          claimId: CLAIM_ID,
+          force,
+        }),
+      ).rejects.toThrow("release.force");
+    }
+    await expect(h.call({ action: "list", force: true })).rejects.toThrow(
+      "list.force",
+    );
+    expect(h.runtimeLoads).toBe(0);
   });
 
   test("does not expose stable identity inputs through raw acquire", async () => {

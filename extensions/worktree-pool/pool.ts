@@ -27,6 +27,7 @@ import {
   type LeaseRecordGate,
 } from "./lease-records.js";
 import { inspectRepository } from "./git-state.js";
+import { inspectRelease, RELEASE_STATUS_ARGS } from "./release-inspection.js";
 import {
   createManagedWorktree,
   managedWorktreePath,
@@ -74,7 +75,12 @@ type LeaseObservation = {
   branchProtectsHead: boolean | null;
   authorityError?: string;
 };
-export type ReleaseResult = { path: string; released: boolean };
+export type ReleaseOptions = { force?: boolean };
+export type ReleaseResult = {
+  path: string;
+  released: boolean;
+  reason?: string;
+};
 export type ReleaseTransaction = (
   release: () => Promise<ReleaseResult>,
 ) => Promise<ReleaseResult>;
@@ -274,12 +280,16 @@ export class WorktreePool {
     claimId: string,
     owner: OwnerIdentity,
     transaction: ReleaseTransaction = (release) => release(),
+    options: ReleaseOptions = {},
   ): Promise<ReleaseResult> {
     const repository = this.repository(repositoryName);
     return withOperationLock(
       repository,
       owner,
-      () => transaction(() => this.releaseLocked(repository, claimId, owner)),
+      () =>
+        transaction(() =>
+          this.releaseLocked(repository, claimId, options.force === true),
+        ),
       this.deps.operationLock,
     );
   }
@@ -381,7 +391,7 @@ export class WorktreePool {
   private async releaseLocked(
     repository: ResolvedRepository,
     claimId: string,
-    _caller: OwnerIdentity,
+    force: boolean,
   ): Promise<ReleaseResult> {
     const record = await this.exactRecord(repository, claimId).catch(
       () => undefined,
@@ -395,13 +405,19 @@ export class WorktreePool {
     } catch {
       return { path: record.path, released: false };
     }
-    if (
-      !(await this.isClean(record.path)) ||
-      !(await this.branchProtectsHead(record.path, record.branch))
-    ) {
+    if (!(await this.branchProtectsHead(record.path, record.branch))) {
       return { path: record.path, released: false };
     }
-    await this.assertRemovalSupported(record.path);
+    const inspect = () =>
+      inspectRelease(record.path, this.git.bind(this), force);
+    const before = await inspect();
+    if (before.warning) {
+      return {
+        path: record.path,
+        released: false,
+        reason: `Local work would be lost:\n${before.warning}\nSave this work, or retry worktree_pool release with the same repository and claimId and force: true to deliberately discard it.`,
+      };
+    }
     if (record.state !== "removing") {
       await this.replaceRecord(repository.poolRoot, claimId, {
         ...record,
@@ -417,16 +433,25 @@ export class WorktreePool {
       );
       if (
         unlockedWorktree.branch !== `refs/heads/${record.branch}` ||
-        !(await this.isClean(record.path)) ||
+        unlockedWorktree.head !== original.head ||
+        unlockedWorktree.lockedReason !== undefined ||
         !(await this.branchProtectsHead(record.path, record.branch))
       ) {
         throw new Error(
-          "worktree branch, HEAD, or cleanliness changed after unlock",
+          "worktree branch, HEAD, or ownership changed after unlock",
         );
       }
-      await removeManagedWorktree(repository, record.path, {
-        runGit: this.deps.runGit,
-      });
+      const current = await inspect();
+      if (current.warning)
+        throw new Error(`local work changed after unlock: ${current.warning}`);
+      await removeManagedWorktree(
+        repository,
+        record.path,
+        {
+          runGit: this.deps.runGit,
+        },
+        force || current.requiresForce,
+      );
       if (
         (await pathExists(record.path)) ||
         (await this.hasRegistration(repository, record.path))
@@ -447,6 +472,7 @@ export class WorktreePool {
         repository,
         record,
         original.head,
+        force,
       );
       throw new Error(
         `failed to remove managed worktree ${record.path}: ${errorMessage(error)}; claim preserved as removing; ${restored ? "native ownership restored; retry release with this exact claim after resolving the removal failure" : "native ownership not restored; inspect the exact claim before retrying"}`,
@@ -456,36 +482,11 @@ export class WorktreePool {
     return { path: record.path, released: true };
   }
 
-  private async assertRemovalSupported(path: string): Promise<void> {
-    const modulesPath = (
-      await this.git(path, [
-        "rev-parse",
-        "--path-format=absolute",
-        "--git-path",
-        "modules",
-      ])
-    ).trim();
-    const modules = await lstat(modulesPath).catch((error) => {
-      if (error?.code === "ENOENT") return undefined;
-      throw error;
-    });
-    const status = await this.git(path, ["submodule", "status"]);
-    if (
-      modules !== undefined ||
-      status
-        .split("\n")
-        .some((line) => line.length > 0 && !line.startsWith("-"))
-    ) {
-      throw new Error(
-        `cannot release managed worktree ${path}: initialized or retained submodule cleanup is unsupported; worktree and native ownership were preserved; inspect this claim with worktree_pool list or repair`,
-      );
-    }
-  }
-
   private async restoreNativeClaim(
     repository: ResolvedRepository,
     record: LeaseRecord,
     expectedHead: RegisteredWorktree["head"],
+    force: boolean,
   ): Promise<boolean> {
     try {
       const current = await verifyManagedWorktree(repository, record.path, {
@@ -495,7 +496,7 @@ export class WorktreePool {
         current.lockedReason !== undefined ||
         current.head !== expectedHead ||
         current.branch !== `refs/heads/${record.branch}` ||
-        !(await this.isClean(record.path)) ||
+        (!force && !(await this.isClean(record.path))) ||
         !(await this.branchProtectsHead(record.path, record.branch))
       )
         return false;
@@ -971,7 +972,7 @@ export class WorktreePool {
   }
 
   private async isClean(path: string): Promise<boolean> {
-    return (await this.git(path, ["status", "--porcelain"])).length === 0;
+    return (await this.git(path, RELEASE_STATUS_ARGS)).length === 0;
   }
 
   private async git(cwd: string, args: string[]): Promise<string> {

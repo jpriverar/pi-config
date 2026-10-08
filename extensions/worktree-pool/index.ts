@@ -19,12 +19,13 @@ type PoolParameters = {
   startPoint?: string;
   claimId?: string;
   slot?: string;
+  force?: boolean;
 };
 
 const ACTION_FIELDS: Record<PoolAction, ReadonlySet<string>> = {
   list: new Set(["action", "repository"]),
   acquire: new Set(["action", "repository", "branch", "startPoint"]),
-  release: new Set(["action", "repository", "claimId"]),
+  release: new Set(["action", "repository", "claimId", "force"]),
   repair: new Set(["action", "repository", "slot"]),
 };
 
@@ -87,6 +88,11 @@ const toolParameters = {
       type: "string",
       description: "Managed path or claim ID to repair.",
     },
+    force: {
+      type: "boolean",
+      description:
+        "Release only: deliberately discard uncommitted/untracked files and submodule-local commits or stashes. Default false warns and preserves local work. Never overrides ownership or managed-path checks.",
+    },
   },
   required: ["action"],
 } as const;
@@ -106,7 +112,7 @@ export function createWorktreePoolExtension(
       name: "worktree_pool",
       label: "Worktree pool",
       description:
-        "List, acquire, release, or non-destructively repair machine-wide bounded ephemeral worktrees.",
+        "List, acquire, release, or non-destructively repair machine-wide bounded ephemeral worktrees. Release supports clean submodules; force: true explicitly discards local work. Ignored files are removed in either mode.",
       parameters: toolParameters,
       prepareArguments: normalizeActionParameters,
       async execute(_id, params, _signal, _update, ctx) {
@@ -147,11 +153,13 @@ export function createWorktreePoolExtension(
             params.repository!,
             params.claimId!,
             owner,
+            undefined,
+            { force: params.force === true },
           );
           return result(
             released.released
               ? `Released ${released.path}.`
-              : `Claim ${params.claimId} was not released.`,
+              : `Claim ${params.claimId} was not released.${released.reason ? `\n${released.reason}` : " Ownership or worktree identity checks did not pass; inspect this claim with worktree_pool list or repair."}`,
             { action: "release", ...released },
           );
         }
@@ -191,7 +199,10 @@ function normalizeActionParameters(value: unknown): unknown {
   const action = value.action as PoolAction;
   const normalized = { ...value };
   for (const [field, fieldValue] of Object.entries(normalized)) {
-    if (!ACTION_FIELDS[action].has(field) && fieldValue === "") {
+    if (
+      !ACTION_FIELDS[action].has(field) &&
+      (fieldValue === "" || (field === "force" && fieldValue === false))
+    ) {
       delete normalized[field];
     }
   }
@@ -214,6 +225,8 @@ function validateActionParameters(params: PoolParameters): void {
   if (params.action === "release")
     requireText(params.claimId, "release.claimId");
   if (params.action === "repair") requireText(params.slot, "repair.slot");
+  if (params.force !== undefined && typeof params.force !== "boolean")
+    throw new Error("worktree_pool release.force must be a boolean");
 }
 
 function requireText(value: unknown, field: string): asserts value is string {

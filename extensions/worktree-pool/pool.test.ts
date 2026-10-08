@@ -831,6 +831,61 @@ describe("bearer-capability lifecycle", () => {
     }
   });
 
+  test("forced removal failure preserves native ownership and requires another explicit release", async () => {
+    let failRemoval = true;
+    const h = await createHarness({
+      interceptGit: (args) =>
+        failRemoval && args[0] === "worktree" && args[1] === "remove"
+          ? { code: 1, stdout: "", stderr: "injected forced removal failure" }
+          : undefined,
+    });
+    try {
+      const acquired = await h.pool.acquire(
+        { repository: "repo", branch: "discard" },
+        owner(405, "alice"),
+      );
+      await writeFile(
+        join(acquired.path, "local.txt"),
+        "discard only on success\n",
+      );
+      await expect(
+        h.pool.release(
+          "repo",
+          acquired.claimId,
+          owner(999, "other"),
+          undefined,
+          { force: true },
+        ),
+      ).rejects.toThrow(
+        /injected forced removal failure.*native ownership restored/s,
+      );
+      const listing = (await h.pool.list("repo")).repositories[0].worktrees[0];
+      expect(listing.evidence.nativeClaimMatches).toBe(true);
+      expect(await readFile(join(acquired.path, "local.txt"), "utf8")).toBe(
+        "discard only on success\n",
+      );
+      failRemoval = false;
+      expect(
+        (await h.pool.release("repo", acquired.claimId, owner(999, "other")))
+          .released,
+      ).toBe(false);
+      expect(
+        (
+          await h.pool.release(
+            "repo",
+            acquired.claimId,
+            owner(999, "other"),
+            undefined,
+            { force: true },
+          )
+        ).released,
+      ).toBe(true);
+      expect(await leaseFiles(h.poolRoot)).toEqual([]);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   for (const change of ["dirty", "head", "foreign-lock"] as const) {
     test(`does not restore ownership over ${change} state after removal failure`, async () => {
       let path = "";
