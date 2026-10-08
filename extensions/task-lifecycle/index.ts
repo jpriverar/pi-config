@@ -1,3 +1,4 @@
+import { loadWorkManagementConfig } from "../../lib/work-management/config.js";
 import { randomUUID } from "node:crypto";
 import {
   fingerprintCheck,
@@ -1179,6 +1180,7 @@ export default function taskLifecycle(
   const storePath = resolveBeadsDir();
   const store = createLifecycleStore(pi.exec.bind(pi), {
     store: storePath,
+    readWorkManagementConfig: () => loadWorkManagementConfig(storePath),
   });
   const pool = {
     async list(repository?: string) {

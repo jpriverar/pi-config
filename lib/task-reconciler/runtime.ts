@@ -1,3 +1,4 @@
+import { loadWorkManagementConfig } from "../work-management/config.js";
 import type { ClaimObservationTransaction } from "../../extensions/worktree-pool/pool.js";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
@@ -59,7 +60,11 @@ export async function createDaemonRuntime(
       if (command !== "bd") throw new Error("unsupported lifecycle command");
       return runBoundedCommand(config.executables.bd, args, commandOptions);
     },
-    { store: config.store, lockDependencies: operationLock },
+    {
+      store: config.store,
+      lockDependencies: operationLock,
+      readWorkManagementConfig: () => loadWorkManagementConfig(config.store),
+    },
   );
   const poolDependencies: WorktreePoolRuntimeDependencies = {
     configPath: config.poolConfigPath,

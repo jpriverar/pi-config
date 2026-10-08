@@ -7,6 +7,7 @@ import { test } from "node:test";
 import type { BeadsExec, BeadsExecResult } from "../beads.js";
 import type { LifecycleMetadataV1, LockOwner, Mutation } from "./types.js";
 import { createLifecycleStore } from "./beads-store.js";
+import type { WorkManagementState } from "../work-management/model.js";
 
 const NOW = "2026-09-17T10:00:00.000Z";
 const STORE = "/tmp/task-lifecycle-test/.beads";
@@ -666,4 +667,157 @@ test("replayed identical metadata does not issue another Beads update", async (t
   }, options(root));
   await store.mutate("jp-1", OWNER, () => mutation);
   assert.deepEqual(calls, ["show"]);
+});
+
+const WM_TARGET = {
+  site: "datadoghq.com",
+  orgUuid: "8dee7c38-00cb-11ea-a77b-8b5a08d3b091",
+  projectId: "e555e290-ed65-49bd-ae18-8acbfcf18db7",
+  typeId: "00000000-0000-0000-0000-000000000001",
+  statuses: {
+    actionable: "Open",
+    active: "In Progress",
+    waiting: "Open",
+    deferred: "Open",
+    completed: "Done",
+    cancelled: "Done",
+    superseded: "Done",
+  },
+};
+
+test("enrollment shares the native create command and snapshots its target", async () => {
+  const calls: string[][] = [];
+  let raw = rawIssue();
+  const config = {
+    version: 1 as const,
+    ddAuthPath: "/bin/dd-auth",
+    curlPath: "/usr/bin/curl",
+    workstreams: { "pi-setup": WM_TARGET },
+  };
+  const store = createLifecycleStore(
+    async (_, args) => {
+      calls.push([...args]);
+      if (args[0] === "create")
+        raw = {
+          ...raw,
+          metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+        };
+      if (args[0] === "update")
+        raw = {
+          ...raw,
+          metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+        };
+      return result(raw);
+    },
+    { ...options(), readWorkManagementConfig: () => config },
+  );
+  const issue = await store.create(
+    { title: "Ship", why: "Why", workstream: "PI-SETUP", needsJp: false },
+    lifecycle(),
+    OWNER,
+  );
+  const state = issue.metadata.piWorkManagement as WorkManagementState;
+  assert.deepEqual(state?.target, WM_TARGET);
+  assert.equal(state.remote, null);
+  assert.equal(calls.filter((args) => args[0] === "create").length, 1);
+  assert.equal(
+    calls.some((args) => args[0] === "update"),
+    false,
+  );
+  config.workstreams["pi-setup"] = {
+    ...WM_TARGET,
+    projectId: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+  };
+  assert.equal(state.target.projectId, "e555e290-ed65-49bd-ae18-8acbfcf18db7");
+  const before = structuredClone(issue.metadata);
+  const after = await store.mutateWorkManagement(issue.id, OWNER, () => ({
+    ...state,
+    lastSentStatus: "Open",
+  }));
+  assert.deepEqual(after.metadata.piLifecycle, before.piLifecycle);
+  assert.equal(after.status, issue.status);
+  assert.equal(
+    calls
+      .filter((args) => args[0] === "update")
+      .some((args) => args.includes("-s")),
+    false,
+  );
+});
+
+test("tagged native journal entry survives a lost append response", async () => {
+  let raw = rawIssue();
+  const comments: unknown[] = [];
+  const store = createLifecycleStore(
+    async (_, args) => {
+      if (args[0] === "create")
+        raw = {
+          ...raw,
+          metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+        };
+      if (args[0] === "comments" && args[1] === "add") {
+        comments.push({
+          id: "comment-1",
+          issue_id: "jp-1",
+          text: args[3],
+          created_at: NOW,
+          author: "test",
+        });
+        return { code: 1, stdout: "", stderr: "lost response" };
+      }
+      if (args[0] === "comments")
+        return { code: 0, stdout: JSON.stringify(comments), stderr: "" };
+      return result(raw);
+    },
+    {
+      ...options(),
+      readWorkManagementConfig: () => ({
+        version: 1,
+        ddAuthPath: "/bin/dd-auth",
+        curlPath: "/usr/bin/curl",
+        workstreams: { "pi-setup": WM_TARGET },
+      }),
+    },
+  );
+  await store.create(
+    { title: "Ship", why: "Why", workstream: "pi-setup", needsJp: false },
+    lifecycle(),
+    OWNER,
+  );
+  await assert.rejects(
+    store.appendComment("jp-1", "progress", OWNER, () => {}),
+    /exit code 1/,
+  );
+  assert.deepEqual(await store.comments("jp-1"), [
+    {
+      id: "comment-1",
+      issueId: "jp-1",
+      text: "progress\n\n[pi-task-log:v1]",
+      createdAt: NOW,
+    },
+  ]);
+});
+
+test("invalid integration configuration creates no task", async () => {
+  let calls = 0;
+  const store = createLifecycleStore(
+    async () => {
+      calls++;
+      return result(rawIssue());
+    },
+    {
+      ...options(),
+      readWorkManagementConfig: () => {
+        throw new Error("invalid integration config");
+      },
+    },
+  );
+  await assert.rejects(
+    store.create(
+      { title: "Ship", why: "Why", needsJp: false },
+      lifecycle(),
+      OWNER,
+    ),
+    /invalid integration config/,
+  );
+  assert.equal(calls, 0);
 });

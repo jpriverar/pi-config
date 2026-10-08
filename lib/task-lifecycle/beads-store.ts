@@ -8,6 +8,14 @@ import {
   type FileOperationLockDependencies,
 } from "../file-operation-lock.js";
 import { decodeLifecycle } from "./model.js";
+import {
+  decodeWorkManagement,
+  newWorkManagementState,
+  LOG_TAG,
+  type WorkManagementConfig,
+  type WorkManagementStore,
+  type NativeTaskComment,
+} from "../work-management/model.js";
 import type {
   CreateTaskInput,
   LifecycleIssue,
@@ -23,6 +31,7 @@ import type {
 export interface LifecycleStoreOptions {
   store: string;
   lockDependencies?: FileOperationLockDependencies;
+  readWorkManagementConfig?: () => WorkManagementConfig | null;
 }
 
 interface DecodedIssue {
@@ -41,7 +50,7 @@ const STATUSES: ReadonlySet<string> = new Set([
 export function createLifecycleStore(
   exec: BeadsExec,
   options: LifecycleStoreOptions,
-): LifecycleStore {
+): LifecycleStore & WorkManagementStore {
   const store = options.store;
   const lockDependencies =
     options.lockDependencies ?? defaultLockDependencies();
@@ -191,6 +200,23 @@ export function createLifecycleStore(
       join(store, "pi-task-lifecycle"),
       owner,
       async () => {
+        const config = options.readWorkManagementConfig?.();
+        const target =
+          input.workstream === undefined
+            ? undefined
+            : config?.workstreams[input.workstream.toLowerCase()];
+        const metadata = {
+          piLifecycle: lifecycle,
+          ...(target === undefined
+            ? {}
+            : {
+                piWorkManagement: newWorkManagementState(
+                  target,
+                  input.title,
+                  input.why,
+                ),
+              }),
+        };
         const labels = [
           ...(input.workstream === undefined
             ? []
@@ -204,7 +230,7 @@ export function createLifecycleStore(
           input.why,
           ...(labels.length === 0 ? [] : ["-l", labels.join(",")]),
           "--metadata",
-          JSON.stringify({ piLifecycle: lifecycle }),
+          JSON.stringify(metadata),
           "--json",
         ];
         const value = await executeJson("create task", args);
@@ -265,11 +291,13 @@ export function createLifecycleStore(
       async () => {
         const current = await readOne(id, `read issue ${id} before comment`);
         validate(current.issue);
+        const enrolled =
+          decodeWorkManagement(current.rawMetadata.piWorkManagement) !== null;
         await execute(`append comment ${id}`, [
           "comments",
           "add",
           id,
-          message,
+          enrolled ? message + LOG_TAG : message,
           "--json",
         ]);
         return (await readOne(id, `verify comment ${id}`)).issue;
@@ -357,7 +385,100 @@ export function createLifecycleStore(
     );
   }
 
+  async function comments(id: string): Promise<NativeTaskComment[]> {
+    assertIdentifier(id, "issue id");
+    const value = await executeJson(`read comments ${id}`, [
+      "comments",
+      id,
+      "--json",
+    ]);
+    if (!Array.isArray(value))
+      throw lifecycleStoreError(
+        "read comments",
+        store,
+        "bd returned invalid comments",
+      );
+    const ids = new Set<string>();
+    return value.map((entry) => {
+      const r = requireRecord(entry, "comment");
+      assertIdentifier(r.id, "comment id");
+      if (
+        r.issue_id !== id ||
+        ids.has(r.id) ||
+        typeof r.text !== "string" ||
+        typeof r.created_at !== "string" ||
+        !Number.isFinite(Date.parse(r.created_at))
+      )
+        throw lifecycleStoreError(
+          "read comments",
+          store,
+          "bd returned invalid or duplicate comment",
+        );
+      ids.add(r.id);
+      return { id: r.id, issueId: id, text: r.text, createdAt: r.created_at };
+    });
+  }
+
+  const mutateWorkManagement: WorkManagementStore["mutateWorkManagement"] =
+    async (id, owner, update) => {
+      assertIdentifier(id, "issue id");
+      return withFileOperationLock(
+        join(store, "pi-task-lifecycle"),
+        owner,
+        async () => {
+          const current = await readOne(id, `read work management ${id}`);
+          const next = update(current.issue);
+          if (next === null) return current.issue;
+          if (current.rawMetadata.piWorkManagement === undefined)
+            throw lifecycleStoreError(
+              "update work management",
+              store,
+              "task is not enrolled",
+            );
+          const validated = decodeWorkManagement(next);
+          const previous = decodeWorkManagement(
+            current.rawMetadata.piWorkManagement,
+          );
+          if (
+            !isDeepStrictEqual(validated?.target, previous?.target) ||
+            !isDeepStrictEqual(validated?.initial, previous?.initial)
+          )
+            throw lifecycleStoreError(
+              "update work management",
+              store,
+              "cannot change task binding",
+            );
+          const metadata = Object.fromEntries(
+            Object.entries(current.rawMetadata).filter(
+              ([key]) =>
+                key !== "piWorkManagement" &&
+                !key.startsWith("piWorkManagement."),
+            ),
+          );
+          metadata.piWorkManagement = validated;
+          await execute(`update work management ${id}`, [
+            "update",
+            id,
+            "--metadata",
+            JSON.stringify(metadata),
+            "--json",
+          ]);
+          const saved = await readOne(id, `verify work management ${id}`);
+          if (!isDeepStrictEqual(saved.rawMetadata.piWorkManagement, validated))
+            throw lifecycleStoreError(
+              "update work management",
+              store,
+              "metadata verification failed",
+            );
+          return saved.issue;
+        },
+        lockDependencies,
+      );
+    };
+
   return {
+    comments,
+    mutateWorkManagement,
     show,
     showMany,
     list,

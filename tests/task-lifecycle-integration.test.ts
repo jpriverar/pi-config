@@ -1,3 +1,4 @@
+import { target as workManagementTarget } from "../lib/work-management/test-fixtures.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -193,7 +194,15 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
     );
     const store = createLifecycleStore(
       (command, args) => run(command, [...args], root),
-      { store: storePath },
+      {
+        store: storePath,
+        readWorkManagementConfig: () => ({
+          version: 1,
+          ddAuthPath: "/bin/dd-auth",
+          curlPath: "/usr/bin/curl",
+          workstreams: { linked: workManagementTarget },
+        }),
+      },
     );
     const adapters = createCheckAdapterRegistry({
       now: () => now,
@@ -234,6 +243,25 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
       const decoded = JSON.parse(raw) as { id: string } | Array<{ id: string }>;
       return Array.isArray(decoded) ? decoded[0].id : decoded.id;
     };
+
+    const linked = await service.create(
+      {
+        title: "Linked task",
+        why: "native journal",
+        workstream: "linked",
+        needsJp: false,
+      },
+      owner,
+    );
+    assert.ok(linked.metadata.piWorkManagement);
+    await service.claim(linked.id, owner, "claim-linked");
+    await service.log(linked.id, "same progress", owner);
+    await service.log(linked.id, "same progress", owner);
+    const journal = await store.comments(linked.id);
+    assert.equal(journal.length, 2);
+    assert.notEqual(journal[0].id, journal[1].id);
+    assert.equal(journal[0].text, "same progress\n\n[pi-task-log:v1]");
+    assert.deepEqual(await store.comments(linked.id), journal);
 
     const primary = await createTask("multi repository lifecycle");
     await service.claim(primary, owner, "claim-primary");
