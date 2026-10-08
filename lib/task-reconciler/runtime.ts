@@ -139,7 +139,24 @@ export async function createDaemonRuntime(
     now: Date.now,
     abortLocalCommands: () => shutdown.abort(),
     workManagement: createWorkManagementSync({
-      store,
+      // Known delivery receipts must drain after lifecycle cancellation, within the existing deadlines.
+      store: createLifecycleStore(
+        async (command, args) => {
+          if (command !== "bd")
+            throw new Error("unsupported lifecycle command");
+          return runBoundedCommand(config.executables.bd, args, {
+            ...commandOptions,
+            signal: undefined,
+          });
+        },
+        {
+          store: config.store,
+          lockDependencies: {
+            ...operationLock,
+            sleep: (ms: number) => sleep(ms),
+          },
+        },
+      ),
       owner,
       now: Date.now,
       readConfig: () => loadWorkManagementConfig(config.store),

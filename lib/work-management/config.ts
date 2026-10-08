@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { normalizeBeadsLabel } from "../beads.js";
 import { isAbsolute, join } from "node:path";
 import {
   decodeTarget,
@@ -6,6 +7,13 @@ import {
   type WorkManagementConfig,
   type WorkManagementTarget,
 } from "./model.js";
+
+export function canonicalWorkstream(value: string): string {
+  const prefix = "workstream:";
+  return normalizeBeadsLabel(prefix + value)
+    .slice(prefix.length)
+    .toLowerCase();
+}
 
 export function loadWorkManagementConfig(
   storePath: string,
@@ -40,10 +48,10 @@ export function loadWorkManagementConfig(
     const workstreams: Record<string, WorkManagementTarget> =
       Object.create(null);
     for (const [name, target] of Object.entries(record(r.workstreams))) {
-      const key = name.toLowerCase();
+      const key = canonicalWorkstream(name);
       if (
         !key.trim() ||
-        /[\u0000-\u001f\u007f,]/.test(key) ||
+        /[\u0000-\u001f\u007f,]/.test(name) ||
         Object.hasOwn(workstreams, key)
       )
         throw new Error("invalid or duplicate workstream");

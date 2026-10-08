@@ -61,3 +61,113 @@ test("composes the standalone runtime without running commands before start", as
     await runtime.stop();
   }
 });
+
+for (const releaseReceipt of [true, false]) {
+  test(
+    releaseReceipt
+      ? "shutdown drains an available delivery receipt before stopping"
+      : "shutdown receipt drain stays bounded when the store is stalled",
+    async (t) => {
+      const { newWorkManagementState } = await import(
+        "../work-management/model.js"
+      );
+      const { target } = await import("../work-management/test-fixtures.js");
+      const { createActionableLifecycle } = await import(
+        "../task-lifecycle/model.js"
+      );
+      const f = await configFixture(t);
+      const data = join(f.root, "issues.json");
+      const bd = join(f.root, "fixture-bd.mjs");
+      const auth = join(f.root, "fixture-auth.mjs");
+      const response = join(f.root, "response-available");
+      const waiting = join(f.root, "receipt-waiting");
+      const release = join(f.root, "release-receipt");
+      const state = newWorkManagementState(target, "task", "why");
+      await writeFile(
+        data,
+        JSON.stringify([
+          {
+            id: "jp-sync",
+            title: "task",
+            status: "open",
+            metadata: {
+              piLifecycle: createActionableLifecycle(new Date().toISOString()),
+              piWorkManagement: state,
+            },
+            dependencies: [],
+          },
+        ]),
+      );
+      await writeFile(
+        bd,
+        `#!${process.execPath}\nimport {readFileSync,writeFileSync,existsSync} from 'node:fs';
+import {setTimeout as delay} from 'node:timers/promises';
+const args=process.argv.slice(2), path=${JSON.stringify(data)};
+if(args[0]==='show' && existsSync(${JSON.stringify(response)}) && JSON.parse(readFileSync(path,'utf8'))[0].metadata.piWorkManagement.remote===null) {
+  writeFileSync(${JSON.stringify(waiting)},'');
+  while(!existsSync(${JSON.stringify(release)})) await delay(10);
+}
+const rows=JSON.parse(readFileSync(path,'utf8'));
+if(args[0]==='list'||args[0]==='show') console.log(JSON.stringify(rows));
+else if(args[0]==='comments') console.log('[]');
+else if(args[0]==='update'){const row=rows[0]; if(args.includes('-s'))row.status=args[args.indexOf('-s')+1]; row.metadata=JSON.parse(args[args.indexOf('--metadata')+1]); writeFileSync(path,JSON.stringify(rows));console.log(JSON.stringify(row));}
+else process.exit(9);\n`,
+        { mode: 0o755 },
+      );
+      await writeFile(
+        auth,
+        `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nprocess.stdin.resume(); process.stdin.on('end',()=>{writeFileSync(${JSON.stringify(response)},'');process.stdout.write(JSON.stringify({data:{id:'case-1'}})+'\\n201\\n');});\n`,
+        { mode: 0o755 },
+      );
+      f.raw.executables = {
+        node: process.execPath,
+        bd,
+        git: process.execPath,
+        gh: process.execPath,
+      };
+      f.raw.limits = { commandTimeoutMs: 1000, observationTimeoutMs: 5000 };
+      await f.save();
+      const config = await loadDaemonConfig(f.configPath);
+      await writeFile(
+        join(config.store, "pi-work-management.json"),
+        JSON.stringify({
+          version: 1,
+          ddAuthPath: auth,
+          curlPath: process.execPath,
+          workstreams: {},
+        }),
+      );
+      const runtime = await createDaemonRuntime(config, {
+        pid: process.pid,
+        host: hostname(),
+        sessionId: "shutdown-test",
+        started: Date.now(),
+      });
+      t.after(() => runtime.stop());
+      runtime.start();
+      const deadline = Date.now() + 10_000;
+      while (true) {
+        try {
+          await access(waiting);
+          break;
+        } catch {
+          assert.ok(Date.now() < deadline, JSON.stringify(runtime.snapshot()));
+          await delay(10);
+        }
+      }
+      const stopped = runtime.stop();
+      if (releaseReceipt) await writeFile(release, "");
+      await stopped;
+      const saved = JSON.parse(await readFile(data, "utf8"))[0].metadata
+        .piWorkManagement;
+      if (releaseReceipt) {
+        assert.equal(saved.remote?.id, "case-1");
+        assert.equal(saved.inFlight, null);
+        assert.equal(saved.failure, null);
+      } else {
+        assert.equal(saved.remote, null);
+        assert.deepEqual(saved.inFlight, { kind: "create" });
+      }
+    },
+  );
+}

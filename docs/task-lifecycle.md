@@ -547,9 +547,10 @@ task is written. Configure absolute paths for `dd-auth` and curl >= 8.3.0:
 Replace every sample UUID and status with explicitly approved values for the
 actual project/type. Nothing creates projects or statuses for you. Supported
 sites are `datadoghq.com`, `datadoghq.eu`, and the `us3`, `us5`, `ap1`, `ap2`, and
-`uk1` subdomains of `datadoghq.com`. Workstream matching is case-insensitive;
-duplicate names differing only by case are rejected. No credentials belong in
-this file. Both waiting reasons share a status; done outcomes can differ.
+`uk1` subdomains of `datadoghq.com`. Workstream matching uses the same label
+normalization as task displays, then compares case-insensitively. Mappings that
+collide after normalization are rejected. No credentials belong in this file.
+Both waiting reasons share a status; done outcomes can differ.
 
 The task snapshots the project and status mapping at creation. Editing/removing
 a mapping or changing labels does not reroute previously enrolled tasks. Keep the
@@ -564,8 +565,10 @@ startup table display compact WM status and a validated link when available.
 scanned. New log entries are discovered on the daemon's next scan.
 
 For enrolled tasks, native progress entries carry a `[pi-task-log:v1]` footer.
-The external comment omits it; native journal output may display it. Only these
-entries publish, identified by native comment ID, so identical messages can be
+The external comment omits it; native journal output may display it. A malformed
+sync record does not prevent owned local logging; those entries retain their tag
+for delivery after repair. Only tagged entries publish, identified by native
+comment ID, so identical messages can be
 legitimate separate comments. Neither transcripts nor arbitrary native comments
 are published. Enabling a workstream makes its new titles/descriptions and
 explicit logs publishable; do not put secrets in them. There is no automatic

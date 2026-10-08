@@ -1,6 +1,7 @@
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { canonicalWorkstream } from "../work-management/config.js";
 
 import type { BeadsExec, BeadsExecResult } from "../beads.js";
 import {
@@ -204,7 +205,7 @@ export function createLifecycleStore(
         const target =
           input.workstream === undefined
             ? undefined
-            : config?.workstreams[input.workstream.toLowerCase()];
+            : config?.workstreams[canonicalWorkstream(input.workstream)];
         const metadata = {
           piLifecycle: lifecycle,
           ...(target === undefined
@@ -291,8 +292,8 @@ export function createLifecycleStore(
       async () => {
         const current = await readOne(id, `read issue ${id} before comment`);
         validate(current.issue);
-        const enrolled =
-          decodeWorkManagement(current.rawMetadata.piWorkManagement) !== null;
+        // A broken delivery record must not prevent owned local progress.
+        const enrolled = Object.hasOwn(current.rawMetadata, "piWorkManagement");
         await execute(`append comment ${id}`, [
           "comments",
           "add",

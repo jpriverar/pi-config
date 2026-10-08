@@ -821,3 +821,79 @@ test("invalid integration configuration creates no task", async () => {
   );
   assert.equal(calls, 0);
 });
+
+test("malformed sync state cannot block an owned native progress log", async () => {
+  const state = lifecycle({
+    phase: "active",
+    execution: {
+      sessionId: OWNER.sessionId,
+      claimedAt: NOW,
+      lastActivityAt: NOW,
+      expiresAt: "2026-09-17T16:00:00.000Z",
+      resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+    },
+  });
+  for (const invalid of [
+    null,
+    {},
+    { deliveredCommentIds: ["duplicate", "duplicate"] },
+  ]) {
+    const current = {
+      ...rawIssue(state),
+      status: "in_progress",
+      metadata: { piLifecycle: state, piWorkManagement: invalid },
+    };
+    const appended: string[] = [];
+    const store = createLifecycleStore(async (_, args) => {
+      if (args[0] === "comments") appended.push(args[3]);
+      return result(current);
+    }, options());
+    const validate = (issue: import("./types.js").LifecycleIssue) => {
+      if (issue.lifecycle?.execution?.sessionId !== OWNER.sessionId)
+        throw new Error("foreign owner");
+    };
+    await store.appendComment("jp-1", "progress", OWNER, validate);
+    assert.deepEqual(appended, ["progress\n\n[pi-task-log:v1]"]);
+    current.metadata.piLifecycle = {
+      ...state,
+      execution: { ...state.execution!, sessionId: "foreign" },
+    };
+    await assert.rejects(
+      store.appendComment("jp-1", "forbidden", OWNER, validate),
+      /foreign owner/,
+    );
+    assert.equal(appended.length, 1);
+  }
+});
+
+test("enrollment uses the same normalized workstream shown by task displays", async () => {
+  let raw = rawIssue();
+  const store = createLifecycleStore(
+    async (_, args) => {
+      if (args[0] === "create")
+        raw = {
+          ...raw,
+          metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+        };
+      return result(raw);
+    },
+    {
+      ...options(),
+      readWorkManagementConfig: () => ({
+        version: 1,
+        ddAuthPath: "/bin/dd-auth",
+        curlPath: "/usr/bin/curl",
+        workstreams: { "pi-setup": WM_TARGET },
+      }),
+    },
+  );
+  const issue = await store.create(
+    { title: "task", why: "why", workstream: "PI-SETUP  ", needsJp: false },
+    lifecycle(),
+    OWNER,
+  );
+  assert.deepEqual(
+    (issue.metadata.piWorkManagement as WorkManagementState)?.target,
+    WM_TARGET,
+  );
+});

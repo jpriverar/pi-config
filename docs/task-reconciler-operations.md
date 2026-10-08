@@ -199,7 +199,10 @@ A configured helper must be trusted local software, not an unreviewed script.
 Installing/updating the daemon runtime and enabling a real configuration are
 separate operator actions; building this package does neither. Use the existing
 `stop`/`start` commands for an operational off switch. Stopping affects other
-reconciliation work too and cannot undo a request already dispatched.
+reconciliation work too and cannot undo a request already dispatched. Local sync
+persistence drains under the existing command and lock deadlines rather than
+being cancelled with lifecycle work, allowing an already-known result to be
+recorded. A stalled receipt write still leaves its in-flight marker for attention.
 
 ### Inspect and recover an uncertain operation
 

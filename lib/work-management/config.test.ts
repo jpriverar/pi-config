@@ -48,3 +48,33 @@ test("config is opt-in, case-normalized and fails closed with its file path", ()
     rmSync(dir, { recursive: true });
   }
 });
+
+test("configuration canonicalizes displayed labels before detecting duplicate mappings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "wm-canonical-"));
+  const path = join(dir, "pi-work-management.json");
+  const config = {
+    version: 1,
+    ddAuthPath: "/bin/dd-auth",
+    curlPath: "/usr/bin/curl",
+    workstreams: { "ALPHA  ": target },
+  };
+  try {
+    writeFileSync(path, JSON.stringify(config));
+    assert.deepEqual(Object.keys(loadWorkManagementConfig(dir)!.workstreams), [
+      "alpha",
+    ]);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...config,
+        workstreams: { alpha: target, "ALPHA ": target },
+      }),
+    );
+    assert.throws(
+      () => loadWorkManagementConfig(dir),
+      /invalid work management configuration/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
