@@ -1,3 +1,4 @@
+import type { WorkManagementSync } from "../work-management/sync.js";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { performance } from "node:perf_hooks";
@@ -49,6 +50,7 @@ async function harness(
   issues: LifecycleIssue[],
   options: {
     remote?: Promise<void>;
+    workManagement?: WorkManagementSync;
     limits?: Partial<DaemonConfig["limits"]>;
   } = {},
 ) {
@@ -107,6 +109,7 @@ async function harness(
     store,
     service,
     adapters,
+    workManagement: options.workManagement,
     owner,
     config,
     now: () => clock.now,
@@ -578,4 +581,63 @@ test("a failed scan does not prevent explicit work and recovery clears its diagn
   } finally {
     await h.sut.stop();
   }
+});
+
+test("work management shares remote capacity without blocking local reconciliation", async (t) => {
+  const blocked = gate();
+  let syncRunning = 0;
+  const visited: string[] = [];
+  const h = await harness(t, [waitingTask("remote", "github_pull_request")], {
+    remote: blocked.promise,
+    limits: { externalConcurrency: 1, maxQueuedTasks: 2 },
+    workManagement: {
+      candidates: async () => Array.from({ length: 9 }, (_, i) => `wm-${i}`),
+      step: async (id, signal) => {
+        visited.push(id);
+        syncRunning++;
+        try {
+          await waitSignal(blocked.promise, signal);
+        } finally {
+          syncRunning--;
+        }
+        return "idle";
+      },
+    },
+  });
+  h.sut.start();
+  await until(() => h.external + syncRunning > 0);
+  h.store.issues.set("local", waitingTask("local", "time"));
+  const local = await h.sut.reconcile({
+    taskId: "local",
+    requestId: "while-sync-blocked",
+  });
+  assert.equal(local.outcome, "applied");
+  assert.equal(h.external + syncRunning, 1);
+  assert.equal(h.sut.snapshot().externalRunning, 1);
+  blocked.release();
+  await until(
+    () =>
+      new Set(visited).size === 9 &&
+      h.store.issues.get("remote")?.status === "open",
+  );
+  assert.equal(visited.length, 9);
+});
+
+test("a work management scan failure does not prevent lifecycle reconciliation", async (t) => {
+  const h = await harness(t, [waitingTask("local", "time")], {
+    workManagement: {
+      candidates: async () => {
+        throw new Error("private error");
+      },
+      step: async () => "idle",
+    },
+  });
+  h.sut.start();
+  await until(() => h.store.issues.get("local")?.status === "open");
+  await until(() =>
+    h.sut
+      .snapshot()
+      .diagnostics.some((d) => d.code === "work_management_scan_failed"),
+  );
+  assert.ok(!JSON.stringify(h.sut.snapshot()).includes("private error"));
 });

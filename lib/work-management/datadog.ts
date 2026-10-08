@@ -22,7 +22,8 @@ export interface DatadogOperationRequest {
 export type DatadogOutcome =
   | { kind: "success"; remote?: RemoteItem }
   | { kind: "retryable"; code: string; retryAfterMs?: number }
-  | { kind: "rejected" | "unknown"; code: string };
+  | { kind: "rejected"; code: string }
+  | { kind: "unknown"; code: string };
 export interface DatadogRuntime {
   ddAuthPath: string;
   curlPath: string;

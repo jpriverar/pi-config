@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { WorkManagementSync } from "../work-management/sync.js";
 import type {
   CheckAdapterRegistry,
   CheckObservation,
@@ -58,6 +59,7 @@ export interface ReconcilerDependencies {
   config: DaemonConfig;
   now(): number;
   abortLocalCommands(): void;
+  workManagement?: WorkManagementSync;
 }
 interface Entry {
   request: ReconcileRequest;
@@ -91,6 +93,9 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
   const backoff = new Map<string, { failures: number; nextAt: number }>();
   const diagnostics = new Map<string, QueueDiagnostic>();
   const work = new Set<Promise<void>>();
+  const syncBacklog = new Set<string>();
+  const syncRunning = new Map<string, AbortController>();
+  let preferSync = false;
   let started = false;
   let stopping = false;
   let stopPromise: Promise<void> | undefined;
@@ -289,6 +294,20 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
     } catch {
       if (!stopping) diagnostic("scan_failed");
     } finally {
+      if (!stopping && deps.workManagement) {
+        try {
+          const ids = await deps.workManagement.candidates();
+          if (!stopping) {
+            const eligible = new Set(ids);
+            for (const id of syncBacklog)
+              if (!eligible.has(id)) syncBacklog.delete(id);
+            for (const id of ids) if (!syncRunning.has(id)) syncBacklog.add(id);
+            clearDiagnostic("work_management_scan_failed");
+          }
+        } catch {
+          if (!stopping) diagnostic("work_management_scan_failed");
+        }
+      }
       scanning = false;
     }
   }
@@ -396,12 +415,51 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
       })(),
     );
   }
+  function syncWorkItem(id: string): void {
+    syncBacklog.delete(id);
+    const controller = new AbortController();
+    syncRunning.set(id, controller);
+    externalRunning++;
+    const deadline = setTimeout(
+      () => controller.abort(),
+      limits.observationTimeoutMs,
+    );
+    track(
+      (async () => {
+        try {
+          const result = await deps.workManagement!.step(id, controller.signal);
+          if (result === "attention" || result === "retry")
+            diagnostic("work_management_attention", id);
+          else clearDiagnostic("work_management_attention", id);
+          clearDiagnostic("work_management_sync_failed", id);
+          if (result === "delivered" && !stopping) syncBacklog.add(id);
+        } catch {
+          if (!stopping) diagnostic("work_management_sync_failed", id);
+        } finally {
+          clearTimeout(deadline);
+          syncRunning.delete(id);
+          externalRunning--;
+          enqueuePump();
+        }
+      })(),
+    );
+  }
+
   function pump(): void {
     if (!started || stopping) return;
     admitScheduled();
-    for (const job of jobs.values()) {
-      if (externalRunning >= limits.externalConcurrency) break;
-      if (job.state === "remote_ready") observe(job);
+    while (externalRunning < limits.externalConcurrency) {
+      const job = [...jobs.values()].find(
+        (job) => job.state === "remote_ready",
+      );
+      const id = syncBacklog.values().next().value;
+      if (id !== undefined && (preferSync || !job)) {
+        syncWorkItem(id);
+        preferSync = false;
+      } else if (job) {
+        observe(job);
+        preferSync = true;
+      } else break;
     }
     if (localBusy) return;
     if (scanDue) {
@@ -502,7 +560,11 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
       return pending.promise;
     },
     snapshot() {
-      const counts = { queued: 0, localRunning: 0, externalRunning: 0 };
+      const counts = {
+        queued: syncBacklog.size,
+        localRunning: 0,
+        externalRunning: syncRunning.size,
+      };
       for (const job of jobs.values()) {
         if (job.state === "observing") counts.externalRunning += 1;
         else if (job.state === "preparing" || job.state === "applying")
@@ -521,6 +583,7 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
       stopping = true;
       clearInterval(timer);
       deps.abortLocalCommands();
+      for (const controller of syncRunning.values()) controller.abort();
       for (const job of [...jobs.values()]) {
         job.controller?.abort();
         if (!["preparing", "observing", "applying"].includes(job.state))
@@ -531,6 +594,7 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
         for (const job of [...jobs.values()]) finish(job);
         backlog.clear();
         backoff.clear();
+        syncBacklog.clear();
       })();
       return stopPromise;
     },
