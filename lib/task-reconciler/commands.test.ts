@@ -174,3 +174,31 @@ test("invalid budgets fail before starting a process", async () => {
     /maxOutputBytes/,
   );
 });
+
+test("bounded stdin reaches the child without argv interpolation", async () => {
+  const input = '$(touch /never-run)\n{"private":"body"}';
+  const result = await runBoundedCommand(
+    process.execPath,
+    ["-e", "process.stdin.pipe(process.stdout)"],
+    { env: {}, input, timeoutMs: 2000 },
+  );
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, input);
+  await assert.rejects(
+    runBoundedCommand(process.execPath, ["-e", "process.exit(0)"], {
+      env: {},
+      input: "abc",
+      maxOutputBytes: 2,
+    }),
+    /input/,
+  );
+});
+
+test("early child exit does not leave an unhandled stdin error", async () => {
+  const result = await runBoundedCommand(
+    process.execPath,
+    ["-e", "process.exit(0)"],
+    { env: {}, input: "x".repeat(1024 * 1024), timeoutMs: 2000 },
+  );
+  assert.equal(result.code, 0);
+});

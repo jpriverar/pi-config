@@ -30,6 +30,7 @@ export async function runBoundedCommand(
     env: NodeJS.ProcessEnv;
     timeoutMs?: number;
     maxOutputBytes?: number;
+    input?: string;
   },
 ): Promise<BeadsExecResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_DAEMON_LIMITS.commandTimeoutMs;
@@ -39,6 +40,11 @@ export async function runBoundedCommand(
     if (!Number.isInteger(value) || value <= 0 || value > 2_147_483_647)
       throw new Error(`${name} must be a positive bounded integer`);
   }
+  if (
+    options.input !== undefined &&
+    Buffer.byteLength(options.input) > maxOutputBytes
+  )
+    throw new Error("command input exceeds byte budget");
   if (!isAbsolute(file)) throw new Error("command path must be absolute");
   if (options.signal?.aborted) throw new CommandExecutionError(file, "aborted");
 
@@ -47,7 +53,11 @@ export async function runBoundedCommand(
     try {
       child = spawn(file, [...args], {
         env: options.env,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [
+          options.input === undefined ? "ignore" : "pipe",
+          "pipe",
+          "pipe",
+        ],
         shell: false,
         detached: false,
       });
@@ -74,6 +84,7 @@ export async function runBoundedCommand(
       clearTimeout(killTimer);
       clearTimeout(drainTimer);
       options.signal?.removeEventListener("abort", onAbort);
+      child.stdin?.destroy();
       child.stdout?.destroy();
       child.stderr?.destroy();
       if (failure !== undefined)
@@ -109,6 +120,9 @@ export async function runBoundedCommand(
       }
       target.push(data);
     }
+    // Early-exiting commands can close stdin before consuming the bounded input.
+    child.stdin?.on("error", () => {});
+    if (options.input !== undefined) child.stdin?.end(options.input);
     child.stdout?.on("data", (data: Buffer) => capture(stdout, data));
     child.stderr?.on("data", (data: Buffer) => capture(stderr, data));
     child.on("error", () => {
