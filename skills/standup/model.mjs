@@ -137,15 +137,16 @@ export function validateScope(value) {
       typeof account.host === "string" && /^[a-z0-9.-]+$/i.test(account.host),
       "Invalid GitHub host",
     );
+    // Managed users include an enterprise suffix separated by an underscore.
     assert(
-      typeof account.login === "string" && /^[a-z0-9-]+$/i.test(account.login),
+      typeof account.login === "string" && /^[a-z0-9_-]+$/i.test(account.login),
       "Invalid GitHub login",
     );
     assert(
       Array.isArray(account.owners) &&
         account.owners.every(
           (/** @type {unknown} */ owner) =>
-            typeof owner === "string" && /^[a-z0-9-]+$/i.test(owner),
+            typeof owner === "string" && /^[a-z0-9_-]+$/i.test(owner),
         ),
       "Invalid GitHub owners",
     );

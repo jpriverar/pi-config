@@ -10,6 +10,7 @@ import {
   parseStart,
   selectWindow,
   serializeReport,
+  validateScope,
 } from "../skills/standup/model.mjs";
 import type { Report } from "../skills/standup/model.mjs";
 
@@ -151,6 +152,35 @@ test("report validation rejects missing or duplicate coverage and invalid metada
   assert.throws(() =>
     parseReport('<!-- standup-report:v1\n{"version": 2}\n-->\ntext'),
   );
+});
+
+test("managed GitHub logins survive report validation and serialization", () => {
+  const value = report();
+  value.meta.scope.github[0].login = "example_enterprise";
+  assert.deepEqual(parseReport(serializeReport(value)), value);
+});
+
+test("managed GitHub user namespaces are valid repository owners", () => {
+  const value = report();
+  value.meta.scope.github[0].owners = ["example_enterprise"];
+  assert.deepEqual(parseReport(serializeReport(value)), value);
+});
+
+test("GitHub names still reject whitespace and query or path separators", () => {
+  for (const name of [
+    "",
+    "example user",
+    "example/user",
+    "example:org",
+    "example\nuser",
+  ]) {
+    const login = report().meta.scope;
+    login.github[0].login = name;
+    assert.throws(() => validateScope(login), /Invalid GitHub login/);
+    const owner = report().meta.scope;
+    owner.github[0].owners = [name];
+    assert.throws(() => validateScope(owner), /Invalid GitHub owners/);
+  }
 });
 
 test("scope normalization resolves roots and ignores account and owner ordering", async () => {
