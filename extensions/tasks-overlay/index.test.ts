@@ -1558,7 +1558,7 @@ test("renders managed dependency waits once in the state and blocker columns", a
   assert.equal((harness.render().match(/jp-654/g) ?? []).length, 1);
 });
 
-function projectFlow(...choices: string[]) {
+function projectFlow(...choices: Array<string | undefined>) {
   return (items: string[]) => {
     const choice = choices.shift();
     if (choice === undefined) return undefined;
@@ -1845,3 +1845,99 @@ test("archive read failure warns and never changes project state", async () => {
   assert.deepEqual(harness.appendedEntries, []);
   assert.equal(harness.archives(), "");
 });
+
+test("management refreshes the list between successive renames", async () => {
+  const names = ["Gamma", "Delta"];
+  const harness = createHarness({
+    issues: [
+      issue("one", "closed", ["workstream:Alpha"]),
+      issue("two", "closed", ["workstream:Beta"]),
+    ],
+    select: projectFlow(
+      "Manage projects…",
+      "Alpha",
+      "Rename",
+      "Beta",
+      "Rename",
+    ),
+    input: () => names.shift(),
+    confirm: () => true,
+  });
+  await switchProject(harness);
+  assert.deepEqual(
+    harness.issues.map((task) => task.labels),
+    [["workstream:Gamma"], ["workstream:Delta"]],
+  );
+  assert.deepEqual(
+    harness.selections
+      .filter((selection) => selection.title === "Manage projects")
+      .map((selection) => selection.items),
+    [
+      ["Alpha — 1 tasks", "Beta — 1 tasks"],
+      ["Beta — 1 tasks", "Gamma — 1 tasks"],
+      ["Delta — 1 tasks", "Gamma — 1 tasks"],
+    ],
+  );
+});
+
+for (const action of ["Archive", "Restore"] as const) {
+  test(`management refreshes the list between successive ${action.toLowerCase()} actions`, async () => {
+    const archived = action === "Restore";
+    const title = archived ? "Archived projects" : "Manage projects";
+    const harness = createHarness({
+      issues: [
+        issue("one", "closed", ["workstream:Alpha"]),
+        issue("two", "closed", ["workstream:Beta"]),
+      ],
+      archivesValue: archived
+        ? '{"version":1,"archived":["alpha","beta"]}'
+        : "",
+      select: projectFlow(`${title}…`, "Alpha", action, "Beta", action),
+      confirm: () => true,
+    });
+    await switchProject(harness);
+    assert.deepEqual(
+      JSON.parse(harness.archives()).archived,
+      archived ? [] : ["alpha", "beta"],
+    );
+    assert.deepEqual(
+      harness.selections
+        .filter((selection) => selection.title === title)
+        .map((selection) => selection.items),
+      [["Alpha — 1 tasks", "Beta — 1 tasks"], ["Beta — 1 tasks"]],
+    );
+    assert.deepEqual(harness.appendedEntries, []);
+  });
+}
+
+for (const cancellation of ["action", "rename", "archive"] as const) {
+  test(`cancelling ${cancellation} returns to management before selecting the next project`, async () => {
+    let confirmations = 0;
+    const harness = createHarness({
+      issues: [
+        issue("one", "closed", ["workstream:Alpha"]),
+        issue("two", "closed", ["workstream:Beta"]),
+      ],
+      select: projectFlow(
+        "Manage projects…",
+        "Alpha",
+        cancellation === "action"
+          ? undefined
+          : cancellation === "rename"
+            ? "Rename"
+            : "Archive",
+        "Beta",
+        "Archive",
+      ),
+      confirm: () => ++confirmations > (cancellation === "archive" ? 1 : 0),
+    });
+    await switchProject(harness);
+    assert.ok(
+      harness.archives(),
+      "The next project's archive action was not reached",
+    );
+    assert.deepEqual(JSON.parse(harness.archives()).archived, ["beta"]);
+    assert.deepEqual(harness.issues[0].labels, ["workstream:Alpha"]);
+    assert.deepEqual(harness.appendedEntries, []);
+  });
+}

@@ -331,38 +331,43 @@ export default function tasksOverlay(pi: ExtensionAPI) {
     ctx: ExtensionContext,
     archived: boolean,
   ): Promise<void> {
-    const projects = await projectsManager.list();
-    const registry = await projectsManager.archives();
-    const candidates = projects.filter((project) =>
-      archived
-        ? registry.archived.includes(project.name.toLowerCase())
-        : !isProjectHidden(project, registry),
-    );
-    const project = await chooseProject(
-      ctx,
-      archived ? "Archived projects" : "Manage projects",
-      candidates,
-    );
-    if (!project) return;
-    const action = await ctx.ui.select(
-      project.name,
-      archived ? ["Restore"] : ["Rename", "Archive"],
-    );
-    if (action === "Rename") return renameProject(ctx, project);
-    if (action !== "Archive" && action !== "Restore") return;
-    if (
-      action === "Archive" &&
-      !(await ctx.ui.confirm(
-        "Archive project",
-        `Hide ${project.name} from the project picker? Tasks and history will be preserved.`,
-      ))
-    )
-      return;
-    await projectsManager.setArchived(project.name, action === "Archive");
-    ctx.ui.notify(
-      `${action === "Archive" ? "Archived" : "Restored"} project ${project.name}`,
-      "info",
-    );
+    while (true) {
+      const projects = await projectsManager.list();
+      const registry = await projectsManager.archives();
+      const candidates = projects.filter((project) =>
+        archived
+          ? registry.archived.includes(project.name.toLowerCase())
+          : !isProjectHidden(project, registry),
+      );
+      const project = await chooseProject(
+        ctx,
+        archived ? "Archived projects" : "Manage projects",
+        candidates,
+      );
+      if (!project) return;
+      const action = await ctx.ui.select(
+        project.name,
+        archived ? ["Restore"] : ["Rename", "Archive"],
+      );
+      if (action === "Rename") {
+        await renameProject(ctx, project);
+        continue;
+      }
+      if (action !== "Archive" && action !== "Restore") continue;
+      if (
+        action === "Archive" &&
+        !(await ctx.ui.confirm(
+          "Archive project",
+          `Hide ${project.name} from the project picker? Tasks and history will be preserved.`,
+        ))
+      )
+        continue;
+      await projectsManager.setArchived(project.name, action === "Archive");
+      ctx.ui.notify(
+        `${action === "Archive" ? "Archived" : "Restored"} project ${project.name}`,
+        "info",
+      );
+    }
   }
 
   async function switchProject(ctx: ExtensionContext): Promise<void> {
