@@ -16,6 +16,7 @@
     "extensions/**/*.ts",
     "lib/**/*.ts",
     "tests/**/*.ts",
-    "tests/**/*.mjs"
+    "tests/**/*.mjs",
+    "skills/standup/**/*.mjs"
   ]
 }

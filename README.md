@@ -184,12 +184,33 @@ The package manifest loads:
   and conversation cloning,
   bounded worktree allocation, lifecycle-safe task mutation and presentation,
   project status, and `/tasks`;
-- four skill roots: critical review, collaborative thinking, handoffs, and the
-  Thermo-Nuclear code-quality review;
+- five skill roots: critical review, collaborative thinking, handoffs,
+  the Thermo-Nuclear code-quality review, and incremental standup updates;
 - the `modus-vivendi-tinted` and `gold-rush` themes.
 
 Use `pi config` to enable or disable individual package resources after
 installation.
+
+## Incremental standup updates
+
+Use `/skill:standup` or ask for a standup update. The first run asks for a starting
+point and source scope; later runs cover work since the previous saved report.
+The skill reads Beads task journals/history, GitHub activity, and available local
+Pi sessions across projects, producing Progress / Next / Blockers with evidence.
+
+Reports and coverage metadata stay in private `~/.pi/standup/reports/` files;
+source scope and draft files also stay under `~/.pi/standup/`, never in this
+package. Complete successful generation saves automatically. Missing sources,
+truncated collection, and draft-only requests do not advance the cutoff.
+Regenerating revises the latest interval without advancing it or deleting prior
+text. A fully checked no-activity interval may still save.
+
+Selected evidence is sent to the configured model. The session filter excludes
+thinking and private-context text and withholds all session text on incomplete
+scans, but is not a comprehensive secret detector. Sources outside the declared
+scope, deleted sessions, and delayed search-index events may be absent; this is
+not an audit log. The skill never posts updates, changes tasks, starts login,
+or schedules itself. See [source and recovery guidance](skills/standup/references/sources.md).
 
 ## Clone into a Herdr pane
 

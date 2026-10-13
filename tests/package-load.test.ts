@@ -29,6 +29,7 @@ const publicResources = {
     "./skills/thinking-partner",
     "./skills/handoff",
     "./skills/thermo-nuclear-code-quality-review",
+    "./skills/standup",
   ],
   prompts: ["./prompts/review.md"],
   themes: ["./themes/modus-vivendi-tinted.json", "./themes/gold-rush.json"],

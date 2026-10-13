@@ -109,7 +109,9 @@ export async function collectSessions(root, window, limits = defaults) {
   const ambiguous = new Set();
   let files = 0,
     bytes = 0,
-    traversed = 0;
+    traversed = 0,
+    metadataFiles = 0;
+  const startMs = Date.parse(window.start);
   const directories = [root];
   try {
     const info = await lstat(root);
@@ -136,6 +138,14 @@ export async function collectSessions(root, window, limits = defaults) {
           continue;
         }
         if (!item.name.endsWith(".jsonl")) continue;
+        const metadata = await lstat(path);
+        metadataFiles++;
+        assert(
+          metadata.isFile() && !metadata.isSymbolicLink(),
+          `Unsafe session file: ${path}`,
+        );
+        // Discovery only: later writes must not hide earlier in-window messages.
+        if (Math.max(metadata.mtimeMs, metadata.ctimeMs) < startMs) continue;
         files++;
         if (files > limits.maxFiles)
           throw new Error("Session file limit exhausted");
@@ -205,27 +215,30 @@ export async function collectSessions(root, window, limits = defaults) {
                 (entry.timestamp >= window.start &&
                   entry.timestamp < window.end),
             );
-            if (relevant)
-              incomplete(
-                `Unsupported session version ${header.version}: ${path}`,
-              );
+            if (relevant) incomplete(`Unsupported session version: ${path}`);
             continue;
           }
           const byId = new Map();
           for (const entry of entries) {
             assert(
               knownTypes.has(entry.type),
-              `Unsupported entry type: ${String(entry.type)}`,
+              "Unsupported session entry type",
             );
             assert(
-              typeof entry.id === "string" && !byId.has(entry.id),
+              typeof entry.id === "string" &&
+                /^[a-z0-9_-]{1,128}$/i.test(entry.id) &&
+                !byId.has(entry.id),
               "Missing or duplicate session entry ID",
             );
             assert(
               entry.parentId === null || typeof entry.parentId === "string",
               "Invalid session parent",
             );
-            parseStart(entry.timestamp);
+            try {
+              entry.timestamp = parseStart(entry.timestamp);
+            } catch {
+              throw new Error("Invalid session entry timestamp");
+            }
             byId.set(entry.id, entry);
           }
           const validated = new Set();
@@ -292,7 +305,7 @@ export async function collectSessions(root, window, limits = defaults) {
               message.excludeFromContext
             )
               continue;
-            let occurredAt = parseStart(entry.timestamp);
+            let occurredAt = entry.timestamp;
             if (message.timestamp !== undefined) {
               assert(
                 typeof message.timestamp === "number" &&
@@ -373,7 +386,10 @@ export async function collectSessions(root, window, limits = defaults) {
         )
       : [];
   result.coverage.checked.push(
-    `${files} files; ${bytes} bytes; ${result.evidence.length} selected entries; [${window.start}, ${window.end})`,
+    `${metadataFiles} files checked by metadata; ${files} candidates with mtime/ctime >= ${window.start}; ${bytes} bytes; ${result.evidence.length} selected entries; [${window.start}, ${window.end})`,
+  );
+  result.coverage.limitations.push(
+    "Discovery uses filesystem modification/change times; deliberately backdated or unreliable metadata can hide activity",
   );
   return result;
 }

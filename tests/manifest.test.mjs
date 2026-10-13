@@ -25,6 +25,7 @@ const expectedSkills = [
   "./skills/thinking-partner",
   "./skills/handoff",
   "./skills/thermo-nuclear-code-quality-review",
+  "./skills/standup",
 ];
 
 const expectedPrompts = ["./prompts/review.md"];

@@ -1,7 +1,7 @@
 # Incremental standup summary skill
 
-Status: written specification approved by JP on 2026-10-13; implementation-plan
-review and execution-method selection pending. Work item: `jp-7coq`.
+Status: specification and direct implementation approved by JP on 2026-10-13;
+implementation verified, integration decision pending. Work item: `jp-7coq`.
 
 ## Intent and agreed scope
 
@@ -126,6 +126,15 @@ The default root is `~/.pi/agent/sessions/`; honor an explicitly configured
 alternate root rather than guessing. Local files are the source of record for
 this integration. The optional Trajectory SQLite cache is not a dependency: its
 discovery probe failed with `unable to open database file (14)` on this machine.
+
+Discover candidates from filesystem metadata first: include files whose
+modification or change time is at or after `start`, without an upper bound.
+Do not read inactive archives. This includes old sessions resumed recently and
+copies whose modification times were preserved. File metadata is a discovery
+hint, not a checkpoint or event timestamp; deliberately backdated/unreliable
+metadata remains a disclosed limitation. JP clarified this requirement during
+implementation; a metadata-only check reduced a roughly 2 GiB archive to about
+37 MiB of recently active sessions without raising the read budget.
 
 Pi JSONL contains timestamped entries, branch ancestry, and copied sessions.
 Read relevant user/assistant text and selected tool results needed to support an
@@ -269,6 +278,6 @@ effect. No runtime behavior has been implemented or tested during this spec phas
 ## Approval boundary
 
 JP approved the in-chat design and written specification on 2026-10-13.
-Implementation requires plan review and execution-method selection. Spec approval
-does not authorize merging, installing a daemon, posting reports, or generating
+JP subsequently approved the implementation plan and direct execution without
+delegation. This does not authorize merging, installing a daemon, posting reports, or generating
 a live checkpoint.

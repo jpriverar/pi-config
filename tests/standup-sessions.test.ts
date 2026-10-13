@@ -128,7 +128,7 @@ test("excludes private/non-evidence content while preserving unrelated text", as
       "recap",
       "<!-- standup-summary:v1 -->old report<!-- /standup-summary -->\nnew investigation",
     ),
-    message("token", "token=secret-value-do-not-extract"),
+    message("token", "token=YOUR_TOKEN_HERE"),
     message("rawtool", "arbitrary raw file", window.start, "toolResult"),
     message("test", "Tests: 4 passed, 4 total", window.start, "toolResult"),
   ]);
@@ -144,7 +144,7 @@ test("excludes private/non-evidence content while preserving unrelated text", as
     "old report",
     "excluded",
     "system prompt",
-    "secret-value",
+    "YOUR_TOKEN_HERE",
     "arbitrary raw file",
   ])
     assert(!text.includes(excluded), excluded);
@@ -305,4 +305,61 @@ test("incomplete scans withhold candidate text when unseen edits could retract c
   const result = await collectSessions(root, window);
   assert.equal(result.coverage.status, "incomplete");
   assert.deepEqual(result.evidence, []);
+});
+
+test("malformed session metadata is not echoed into coverage diagnostics", async (t) => {
+  const { root, path } = await fixture(t, []);
+  for (const entry of [
+    { ...message("a", "safe"), timestamp: "YOUR_TOKEN_HERE" },
+    { ...message("a", "safe"), type: "YOUR_TOKEN_HERE" },
+  ]) {
+    await writeFile(
+      path,
+      [header(), entry].map((item) => JSON.stringify(item)).join("\n") + "\n",
+    );
+    const result = await collectSessions(root, window);
+    assert.equal(result.coverage.status, "incomplete");
+    assert(!JSON.stringify(result).includes("YOUR_TOKEN_HERE"));
+  }
+});
+
+test("metadata discovery skips inactive archives before reading or charging byte budget", async (t) => {
+  const start = new Date(Date.now() + 60_000).toISOString();
+  const end = new Date(Date.parse(start) + 60_000).toISOString();
+  const { root, path } = await fixture(t, [
+    message("recent", "recent investigation", start),
+  ]);
+  const { utimes } = await import("node:fs/promises");
+  await writeFile(
+    join(root, "old-archive.jsonl"),
+    "invalid old archive".repeat(10_000),
+  );
+  await utimes(path, new Date(end), new Date(end));
+  const result = await collectSessions(
+    root,
+    { start, end },
+    { maxFiles: 1, maxBytes: 4096, maxEvidenceBytes: 4096 },
+  );
+  assert.equal(result.coverage.status, "complete");
+  assert.deepEqual(
+    result.evidence.map((item) => item.text),
+    ["recent investigation"],
+  );
+  assert.match(result.coverage.checked.join(" "), /metadata/);
+});
+
+test("candidate discovery includes activity after end and copies with preserved modification times", async (t) => {
+  const start = new Date(Date.now() - 60_000).toISOString();
+  const end = new Date(Date.now() - 30_000).toISOString();
+  const { root, path } = await fixture(t, [
+    message("copied", "in-window evidence", start),
+  ]);
+  const { utimes } = await import("node:fs/promises");
+  await utimes(path, new Date(0), new Date(0));
+  const result = await collectSessions(root, { start, end });
+  assert.equal(result.coverage.status, "complete");
+  assert.deepEqual(
+    result.evidence.map((item) => item.text),
+    ["in-window evidence"],
+  );
 });
