@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -362,4 +369,58 @@ test("candidate discovery includes activity after end and copies with preserved 
     result.evidence.map((item) => item.text),
     ["in-window evidence"],
   );
+});
+
+test("native discovery preserves forks and excludes exported artifacts", async (t) => {
+  const { root } = await fixture(t, [message("flat", "flat native work")]);
+  const project = join(root, "--fixture-project--");
+  await mkdir(project);
+  await writeFile(
+    join(project, "native.jsonl"),
+    [header(), message("project", "project native work")]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+  );
+  const forks = join(project, "parent-session", "forks");
+  await mkdir(forks, { recursive: true });
+  await writeFile(
+    join(forks, "fork.jsonl"),
+    [header(), message("fork", "fork native work")]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+  );
+  const artifacts = join(project, "subagent-artifacts");
+  await mkdir(artifacts);
+  await writeFile(
+    join(artifacts, "oracle_transcript.jsonl"),
+    JSON.stringify({
+      role: "assistant",
+      text: "non-session artifact".repeat(1000),
+    }) + "\n",
+  );
+  const result = await collectSessions(root, window, {
+    maxFiles: 3,
+    maxBytes: 4096,
+    maxEvidenceBytes: 4096,
+  });
+  assert.equal(result.coverage.status, "complete");
+  assert.deepEqual(result.evidence.map((entry) => entry.text).sort(), [
+    "flat native work",
+    "fork native work",
+    "project native work",
+  ]);
+});
+
+test("malformed nested native sessions still fail closed", async (t) => {
+  const { root } = await fixture(t, [message("valid", "valid native work")]);
+  const project = join(root, "--fixture-project--", "parent-session", "forks");
+  await mkdir(project, { recursive: true });
+  await writeFile(
+    join(project, "native.jsonl"),
+    JSON.stringify(message("missing-header", "unverifiable")) + "\n",
+  );
+  const result = await collectSessions(root, window);
+  assert.equal(result.coverage.status, "incomplete");
+  assert.match(result.coverage.limitations.join(" "), /Missing session header/);
+  assert.deepEqual(result.evidence, []);
 });

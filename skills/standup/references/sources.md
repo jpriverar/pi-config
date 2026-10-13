@@ -33,8 +33,10 @@ Use `umask 077` before creating the root, `drafts/`, scope, or run files. Refuse
 existing unsafe permissions rather than broadly chmod-ing someone else's data.
 Create a unique run directory, for example with `mktemp -d` under the private
 `drafts/` directory. Keep request, coverage, and summary there, not raw archives.
-Temporary API/session output belongs in tool-managed temporary storage and must
-not be committed or included wholesale in the report.
+Temporary API/session output belongs in private temporary storage within the
+analysis tool's permitted workspace. Verify access with synthetic data before
+live collection. Respect access denials; do not relocate denied files or switch
+tools to bypass them. Never commit raw output or include it wholesale in reports.
 
 ```sh
 node <skill-dir>/standup.mjs prepare --scope <scope.json> --since 2026-10-12
@@ -167,6 +169,11 @@ and Issue comments. Use the installed `gh api --help` for CLI flag semantics.
 ```sh
 node <skill-dir>/standup.mjs sessions --request <request.json>
 ```
+
+Discovery includes nested native Pi sessions, including per-session `forks/`
+directories. It excludes the `subagent-artifacts/` export namespace: those
+transcripts are separate from Pi's native session history. Unknown or malformed
+JSONL elsewhere still makes coverage incomplete; missing headers are not ignored.
 
 The helper first checks filesystem metadata, selecting files modified or changed
 since `start`, with no upper bound on file activity. Old sessions resumed recently

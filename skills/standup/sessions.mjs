@@ -134,7 +134,8 @@ export async function collectSessions(root, window, limits = defaults) {
           continue;
         }
         if (item.isDirectory()) {
-          directories.push(path);
+          // Exported subagent transcripts are not the native session history.
+          if (item.name !== "subagent-artifacts") directories.push(path);
           continue;
         }
         if (!item.name.endsWith(".jsonl")) continue;
