@@ -16,6 +16,13 @@ import {
   type ProjectRenameRegistry,
 } from "./project-renames.js";
 
+import {
+  decodeProjectArchiveRegistry,
+  encodeProjectArchiveRegistry,
+  PROJECT_ARCHIVES_CONFIG_KEY,
+  type ProjectArchiveRegistry,
+} from "./project-archives.js";
+
 export type IssueStatus =
   | "open"
   | "in_progress"
@@ -94,6 +101,12 @@ export interface BeadsClient {
   listBlockingDependencies(
     id: string,
   ): Promise<BeadsResult<NativeDependency[]>>;
+
+  getProjectArchiveRegistry(): Promise<BeadsResult<ProjectArchiveRegistry>>;
+
+  setProjectArchiveRegistry(
+    registry: ProjectArchiveRegistry,
+  ): Promise<BeadsResult<void>>;
 
   getProjectRenameRegistry(): Promise<BeadsResult<ProjectRenameRegistry>>;
 
@@ -407,6 +420,48 @@ export function createBeadsClient(
         (value) =>
           decodeBlockingDependencies(value, `issue ${normalizeId(id)}`),
       );
+    },
+    getProjectArchiveRegistry() {
+      return runBd(
+        "get project archive registry",
+        ["config", "get", PROJECT_ARCHIVES_CONFIG_KEY, "--json"],
+        (value) => {
+          if (
+            typeof value !== "object" ||
+            value === null ||
+            Array.isArray(value) ||
+            typeof (value as Record<string, unknown>).value !== "string"
+          )
+            throw new Error("invalid project archive registry envelope");
+          return decodeProjectArchiveRegistry(
+            (value as Record<string, unknown>).value,
+          );
+        },
+      );
+    },
+    async setProjectArchiveRegistry(registry) {
+      let encoded: string;
+      try {
+        encoded = encodeProjectArchiveRegistry(registry);
+      } catch {
+        return {
+          ok: false,
+          error: {
+            operation: "set project archive registry",
+            store,
+            message: "project archive registry is invalid",
+          },
+        };
+      }
+      const executed = await execBd("set project archive registry", [
+        "config",
+        "set",
+        PROJECT_ARCHIVES_CONFIG_KEY,
+        encoded,
+        "--json",
+      ]);
+      if (!executed.ok) return executed;
+      return { ok: true, value: undefined };
     },
     getProjectRenameRegistry() {
       return runBd(

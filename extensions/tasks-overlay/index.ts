@@ -13,56 +13,30 @@ import {
 import {
   createBeadsClient,
   listClassifiedIssues,
-  normalizeBeadsLabel,
   type ClassifiedIssue,
   type IssueStatus,
   type Readiness,
 } from "../../lib/beads.js";
-import {
-  recordProjectRename,
-  resolveProjectRename,
-  validateProjectName,
-} from "../../lib/project-renames.js";
+import { resolveProjectRename } from "../../lib/project-renames.js";
 import {
   generateSessionProjectName,
   persistSessionProject,
   resolveSessionProject,
   type SessionProjectWriter,
 } from "../../lib/session-project.js";
+import {
+  ALL_PROJECT_ISSUE_STATUSES as ALL_ISSUE_STATUSES,
+  collectProjects,
+  createProjectManager,
+  isProjectHidden,
+  type Project,
+} from "../../lib/project-management.js";
 import { renderTaskTable } from "../shared/task-table.js";
 
-const ALL_ISSUE_STATUSES = [
-  "open",
-  "in_progress",
-  "blocked",
-  "deferred",
-  "closed",
-] as const;
-const WORKSTREAM_LABEL_PREFIX = "workstream:";
 const PROJECT_PICKER_VISIBLE_ITEMS = 8;
 
 function primaryWorkstream(issue: ClassifiedIssue): string | undefined {
   return issue.workstreams[0];
-}
-
-function workstreamLabels(issue: { labels: readonly string[] }): string[] {
-  return issue.labels.filter((label) =>
-    label.startsWith(WORKSTREAM_LABEL_PREFIX),
-  );
-}
-
-function normalizeLabelSet(labels: readonly string[]): Set<string> {
-  return new Set(
-    labels
-      .map((label) => normalizeBeadsLabel(label))
-      .filter((label) => label.length > 0),
-  );
-}
-
-function sameLabelSet(left: ReadonlySet<string>, right: ReadonlySet<string>) {
-  return (
-    left.size === right.size && [...left].every((label) => right.has(label))
-  );
 }
 
 async function selectProject(
@@ -156,6 +130,8 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       stderr: result.stderr,
     };
   });
+
+  const projectsManager = createProjectManager(client);
 
   async function getIssues(
     project?: string,
@@ -295,188 +271,97 @@ export default function tasksOverlay(pi: ExtensionAPI) {
     );
   }
 
-  async function renameProject(ctx: ExtensionContext): Promise<void> {
-    const listed = await client.listIssues(ALL_ISSUE_STATUSES);
-    if (!listed.ok) {
-      ctx.ui.notify("Projects unavailable", "warning");
-      return;
+  async function chooseProject(
+    ctx: ExtensionContext,
+    title: string,
+    projects: Project[],
+  ): Promise<Project | undefined> {
+    if (projects.length === 0) {
+      ctx.ui.notify(`No projects available for ${title.toLowerCase()}`, "info");
+      return undefined;
     }
-
-    const projects = new Map<
-      string,
-      {
-        name: string;
-        variants: Set<string>;
-        issueIds: string[];
-      }
-    >();
-    for (const issue of listed.value) {
-      const seen = new Set<string>();
-      for (const label of workstreamLabels(issue)) {
-        const name = label.slice(WORKSTREAM_LABEL_PREFIX.length);
-        if (!name) continue;
-
-        const key = name.toLowerCase();
-        let project = projects.get(key);
-        if (!project) {
-          project = { name, variants: new Set(), issueIds: [] };
-          projects.set(key, project);
-        }
-        project.variants.add(name);
-        if (!seen.has(key)) {
-          project.issueIds.push(issue.id);
-          seen.add(key);
-        }
-      }
-    }
-
-    const sortedProjects = [...projects.entries()].sort((left, right) => {
-      const leftName = left[1].name.toLowerCase();
-      const rightName = right[1].name.toLowerCase();
-      return leftName < rightName ? -1 : leftName > rightName ? 1 : 0;
-    });
-    if (sortedProjects.length === 0) {
-      ctx.ui.notify("No projects to rename", "info");
-      return;
-    }
-
-    const labels = sortedProjects.map(
-      ([, project]) => `${project.name} — ${project.issueIds.length} tasks`,
+    const labels = projects.map(
+      (project) => `${project.name} — ${project.issues.length} tasks`,
     );
-    const projectsByLabel = new Map(
-      sortedProjects.map(([key, project], index) => [
-        labels[index],
-        { key, project },
-      ]),
+    const selected = await selectProject(ctx, title, labels);
+    return selected === undefined
+      ? undefined
+      : projects[labels.indexOf(selected)];
+  }
+
+  async function renameProject(
+    ctx: ExtensionContext,
+    selected?: Project,
+  ): Promise<void> {
+    const projects = await projectsManager.list();
+    const project =
+      selected ?? (await chooseProject(ctx, "Rename project", projects));
+    if (!project) return;
+    const next = await ctx.ui.input("New project name", project.name);
+    if (next === undefined) return;
+    const plan = await projectsManager.prepareRename(
+      projects,
+      project.name,
+      next,
     );
-    const selectedLabel = await ctx.ui.select("Rename project", labels);
-    if (selectedLabel === undefined) return;
-
-    const selected = projectsByLabel.get(selectedLabel);
-    if (!selected) return;
-
-    const renamed = await ctx.ui.input(
-      "New project name",
-      selected.project.name,
-    );
-    if (renamed === undefined) return;
-
-    const validatedName = validateProjectName(renamed);
-    if (!validatedName.ok) {
-      ctx.ui.notify(validatedName.message, "warning");
-      return;
-    }
-
-    const next = validatedName.value;
-    const nextKey = next.toLowerCase();
-    if (nextKey !== selected.key && projects.has(nextKey)) {
-      ctx.ui.notify(`Project ${next} already exists`, "warning");
-      return;
-    }
-
-    const preflightRegistry = await client.getProjectRenameRegistry();
-    if (!preflightRegistry.ok) {
-      ctx.ui.notify(
-        "Project rename unavailable because session migrations cannot be prepared",
-        "warning",
-      );
-      return;
-    }
-
-    const confirmed = await ctx.ui.confirm(
-      "Rename project",
-      `${selected.project.name} → ${next} across ${selected.project.issueIds.length} tasks`,
-    );
-    if (!confirmed) return;
-
-    const removeLabels = [...selected.project.variants].map(
-      (name) => `${WORKSTREAM_LABEL_PREFIX}${name}`,
-    );
-    const removeLabelSet = new Set(removeLabels);
-    const targetLabel = `${WORKSTREAM_LABEL_PREFIX}${next}`;
-    const expectedLabelsByIssueId = new Map(
-      selected.project.issueIds.map((issueId) => {
-        const issue = listed.value.find(
-          (candidate) => candidate.id === issueId,
-        );
-        const expectedLabels = normalizeLabelSet([
-          ...(issue?.labels ?? []).filter(
-            (label) => !removeLabelSet.has(label),
-          ),
-          targetLabel,
-        ]);
-        return [issueId, expectedLabels] as const;
-      }),
-    );
-
-    await client.updateIssueLabels(selected.project.issueIds, {
-      removeLabels,
-      addLabels: [targetLabel],
-    });
-    const relisted = await client.listIssues(ALL_ISSUE_STATUSES);
-    if (!relisted.ok) {
-      ctx.ui.notify(
-        `Project rename could not be verified for ${next}`,
-        "warning",
-      );
-      return;
-    }
-
-    const relistedById = new Map(
-      relisted.value.map((issue) => [issue.id, issue] as const),
-    );
-    const verified = selected.project.issueIds.every((issueId) => {
-      const expectedLabels = expectedLabelsByIssueId.get(issueId);
-      const issue = relistedById.get(issueId);
-      if (!expectedLabels || !issue) return false;
-      return sameLabelSet(normalizeLabelSet(issue.labels), expectedLabels);
-    });
-    if (!verified) {
-      ctx.ui.notify(
-        `Project rename could not be verified for ${next}`,
-        "warning",
-      );
-      return;
-    }
-
-    const current = resolveSessionProject(ctx.sessionManager);
     if (
-      current.workstream !== undefined &&
-      current.workstream.toLowerCase() === selected.key
-    ) {
-      persistSessionProject(projectWriter, next);
-      pi.setSessionName(generateSessionProjectName(ctx.sessionManager, next));
-    }
-
-    const latestRegistry = await client.getProjectRenameRegistry();
-    if (latestRegistry.ok) {
-      const recorded = recordProjectRename(
-        latestRegistry.value,
-        selected.project.name,
-        next,
+      !(await ctx.ui.confirm(
+        "Rename project",
+        `${project.name} → ${plan.next} across ${plan.project.issues.length} tasks`,
+      ))
+    )
+      return;
+    const result = await projectsManager.rename(plan);
+    const current = resolveSessionProject(ctx.sessionManager);
+    if (current.workstream?.toLowerCase() === project.name.toLowerCase()) {
+      persistSessionProject(projectWriter, plan.next);
+      pi.setSessionName(
+        generateSessionProjectName(ctx.sessionManager, plan.next),
       );
-      const saved = await client.setProjectRenameRegistry(recorded);
-      if (saved.ok) {
-        const verifiedRegistry = await client.getProjectRenameRegistry();
-        if (
-          verifiedRegistry.ok &&
-          resolveProjectRename(
-            verifiedRegistry.value,
-            selected.project.name,
-          ) === next
-        ) {
-          ctx.ui.notify(
-            `Renamed project ${selected.project.name} → ${next} across ${selected.project.issueIds.length} tasks`,
-            "info",
-          );
-          return;
-        }
-      }
     }
-
     ctx.ui.notify(
-      `Renamed project ${selected.project.name} → ${next}, but other sessions cannot migrate automatically`,
-      "warning",
+      result.warning
+        ? `Renamed project ${project.name} → ${plan.next}, but ${result.warning}`
+        : `Renamed project ${project.name} → ${plan.next} across ${plan.project.issues.length} tasks`,
+      result.warning ? "warning" : "info",
+    );
+  }
+
+  async function manageProjects(
+    ctx: ExtensionContext,
+    archived: boolean,
+  ): Promise<void> {
+    const projects = await projectsManager.list();
+    const registry = await projectsManager.archives();
+    const candidates = projects.filter((project) =>
+      archived
+        ? registry.archived.includes(project.name.toLowerCase())
+        : !isProjectHidden(project, registry),
+    );
+    const project = await chooseProject(
+      ctx,
+      archived ? "Archived projects" : "Manage projects",
+      candidates,
+    );
+    if (!project) return;
+    const action = await ctx.ui.select(
+      project.name,
+      archived ? ["Restore"] : ["Rename", "Archive"],
+    );
+    if (action === "Rename") return renameProject(ctx, project);
+    if (action !== "Archive" && action !== "Restore") return;
+    if (
+      action === "Archive" &&
+      !(await ctx.ui.confirm(
+        "Archive project",
+        `Hide ${project.name} from the project picker? Tasks and history will be preserved.`,
+      ))
+    )
+      return;
+    await projectsManager.setArchived(project.name, action === "Archive");
+    ctx.ui.notify(
+      `${action === "Archive" ? "Archived" : "Restored"} project ${project.name}`,
+      "info",
     );
   }
 
@@ -487,6 +372,12 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       return;
     }
 
+    const archives = await projectsManager.archives();
+    const hidden = new Set(
+      collectProjects(issues)
+        .filter((project) => isProjectHidden(project, archives))
+        .map((project) => project.name.toLowerCase()),
+    );
     const projects = new Map<
       string,
       {
@@ -499,6 +390,7 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       if (!name) continue;
 
       const key = name.toLowerCase();
+      if (hidden.has(key)) continue;
       let project = projects.get(key);
       if (!project) {
         project = {
@@ -533,8 +425,11 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       namesByLabel.set(label, project.name);
     }
 
+    labels.push("Manage projects…", "Archived projects…");
     const selected = await selectProject(ctx, "Switch project", labels);
     if (selected === undefined) return;
+    if (selected === "Manage projects…") return manageProjects(ctx, false);
+    if (selected === "Archived projects…") return manageProjects(ctx, true);
 
     const current = resolveSessionProject(ctx.sessionManager);
     if (selected === global) {
@@ -565,11 +460,18 @@ export default function tasksOverlay(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("project", {
-    description: "Switch project task scope or rename a project",
-    handler: async (args, ctx) =>
-      args.trim().toLowerCase() === "rename"
-        ? renameProject(ctx)
-        : switchProject(ctx),
+    description: "Switch projects or manage project names and archival",
+    handler: async (args, ctx) => {
+      try {
+        if (args.trim().toLowerCase() === "rename") await renameProject(ctx);
+        else await switchProject(ctx);
+      } catch (error) {
+        ctx.ui.notify(
+          error instanceof Error ? error.message : "Project operation failed",
+          "warning",
+        );
+      }
+    },
   });
 
   pi.registerShortcut(Key.ctrlAlt("t"), {

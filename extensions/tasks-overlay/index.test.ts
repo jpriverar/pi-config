@@ -60,6 +60,11 @@ function createHarness(
     updateMutates?: boolean;
     updateExitCode?: number;
     afterUpdate?: (issue: BeadsIssue) => void;
+    archivesValue?: string;
+    archivesGetResults?: BeadsExecResult[];
+    archivesSetResult?: BeadsExecResult;
+    archivesSetMutates?: boolean;
+    beforeList?: (issues: BeadsIssue[]) => void;
     registryValue?: string;
     registryGetResults?: BeadsExecResult[];
     registrySetResult?: BeadsExecResult;
@@ -95,6 +100,8 @@ function createHarness(
   const readyIds = new Set(options.readyIds ?? []);
   const registryGetResults = [...(options.registryGetResults ?? [])];
   let registryValue = options.registryValue ?? "";
+  let archivesValue = options.archivesValue ?? "";
+  const archivesGetResults = [...(options.archivesGetResults ?? [])];
 
   const pi = {
     async exec(_command: string, args: string[]) {
@@ -137,6 +144,21 @@ function createHarness(
           ),
           stderr: "",
         };
+      }
+      if (args[0] === "config" && args[2] === "custom.pi-project-archives") {
+        if (args[1] === "get") {
+          return archivesGetResults.shift() ?? registryResult(archivesValue);
+        }
+        assert.equal(args[1], "set");
+        const result = options.archivesSetResult ?? {
+          code: 0,
+          stdout: "",
+          stderr: "",
+        };
+        if (result.code === 0 && options.archivesSetMutates !== false) {
+          archivesValue = args[3];
+        }
+        return result;
       }
       if (args[0] === "config" && args[1] === "get") {
         const queued = registryGetResults.shift();
@@ -222,6 +244,7 @@ function createHarness(
       if (options.unavailable === query) {
         return { code: 1, stdout: "", stderr: "private failure" };
       }
+      if (args[0] === "list") options.beforeList?.(issues);
       const statusIndex = args.indexOf("-s");
       const activeStatuses = new Set(
         statusIndex === -1 ? [] : args[statusIndex + 1].split(","),
@@ -327,6 +350,7 @@ function createHarness(
 
   tasksOverlay(pi as any);
   return {
+    archives: () => archivesValue,
     appendedEntries,
     calls,
     commands,
@@ -438,7 +462,7 @@ test("project picker groups primary workstreams and shows readiness counts", asy
     /Alpha.*Active: 1.*Actionable: 1.*Waiting: 2/,
   );
   assert.match(harness.selections[0].items[2], /Beta.*Active: 1/);
-  assert.equal(harness.selections[0].items.length, 3);
+  assert.equal(harness.selections[0].items.length, 5);
   assert.deepEqual(harness.renamedSessions, ["Alpha-580c8e67"]);
 });
 
@@ -458,7 +482,14 @@ test("project picker sorts workstreams case-insensitively by canonical name", as
 
   assert.deepEqual(
     harness.selections[0].items.map((item) => item.split(" —")[0]),
-    [GLOBAL_PROJECT, "aLPHa", "Beta", "Zulu"],
+    [
+      GLOBAL_PROJECT,
+      "aLPHa",
+      "Beta",
+      "Zulu",
+      "Manage projects…",
+      "Archived projects…",
+    ],
   );
   assert.deepEqual(harness.renamedSessions, ["aLPHa-580c8e67"]);
 });
@@ -510,7 +541,7 @@ test("cancelling project selection does not mutate project scope", async () => {
   assert.deepEqual(harness.renamedSessions, []);
 });
 
-test("project picker offers only Global when no issue has a workstream", async () => {
+test("project picker offers Global and management menus when no issue has a workstream", async () => {
   const harness = createHarness({
     sessionName: null,
     issues: [issue("unscoped", "open", [])],
@@ -518,7 +549,11 @@ test("project picker offers only Global when no issue has a workstream", async (
 
   await switchProject(harness);
 
-  assert.deepEqual(harness.selections[0].items, [GLOBAL_PROJECT]);
+  assert.deepEqual(harness.selections[0].items, [
+    GLOBAL_PROJECT,
+    "Manage projects…",
+    "Archived projects…",
+  ]);
   assert.deepEqual(harness.renamedSessions, []);
 });
 
@@ -537,6 +572,8 @@ test("project picker keeps closed-only projects available for new work", async (
     GLOBAL_PROJECT,
     "Active Project — Active: 0 • Actionable: 0 • Waiting: 1",
     "Closed Project — No open tasks",
+    "Manage projects…",
+    "Archived projects…",
   ]);
 });
 
@@ -660,6 +697,8 @@ test("project rename updates matching workstreams across statuses, verifies the 
     [
       "open,in_progress,blocked,deferred,closed",
       "config:get",
+      "open,in_progress,blocked,deferred,closed",
+      "config:get",
       "update",
       "open,in_progress,blocked,deferred,closed",
       "config:get",
@@ -667,31 +706,37 @@ test("project rename updates matching workstreams across statuses, verifies the 
       "config:get",
     ],
   );
-  assert.deepEqual(harness.calls[2], [
-    "update",
-    "open",
-    "deferred",
-    "closed",
-    "--remove-label",
-    "workstream:Alpha",
-    "--remove-label",
-    "workstream:ALPHA",
-    "--remove-label",
-    "workstream:alpha",
-    "--add-label",
-    "workstream:Renamed",
-    "--db",
-    "/tmp/personal/.beads",
-  ]);
-  assert.deepEqual(harness.calls[5], [
-    "config",
-    "set",
-    "custom.pi-project-renames",
-    '{"version":1,"aliases":{"alpha":"Renamed"}}',
-    "--json",
-    "--db",
-    "/tmp/personal/.beads",
-  ]);
+  assert.deepEqual(
+    harness.calls.find((args) => args[0] === "update"),
+    [
+      "update",
+      "open",
+      "deferred",
+      "closed",
+      "--remove-label",
+      "workstream:Alpha",
+      "--remove-label",
+      "workstream:ALPHA",
+      "--remove-label",
+      "workstream:alpha",
+      "--add-label",
+      "workstream:Renamed",
+      "--db",
+      "/tmp/personal/.beads",
+    ],
+  );
+  assert.deepEqual(
+    harness.calls.find((args) => args[0] === "config" && args[1] === "set"),
+    [
+      "config",
+      "set",
+      "custom.pi-project-renames",
+      '{"version":1,"aliases":{"alpha":"Renamed"}}',
+      "--json",
+      "--db",
+      "/tmp/personal/.beads",
+    ],
+  );
   assert.deepEqual(
     harness.issues.map((task) => ({ id: task.id, labels: task.labels })),
     [
@@ -893,19 +938,22 @@ test("project rename permits case-only canonicalization", async () => {
 
   await renameProject(harness);
 
-  assert.deepEqual(harness.calls[2], [
-    "update",
-    "open",
-    "closed",
-    "--remove-label",
-    "workstream:alpha",
-    "--remove-label",
-    "workstream:ALPHA",
-    "--add-label",
-    "workstream:ALPHA",
-    "--db",
-    "/tmp/personal/.beads",
-  ]);
+  assert.deepEqual(
+    harness.calls.find((args) => args[0] === "update"),
+    [
+      "update",
+      "open",
+      "closed",
+      "--remove-label",
+      "workstream:alpha",
+      "--remove-label",
+      "workstream:ALPHA",
+      "--add-label",
+      "workstream:ALPHA",
+      "--db",
+      "/tmp/personal/.beads",
+    ],
+  );
   assert.deepEqual(harness.appendedEntries, [projectEntry("ALPHA")]);
   assert.deepEqual(harness.renamedSessions, ["ALPHA-580c8e67"]);
 });
@@ -929,7 +977,7 @@ test("project rename succeeds when verification matches after a non-zero update 
 
   await renameProject(harness);
 
-  assert.equal(harness.calls.length, 7);
+  assert.equal(harness.calls.length, 9);
   assert.equal(
     harness.calls.some((args) => args[0] === "config" && args[1] === "set"),
     true,
@@ -956,7 +1004,7 @@ test("project rename reports a verification failure when re-listing still shows 
 
   await renameProject(harness);
 
-  assert.equal(harness.calls.length, 4);
+  assert.equal(harness.calls.length, 6);
   assert.equal(
     harness.calls.some((args) => args[0] === "config" && args[1] === "set"),
     false,
@@ -992,7 +1040,7 @@ test("project rename reports a verification failure when update drops an unrelat
 
   await renameProject(harness);
 
-  assert.equal(harness.calls.length, 4);
+  assert.equal(harness.calls.length, 6);
   assert.equal(
     harness.calls.some((args) => args[0] === "config" && args[1] === "set"),
     false,
@@ -1508,4 +1556,292 @@ test("renders managed dependency waits once in the state and blocker columns", a
   assert.match(harness.render(), /jp-600/);
   assert.doesNotMatch(harness.render(), /ACTIONABLE/);
   assert.equal((harness.render().match(/jp-654/g) ?? []).length, 1);
+});
+
+function projectFlow(...choices: string[]) {
+  return (items: string[]) => {
+    const choice = choices.shift();
+    if (choice === undefined) return undefined;
+    const selected = items.find(
+      (item) => item === choice || item.startsWith(`${choice} —`),
+    );
+    assert.ok(selected, `Missing ${choice} in ${items.join("; ")}`);
+    return selected;
+  };
+}
+
+test("picker management reuses rename without switching project scope", async () => {
+  const harness = createHarness({
+    entries: [projectEntry("Other")],
+    issues: [issue("one", "closed", ["workstream:Alpha", "topic:keep"])],
+    select: projectFlow("Manage projects…", "Alpha", "Rename"),
+    input: () => "Beta",
+    confirm: () => true,
+  });
+  await switchProject(harness);
+  assert.deepEqual(harness.issues[0].labels, ["topic:keep", "workstream:Beta"]);
+  assert.deepEqual(harness.appendedEntries, []);
+  assert.deepEqual(harness.renamedSessions, []);
+  assert.match(
+    harness.notifications.at(-1)!.message,
+    /Renamed project Alpha → Beta/,
+  );
+});
+
+test("picker archives a closed project across sessions without changing tasks or session scope", async () => {
+  const tasks = [issue("one", "closed", ["workstream:Alpha", "topic:keep"])];
+  const harness = createHarness({
+    entries: [projectEntry("Alpha")],
+    issues: tasks,
+    select: projectFlow("Manage projects…", "Alpha", "Archive"),
+    confirm: () => true,
+  });
+  await switchProject(harness);
+  assert.deepEqual(harness.issues, tasks);
+  assert.deepEqual(harness.appendedEntries, []);
+  assert.deepEqual(harness.renamedSessions, []);
+  assert.equal(harness.confirmations.length, 1);
+  const resumed = createHarness({
+    issues: tasks,
+    archivesValue: harness.archives(),
+  });
+  await switchProject(resumed);
+  assert.ok(
+    !resumed.selections[0].items.some((item) => item.startsWith("Alpha —")),
+  );
+  assert.ok(resumed.selections[0].items.includes("Archived projects…"));
+});
+
+test("picker restores archived projects without switching scope", async () => {
+  const harness = createHarness({
+    issues: [issue("one", "closed", ["workstream:Alpha"])],
+    archivesValue: '{"version":1,"archived":["alpha"]}',
+    select: projectFlow("Archived projects…", "Alpha", "Restore"),
+  });
+  await switchProject(harness);
+  assert.deepEqual(JSON.parse(harness.archives()).archived, []);
+  assert.deepEqual(harness.appendedEntries, []);
+  const resumed = createHarness({
+    issues: harness.issues,
+    archivesValue: harness.archives(),
+  });
+  await switchProject(resumed);
+  assert.ok(
+    resumed.selections[0].items.some((item) => item.startsWith("Alpha —")),
+  );
+});
+
+for (const status of ["open", "in_progress", "blocked", "deferred"] as const) {
+  test(`archival refuses ${status} tasks including secondary workstreams`, async () => {
+    const harness = createHarness({
+      issues: [
+        issue("done", "closed", ["workstream:Alpha"]),
+        issue("unfinished", status, ["workstream:Beta", "workstream:ALPHA"]),
+      ],
+      select: projectFlow("Manage projects…", "Alpha", "Archive"),
+      confirm: () => true,
+    });
+    await switchProject(harness);
+    assert.equal(harness.archives(), "");
+    assert.match(harness.notifications.at(-1)!.message, /unfinished/);
+    assert.ok(harness.notifications.at(-1)!.message.includes("Alpha"));
+  });
+
+  test(`archived projects with ${status} work remain visible`, async () => {
+    const harness = createHarness({
+      issues: [issue("one", status, ["workstream:Alpha"])],
+      archivesValue: '{"version":1,"archived":["alpha"]}',
+    });
+    await switchProject(harness);
+    assert.ok(
+      harness.selections[0].items.some((item) => item.startsWith("Alpha —")),
+    );
+  });
+}
+
+test("archival rechecks tasks after confirmation", async () => {
+  let confirmed = false;
+  const harness = createHarness({
+    issues: [issue("one", "closed", ["workstream:Alpha"])],
+    select: projectFlow("Manage projects…", "Alpha", "Archive"),
+    confirm: () => {
+      confirmed = true;
+      return true;
+    },
+    beforeList: (issues) => {
+      if (confirmed) issues[0].status = "open";
+    },
+  });
+  await switchProject(harness);
+  assert.equal(harness.archives(), "");
+  assert.match(harness.notifications.at(-1)!.message, /unfinished/);
+});
+
+test("cancelled archive does not persist anything", async () => {
+  const harness = createHarness({
+    issues: [issue("one", "closed", ["workstream:Alpha"])],
+    select: projectFlow("Manage projects…", "Alpha", "Archive"),
+    confirm: () => false,
+  });
+  await switchProject(harness);
+  assert.equal(harness.archives(), "");
+  assert.ok(
+    !harness.calls.some((args) => args[0] === "update" || args[1] === "set"),
+  );
+});
+
+for (const archivesValue of [
+  "{",
+  '{"version":2,"archived":[]}',
+  '{"version":1,"archived":[42]}',
+]) {
+  test(`invalid archive metadata fails visibly: ${archivesValue}`, async () => {
+    const harness = createHarness({ issues: [issue("one")], archivesValue });
+    await switchProject(harness);
+    assert.match(
+      harness.notifications.at(-1)?.message ?? "",
+      /archiv.*unavailable/i,
+    );
+    assert.ok(!harness.calls.some((args) => args[1] === "set"));
+  });
+}
+
+for (const failure of ["write", "verification"] as const) {
+  test(`archive ${failure} failures do not report success`, async () => {
+    const harness = createHarness({
+      issues: [issue("one", "closed", ["workstream:Alpha"])],
+      select: projectFlow("Manage projects…", "Alpha", "Archive"),
+      confirm: () => true,
+      ...(failure === "write"
+        ? {
+            archivesSetResult: {
+              code: 1,
+              stdout: "",
+              stderr: "private failure",
+            },
+          }
+        : { archivesSetMutates: false }),
+    });
+    await switchProject(harness);
+    assert.equal(harness.notifications.at(-1)?.type, "warning");
+    assert.match(harness.notifications.at(-1)?.message ?? "", /Alpha/);
+    assert.doesNotMatch(
+      harness.notifications.at(-1)?.message ?? "",
+      /private failure/,
+    );
+  });
+}
+
+test("renaming an archived project migrates its archival state", async () => {
+  const harness = createHarness({
+    issues: [issue("one", "closed", ["workstream:Alpha"])],
+    archivesValue: '{"version":1,"archived":["alpha","other"]}',
+    select: selectProject("Alpha"),
+    input: () => "Beta",
+    confirm: () => true,
+  });
+  await renameProject(harness);
+  assert.deepEqual(JSON.parse(harness.archives()).archived, ["beta", "other"]);
+  assert.deepEqual(harness.issues[0].labels, ["workstream:Beta"]);
+  const resumed = createHarness({
+    issues: harness.issues,
+    archivesValue: harness.archives(),
+  });
+  await switchProject(resumed);
+  assert.ok(
+    !resumed.selections[0].items.some((item) => item.startsWith("Beta —")),
+  );
+});
+
+test("case-only renames keep projects archived", async () => {
+  const harness = createHarness({
+    issues: [issue("one", "closed", ["workstream:Alpha"])],
+    archivesValue: '{"version":1,"archived":["alpha"]}',
+    select: selectProject("Alpha"),
+    input: () => "ALPHA",
+    confirm: () => true,
+  });
+  await renameProject(harness);
+  assert.deepEqual(JSON.parse(harness.archives()).archived, ["alpha"]);
+  assert.deepEqual(harness.issues[0].labels, ["workstream:ALPHA"]);
+  assert.equal(harness.notifications.at(-1)?.type, "info");
+});
+
+test("rename reports a partial success if archival migration cannot be saved", async () => {
+  const harness = createHarness({
+    entries: [projectEntry("Alpha")],
+    issues: [issue("one", "closed", ["workstream:Alpha"])],
+    archivesValue: '{"version":1,"archived":["alpha"]}',
+    archivesSetMutates: false,
+    select: selectProject("Alpha"),
+    input: () => "Beta",
+    confirm: () => true,
+  });
+  await renameProject(harness);
+  assert.deepEqual(harness.issues[0].labels, ["workstream:Beta"]);
+  assert.deepEqual(harness.appendedEntries, [projectEntry("Beta")]);
+  assert.equal(harness.notifications.at(-1)?.type, "warning");
+  assert.match(
+    harness.notifications.at(-1)!.message,
+    /archival state could not be migrated/,
+  );
+});
+
+test("rename refuses membership changes after confirmation", async () => {
+  let confirmed = false;
+  const harness = createHarness({
+    issues: [issue("one", "closed", ["workstream:Alpha"])],
+    select: selectProject("Alpha"),
+    input: () => "Beta",
+    confirm: () => {
+      confirmed = true;
+      return true;
+    },
+    beforeList: (issues) => {
+      if (confirmed && issues.length === 1)
+        issues.push(issue("two", "open", ["workstream:Alpha"]));
+    },
+  });
+  await renameProject(harness);
+  assert.ok(!harness.calls.some((args) => args[0] === "update"));
+  assert.match(harness.notifications.at(-1)!.message, /Project Alpha changed/);
+});
+
+test("picker management cancellation never changes Global scope or tasks", async () => {
+  const harness = createHarness({
+    entries: [projectEntry(null)],
+    issues: [issue("one", "closed", ["workstream:Alpha"])],
+    select: projectFlow("Manage projects…"),
+  });
+  await switchProject(harness);
+  assert.ok(!harness.selections[1].items.includes(GLOBAL_PROJECT));
+  assert.ok(
+    !harness.calls.some((args) => args[0] === "update" || args[1] === "set"),
+  );
+  assert.deepEqual(harness.appendedEntries, []);
+});
+
+test("RPC project management uses native dialogs even for long project lists", async () => {
+  const harness = createHarness({
+    issues: Array.from({ length: 12 }, (_, i) =>
+      issue(`task-${i}`, "closed", [`workstream:Project ${i}`]),
+    ),
+    select: projectFlow("Manage projects…", "Project 11", "Archive"),
+    confirm: () => true,
+  });
+  harness.context.mode = "rpc";
+  await switchProject(harness);
+  assert.deepEqual(JSON.parse(harness.archives()).archived, ["project 11"]);
+  assert.deepEqual(harness.renders, []);
+});
+
+test("archive read failure warns and never changes project state", async () => {
+  const harness = createHarness({
+    issues: [issue("one", "closed", ["workstream:Alpha"])],
+    archivesGetResults: [{ code: 1, stdout: "private", stderr: "private" }],
+  });
+  await switchProject(harness);
+  assert.match(harness.notifications.at(-1)!.message, /archives unavailable/);
+  assert.deepEqual(harness.appendedEntries, []);
+  assert.equal(harness.archives(), "");
 });

@@ -72,6 +72,30 @@ See [Task lifecycle](docs/task-lifecycle.md) for tool schemas, Beads mappings,
 artifact and worktree identity, reconciliation behavior, verification, and the
 read-only migration report.
 
+## Project picker
+
+Use `/project` to switch the session's task scope. Projects are derived from
+`workstream:` labels on tasks, including closed tasks; there is no separate
+project creation command. Selecting a project does not claim a task.
+
+- **Manage projects…** → choose a project → **Rename** or **Archive**.
+- **Archived projects…** → choose a project → **Restore**.
+- `/project rename` remains available and uses the same rename operation.
+
+Archival requires every associated task to be closed, including tasks where
+that project is a secondary workstream. Deferred tasks are unfinished and block
+archival. Archiving only hides the project from the default picker: tasks,
+history, ownership, and existing session scopes are preserved. If new or reopened
+unfinished work appears, the project is visible while that work remains; Restore
+removes the archive marker permanently until the next explicit archival.
+
+Archive markers live in the configured Beads store under
+`custom.pi-project-archives`, shared by sessions using that store. Renaming
+migrates the marker as well as task labels and the existing session aliases.
+Project mutations share the local task-store lock; direct external `bd` writes
+are not coordinated by that lock. Failed or unverifiable writes are reported
+rather than silently retried.
+
 ## Optional task reconciliation daemon
 
 See the [operations guide](docs/task-reconciler-operations.md) for the complete
