@@ -132,3 +132,21 @@ test("aborted checks do not start auth or PR commands", async (t) => {
   assert.equal(result.outcome, "error");
   await assert.rejects(access(f.callsPath));
 });
+
+test("preserves original validation errors with the actual check kind", async (t) => {
+  const f = await setup(t);
+  const adapters = createDaemonCheckAdapters(f.config);
+  for (const [kind, key] of [
+    ["manual", "reviewAt"],
+    ["time", "at"],
+  ] as const) {
+    const { check, artifacts } = input();
+    check.kind = kind;
+    check.predicate = { [key]: "not-a-date" };
+    assert.deepEqual(await adapters.observe(check, artifacts), {
+      outcome: "error",
+      observation: `${kind} check check: ${key} predicate must be an RFC3339 timestamp`,
+    });
+  }
+  await assert.rejects(access(f.callsPath));
+});

@@ -246,7 +246,9 @@ test("conflicting explicit outcomes fail rather than coalescing", async (t) => {
   const h = await harness(t, [waitingTask("manual", "manual")]);
   try {
     h.sut.start();
-    await until(() => h.store.writes === 1);
+    await until(() => h.sut.snapshot().lastScanSuccessAt !== null);
+    assert.equal(h.store.writes, 0);
+    assert.equal(h.observed.size, 0);
     const fingerprint = fingerprintCheck(h.store.issues.get("manual")!)!;
     const first = h.sut.reconcile({
       requestId: "one",
@@ -375,7 +377,7 @@ test("shutdown cancels remote work without applying invented outcomes", async (t
 });
 
 test("idle ownership is preserved while its retained check is in the future", async (t) => {
-  const issue = waitingTask("expired", "manual");
+  const issue = waitingTask("expired", "time");
   issue.status = "in_progress";
   issue.lifecycle!.phase = "active";
   issue.lifecycle!.execution = {
@@ -499,7 +501,7 @@ test("a stale manual request is a check_changed rejection, not an operational fa
   const h = await harness(t, [waitingTask("manual", "manual")]);
   try {
     h.sut.start();
-    await until(() => h.store.writes === 1);
+    await until(() => h.sut.snapshot().lastScanSuccessAt !== null);
     await assert.rejects(
       h.sut.reconcile({
         requestId: "stale",
@@ -511,7 +513,8 @@ test("a stale manual request is a check_changed rejection, not an operational fa
         error instanceof Error &&
         (error as Error & { code?: string }).code === "check_changed",
     );
-    assert.equal(h.store.writes, 1);
+    assert.equal(h.store.writes, 0);
+    assert.equal(h.observed.size, 0);
     assert.ok(
       !h.sut
         .snapshot()

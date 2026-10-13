@@ -685,3 +685,73 @@ test("reopening deferred work still refuses unreleased worktrees", () => {
     /requires release of unreleased worktree/,
   );
 });
+
+test("new manual waits retain optional reminders but omit polling", () => {
+  const active = claimLifecycle(baseLifecycle(), {
+    operationId: "claim",
+    sessionId: "s1",
+    now: NOW,
+    expiresAt: LATER,
+    resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+  });
+  const wait = (value: LifecycleCheck) =>
+    waitLifecycle(active, {
+      operationId: "wait",
+      kind: "check",
+      now: NOW,
+      check: value,
+    });
+  for (const predicate of [
+    { description: "Await approved evidence" },
+    { reviewAt: LATER },
+  ]) {
+    const waiting = wait(check({ predicate }));
+    assert.equal(waiting.activeCheck!.nextCheckAt, null);
+    assert.deepEqual(waiting.activeCheck!.predicate, predicate);
+    assert.equal(waiting.phase, "waiting");
+  }
+  assert.equal(
+    wait(check({ kind: "time", predicate: { at: LATER } })).activeCheck!
+      .nextCheckAt,
+    LATER,
+  );
+});
+
+test("legacy invalid reminders remain readable for inspection and repair", () => {
+  const state = baseLifecycle({
+    phase: "waiting",
+    waiting: { kind: "check" },
+    activeCheck: check({ predicate: { reviewAt: "not-a-date" } }),
+  });
+  assert.deepEqual(decodeLifecycle(state), { ok: true, value: state });
+});
+
+for (const [kind, key, value] of [
+  ["manual", "reviewAt", "not-a-date"],
+  ["manual", "reviewAt", null],
+  ["time", "at", undefined],
+  ["time", "at", "not-a-date"],
+] as const) {
+  test(`new ${kind} waits reject invalid ${key} ${value}`, () => {
+    const active = claimLifecycle(baseLifecycle(), {
+      operationId: "claim",
+      sessionId: "s1",
+      now: NOW,
+      expiresAt: LATER,
+      resourceSnapshot: { observedAt: NOW, resourceIds: [] },
+    });
+    assert.throws(
+      () =>
+        waitLifecycle(active, {
+          operationId: "wait",
+          kind: "check",
+          now: NOW,
+          check: check({
+            kind,
+            predicate: value === undefined ? {} : { [key]: value },
+          }),
+        }),
+      new RegExp(`${key}.*timestamp`),
+    );
+  });
+}

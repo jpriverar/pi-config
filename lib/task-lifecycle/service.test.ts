@@ -558,7 +558,10 @@ test("waits on exactly one typed external check", async () => {
   );
 
   assert.equal(saved.status, "blocked");
-  assert.deepEqual(saved.lifecycle?.activeCheck, check);
+  assert.deepEqual(saved.lifecycle?.activeCheck, {
+    ...check,
+    nextCheckAt: null,
+  });
   assert.deepEqual(saved.lifecycle?.waiting, { kind: "check" });
 });
 
@@ -2324,7 +2327,11 @@ test("satisfied retained checks do not close active work", async () => {
   active.lifecycle = {
     ...active.lifecycle!,
     waiting: { kind: "check" },
-    activeCheck: lifecycleCheck({ onSatisfied: "close" }),
+    activeCheck: lifecycleCheck({
+      kind: "github_pull_request",
+      predicate: { mode: "all" },
+      onSatisfied: "close",
+    }),
   };
   active.metadata = { piLifecycle: active.lifecycle };
   const store = new FakeStore(active);
@@ -2344,9 +2351,9 @@ test("pending polls update check observation without changing phase timestamps",
   const pending = adapter("pending", "0/1 merged");
   const activeCheck: LifecycleCheck = {
     id: "check-1",
-    kind: "manual",
+    kind: "github_pull_request",
     targetArtifactIds: [],
-    predicate: { reviewAt: NOW },
+    predicate: { mode: "all" },
     onSatisfied: "actionable",
     wakeOn: [],
     state: "pending",
@@ -2996,5 +3003,147 @@ for (const retainedWorktree of [false, true]) {
     assert.equal(saved.lifecycle!.activeCheck, null);
     assert.equal(saved.lifecycle!.execution, null);
     assert.deepEqual(store.blockers, [["jp-1", "jp-blocker"]]);
+  });
+}
+
+test("ordinary reconciliation never observes a manual wait or approves it", async () => {
+  for (const predicate of [
+    { description: "Await approved evidence" },
+    { reviewAt: NOW },
+    { reviewAt: "2999-01-01T00:00:00Z" },
+  ]) {
+    const { store } = observationFixture("manual");
+    store.saved.lifecycle!.activeCheck!.predicate = predicate;
+    const before = structuredClone(store.saved);
+    let observations = 0;
+    const sut = service(store, {
+      checkAdapters: {
+        observe: async () => {
+          observations += 1;
+          return { outcome: "satisfied", observation: "must not run" };
+        },
+      },
+    });
+    await sut.reconcileTask("jp-1", session("reconciler"));
+    assert.equal(observations, 0);
+    assert.equal(store.writes, 0);
+    assert.deepEqual(store.saved, before);
+  }
+});
+
+test("manual waits do not prevent pending worktree release reconciliation", async () => {
+  const { store, pool, sut } = await activeServiceWithPool();
+  const acquired = await sut.acquireWorktree(
+    {
+      taskId: "jp-1",
+      repository: "DataDog/dd-source",
+      branch: "jpriverar/topic",
+    },
+    session("s1"),
+    "acquire-1",
+  );
+  const claimId = acquired.lifecycle!.resources[0].claimId;
+  await sut.prepareWorktreeRelease(
+    "jp-1",
+    claimId,
+    session("s1"),
+    "release-pending",
+  );
+  pool.entries.delete(claimId);
+  store.saved.lifecycle!.waiting = { kind: "check" };
+  store.saved.lifecycle!.activeCheck = lifecycleCheck({
+    predicate: { description: "Await approved evidence" },
+  });
+  const saved = await sut.reconcileTask("jp-1", session("reconciler"));
+  assert.equal(saved.lifecycle!.resources[0].cleanupState, "released");
+  assert.equal(saved.lifecycle!.activeCheck!.lastCheckedAt, null);
+  assert.equal(saved.lifecycle!.activeCheck!.state, "pending");
+  assert.equal(saved.lifecycle!.phase, "active");
+});
+
+test("explicit manual outcomes work without a reminder despite stale future polling metadata", async () => {
+  for (const manualOutcome of ["satisfied", "action_required"] as const) {
+    const { store, sut } = observationFixture("manual");
+    store.saved.lifecycle!.activeCheck!.predicate = {
+      description: "Await approved evidence",
+    };
+    store.saved.lifecycle!.activeCheck!.nextCheckAt = "2999-01-01T00:00:00Z";
+    const prepared = await sut.prepareReconciliation(
+      {
+        requestId: "manual-input",
+        taskId: "jp-1",
+        manualOutcome,
+        expectedCheckFingerprint: fingerprintCheck(store.saved)!,
+      },
+      session("reconciler"),
+    );
+    assert.equal(prepared.kind, "observe");
+    if (prepared.kind !== "observe") continue;
+    const result = await sut.applyReconciliation(
+      prepared.prepared,
+      {
+        outcome: manualOutcome,
+        observation: `manual input: ${manualOutcome}`,
+      },
+      session("reconciler"),
+    );
+    assert.equal(result.issue.lifecycle!.phase, "actionable");
+    assert.equal(
+      result.issue.lifecycle!.checkHistory.at(-1)!.state,
+      manualOutcome,
+    );
+  }
+});
+
+for (const outcome of [
+  "pending",
+  "error",
+  "satisfied",
+  "action_required",
+] as const) {
+  test(`outstanding manual ${outcome} observation cannot poll or resolve without explicit input`, async () => {
+    const { store, sut } = observationFixture("manual");
+    const check = store.saved.lifecycle!.activeCheck!;
+    check.predicate = { description: "Await approved evidence" };
+    check.state = "error";
+    check.errorCount = 23;
+    const before = structuredClone(store.saved.lifecycle!);
+    const prepared = {
+      taskId: "jp-1",
+      operationId: "outstanding-manual-observation",
+      fingerprint: fingerprintCheck(store.saved)!,
+      check: structuredClone(check),
+      artifacts: structuredClone(before.artifacts),
+    };
+    const apply = () =>
+      sut.applyReconciliation(
+        prepared,
+        {
+          outcome,
+          observation: "manual input required",
+        },
+        session("reconciler"),
+      );
+    if (outcome === "satisfied" || outcome === "action_required") {
+      await assert.rejects(apply, /explicit manual outcome/);
+      assert.equal(store.writes, 0);
+    } else {
+      await apply();
+      const after = store.saved.lifecycle!;
+      assert.equal(after.phase, "waiting");
+      assert.equal(after.activeCheck!.nextCheckAt, null);
+      assert.equal(
+        after.activeCheck!.errorCount,
+        outcome === "pending" ? 0 : 24,
+      );
+      assert.equal(after.stateEnteredAt, before.stateEnteredAt);
+      assert.equal(after.lastProgressAt, before.lastProgressAt);
+      assert.deepEqual(
+        after.activeCheck!.predicate,
+        before.activeCheck!.predicate,
+      );
+      assert.deepEqual(after.artifacts, before.artifacts);
+      assert.deepEqual(after.checkHistory, before.checkHistory);
+    }
   });
 }

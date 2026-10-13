@@ -469,6 +469,7 @@ export function waitLifecycle(
   assertText(input.operationId, "wait operationId");
   assertTimestamp(input.now, "wait timestamp");
   assertEnum(input.kind, WAITING_KINDS, "waiting kind");
+  let activeCheck: LifecycleCheck | null = null;
   if (input.kind === "dependency") {
     requireInvariant(
       input.check === undefined,
@@ -479,14 +480,26 @@ export function waitLifecycle(
       input.check !== undefined,
       "check wait requires one active check",
     );
-    validateCheck(input.check!, "active check");
+    const check = input.check!;
+    validateCheck(check, "active check");
+    if (check.kind === "time") {
+      assertTimestamp(check.predicate.at, "time check predicate.at");
+    }
+    if (check.kind === "manual" && check.predicate.reviewAt !== undefined) {
+      assertTimestamp(
+        check.predicate.reviewAt,
+        "manual check predicate.reviewAt",
+      );
+    }
+    activeCheck =
+      check.kind === "manual" ? { ...check, nextCheckAt: null } : check;
   }
   return transition(
     {
       ...state,
       execution: null,
       waiting: { kind: input.kind },
-      activeCheck: input.kind === "check" ? input.check! : null,
+      activeCheck,
     },
     input.operationId,
     "wait",

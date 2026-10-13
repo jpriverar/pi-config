@@ -52,9 +52,9 @@ function checkTask(
     waiting: { kind: "check" },
     activeCheck: {
       id: "review",
-      kind: "manual",
+      kind: "time",
       targetArtifactIds: [],
-      predicate: { reviewAt: BEFORE },
+      predicate: { at: BEFORE },
       onSatisfied: "actionable",
       wakeOn: [],
       state: "pending",
@@ -202,11 +202,35 @@ test("selects pending resource repair using its transition timestamp", () => {
       },
     ],
   });
+  issue.lifecycle!.waiting = { kind: "check" };
+  issue.lifecycle!.activeCheck = {
+    ...checkTask("manual").lifecycle!.activeCheck!,
+    kind: "manual",
+    predicate: { description: "Await approved evidence" },
+  };
   assert.deepEqual(selectDueCandidates([issue], new Map(), NOW), [
     { taskId: "resource", eligibleAtMs: NOW, reasons: ["resource"] },
   ]);
   issue.lifecycle!.resources[0].cleanupState = "active";
   assert.deepEqual(selectDueCandidates([issue], new Map(), NOW), []);
+});
+
+test("manual waits are never selected for polling, including legacy retry deadlines", () => {
+  for (const reviewAt of [undefined, BEFORE, AFTER]) {
+    for (const nextCheckAt of [null, BEFORE, AFTER]) {
+      const issue = checkTask("manual", nextCheckAt);
+      Object.assign(issue.lifecycle!.activeCheck!, {
+        kind: "manual",
+        predicate:
+          reviewAt === undefined
+            ? { description: "Await approved evidence" }
+            : { reviewAt },
+        state: "error",
+        errorCount: 23,
+      });
+      assert.deepEqual(selectDueCandidates([issue], new Map(), NOW), []);
+    }
+  }
 });
 
 test("only authoritative closed blockers satisfy dependency selection", () => {

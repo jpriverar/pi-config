@@ -74,7 +74,11 @@ export function selectDueCandidates(
         deadlines.push(enteredAt);
       }
     }
-    if (lifecycle.waiting?.kind === "check" && lifecycle.activeCheck !== null) {
+    if (
+      lifecycle.waiting?.kind === "check" &&
+      lifecycle.activeCheck !== null &&
+      lifecycle.activeCheck.kind !== "manual"
+    ) {
       const next = lifecycle.activeCheck.nextCheckAt;
       if (next === null || Date.parse(next) <= nowMs) {
         reasons.push("check");

@@ -400,12 +400,23 @@ for each canonical PR URL. `mergedAt` satisfies a target. Changes requested, a
 merge conflict, or closed-without-merge requires action. Other open states stay
 pending. Multi-PR checks use explicit `predicate.mode` of `all` or `any`.
 
-Time checks require one RFC3339 `predicate.at`. Manual checks require one
-RFC3339 `predicate.reviewAt` and remain pending when overdue until an operator
-records a terminal outcome.
+Time checks require one RFC3339 `predicate.at`. Manual checks wait for explicit
+human input and are never automatically polled. Omit `predicate.reviewAt` when
+no reminder was requested; if supplied, it must be an RFC3339 timestamp. Existing
+Pi notices evaluate this optional reminder during work-state refreshes. Becoming
+overdue does not satisfy the manual condition. New manual waits have
+`nextCheckAt: null`; legacy polling deadlines do not make them eligible. Resource
+cleanup still reconciles independently of a retained manual wait.
 
-Pending PR polls use the configured interval. Adapter failures stay Waiting and
-use bounded exponential backoff. Poll timestamps update observations but never
+New check inputs validate required time predicates and explicitly supplied manual
+reminders before entering Waiting. Legacy records remain readable for inspection
+and repair. Explicit manual outcomes remain fingerprint-bound and do not wait
+for any reminder or polling deadline.
+
+Pending PR polls use the configured interval. Automatically observed adapter
+failures stay Waiting and use bounded exponential backoff. Exceptions retain
+their original message with check context, and repeated-error notices include
+the recorded cause. Poll timestamps update observations but never
 reset `stateEnteredAt` or `lastProgressAt`, so views preserve total waiting age.
 Automatic and explicit reconciliation share the standalone daemon. Discovery
 runs every minute, while existing 15-minute PR deadlines/backoff remain in the

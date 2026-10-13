@@ -161,11 +161,12 @@ export function selectReconciliationNotices(
       (kind === "cleanup" || wakes(check, kind))
     ) {
       level = "warning";
+      const detail = check?.lastObservation;
       message =
         kind === "cleanup"
           ? `${id}: worktree cleanup remains pending.`
           : kind === "error"
-            ? `${id}: reconciliation check has repeated errors.`
+            ? `${id}: reconciliation check has repeated errors${detail ? `: ${normalizeMetadata(detail, detail.length)}` : "."}`
             : kind === "manual"
               ? `${id}: manual review is overdue.`
               : `${id}: reconciliation check needs attention.`;

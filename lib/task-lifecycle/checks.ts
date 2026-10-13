@@ -68,6 +68,9 @@ export function createCheckAdapterRegistry(
           observation: `manual input: ${input.manualOutcome}`,
         };
       }
+      if (check.predicate.reviewAt === undefined) {
+        return { outcome: "pending", observation: "manual input required" };
+      }
       const reviewAt = timestampPredicate(check.predicate, "reviewAt");
       return deps.now() >= reviewAt
         ? { outcome: "pending", observation: "manual review overdue" }

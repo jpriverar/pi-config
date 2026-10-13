@@ -284,3 +284,15 @@ test("GitHub observation forwards its cancellation signal to the executor", asyn
     "pending",
   );
 });
+
+test("manual waits without a reminder remain pending without external calls", async () => {
+  const h = registry();
+  assert.deepEqual(
+    await h.registry.observe(
+      check("manual", { description: "Await approved evidence" }),
+      [],
+    ),
+    { outcome: "pending", observation: "manual input required" },
+  );
+  assert.deepEqual(h.calls, []);
+});

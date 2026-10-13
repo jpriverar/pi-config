@@ -257,7 +257,12 @@ const checkSchema = objectSchema(
       type: "array",
       items: { type: "string", minLength: 1 },
     },
-    predicate: { type: "object", additionalProperties: true },
+    predicate: {
+      type: "object",
+      additionalProperties: true,
+      description:
+        "Time checks require RFC3339 at. Manual checks wait for explicit input; omit reviewAt unless an optional RFC3339 reminder was requested.",
+    },
     onSatisfied: { type: "string", enum: ["close", "actionable"] },
     wakeOn: { type: "array", items: { type: "string", minLength: 1 } },
     state: {
@@ -266,7 +271,10 @@ const checkSchema = objectSchema(
     },
     createdAt: { type: "string", minLength: 1 },
     lastCheckedAt: { type: ["string", "null"] },
-    nextCheckAt: { type: ["string", "null"] },
+    nextCheckAt: {
+      type: ["string", "null"],
+      description: "Automatic polling deadline. Use null for manual checks.",
+    },
     lastObservation: { type: ["string", "null"] },
     errorCount: { type: "integer", minimum: 0 },
   },

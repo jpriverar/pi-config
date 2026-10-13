@@ -58,10 +58,15 @@ test("important transitions, errors and recovery do not replay routine polls", (
   );
   task.lifecycle!.activeCheck!.state = "error";
   task.lifecycle!.activeCheck!.errorCount = 3;
-  task.lifecycle!.activeCheck!.lastObservation = "private failure details";
+  task.lifecycle!.activeCheck!.lastObservation =
+    "at predicate must be an RFC3339 timestamp";
   selected = selectReconciliationNotices([task], health, selected.cursor);
   assert.equal(selected.notices.length, 1);
-  assert.ok(!selected.notices[0].message.includes("private failure"));
+  assert.ok(
+    selected.notices[0].message.includes(
+      "at predicate must be an RFC3339 timestamp",
+    ),
+  );
   task.lifecycle!.activeCheck!.errorCount = 4;
   assert.equal(
     selectReconciliationNotices([task], health, selected.cursor).notices.length,
@@ -254,4 +259,30 @@ test("login-needed notices give the target-specific stock command once per org u
       .length,
     1,
   );
+});
+
+test("optional manual reminders are evaluated and deduplicated without polling", () => {
+  const task = issue();
+  const check = task.lifecycle!.activeCheck!;
+  check.kind = "manual";
+  check.wakeOn = ["manual"];
+  check.predicate = { description: "Await approved evidence" };
+  check.nextCheckAt = null;
+  check.lastCheckedAt = null;
+  const baseline = selectReconciliationNotices([task], health, null);
+  assert.equal(baseline.notices.length, 0);
+  check.predicate.reviewAt = "2999-01-01T00:00:00Z";
+  const future = selectReconciliationNotices([task], health, baseline.cursor);
+  assert.equal(future.notices.length, 0);
+  check.predicate.reviewAt = "2000-01-01T00:00:00Z";
+  const overdue = selectReconciliationNotices([task], health, future.cursor);
+  assert.equal(overdue.notices.length, 1);
+  assert.match(overdue.notices[0].message, /manual review is overdue/);
+  assert.equal(
+    selectReconciliationNotices([task], health, overdue.cursor).notices.length,
+    0,
+  );
+  assert.equal(check.state, "pending");
+  assert.equal(check.lastCheckedAt, null);
+  assert.equal(check.nextCheckAt, null);
 });

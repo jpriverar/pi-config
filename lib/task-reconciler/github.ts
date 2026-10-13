@@ -3,17 +3,15 @@ import {
   type CheckAdapterRegistry,
 } from "../task-lifecycle/checks.js";
 import { loadLifecycleConfig } from "../task-lifecycle/config.js";
-import { CommandExecutionError, runBoundedCommand } from "./commands.js";
+import { runBoundedCommand } from "./commands.js";
 import { daemonEnvironment, type DaemonConfig } from "./config.js";
-
-class GitHubCheckError extends Error {}
 
 function targetOwner(value: string): string {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new GitHubCheckError("invalid GitHub pull request target");
+    throw new Error("invalid GitHub pull request target");
   }
   const match =
     /^\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)$/.exec(
@@ -29,7 +27,7 @@ function targetOwner(value: string): string {
     url.hash !== "" ||
     match === null
   ) {
-    throw new GitHubCheckError("invalid GitHub pull request target");
+    throw new Error("invalid GitHub pull request target");
   }
   return match[1].toLowerCase();
 }
@@ -49,15 +47,13 @@ export function createDaemonCheckAdapters(
         args[3] !== "--json" ||
         args[4] !== "state,reviewDecision,mergeStateStatus,mergedAt"
       )
-        throw new GitHubCheckError("unsupported GitHub check command");
+        throw new Error("unsupported GitHub check command");
       const owner = targetOwner(args[2]);
       const account = Object.hasOwn(config.githubAccounts, owner)
         ? config.githubAccounts[owner]
         : undefined;
       if (account === undefined)
-        throw new GitHubCheckError(
-          `GitHub account is not configured for owner ${owner}`,
-        );
+        throw new Error(`GitHub account is not configured for owner ${owner}`);
       const env = daemonEnvironment(config);
       const commandOptions = {
         env,
@@ -77,7 +73,7 @@ export function createDaemonCheckAdapters(
         token.length > 4096 ||
         /[\u0000-\u0020\u007f]/.test(token)
       )
-        throw new GitHubCheckError(
+        throw new Error(
           `GitHub credentials unavailable for owner ${owner}; authenticate the configured account outside the daemon`,
         );
       return runBoundedCommand(config.executables.gh, args, {
@@ -93,12 +89,7 @@ export function createDaemonCheckAdapters(
       } catch (error) {
         return {
           outcome: "error",
-          observation:
-            error instanceof GitHubCheckError
-              ? error.message
-              : error instanceof CommandExecutionError
-                ? `GitHub check command failed (${error.reason}); verify authentication and command availability outside the daemon`
-                : "GitHub check failed; inspect daemon health",
+          observation: `${check.kind} check ${check.id}: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
     },

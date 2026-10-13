@@ -603,8 +603,9 @@ export class TaskLifecycleService {
     if (check === null) return complete(current);
     if (
       request.manualOutcome === undefined &&
-      check.nextCheckAt !== null &&
-      Date.parse(check.nextCheckAt) > this.deps.now()
+      (check.kind === "manual" ||
+        (check.nextCheckAt !== null &&
+          Date.parse(check.nextCheckAt) > this.deps.now()))
     )
       return complete(current);
     validateManual(current);
@@ -645,6 +646,16 @@ export class TaskLifecycleService {
       )
         return null;
       if (
+        latest.activeCheck.kind === "manual" &&
+        prepared.manualOutcome === undefined &&
+        (observation.outcome === "satisfied" ||
+          observation.outcome === "action_required")
+      ) {
+        throw new Error(
+          `task ${taskId} check requires an explicit manual outcome`,
+        );
+      }
+      if (
         prepared.manualOutcome !== undefined &&
         observation.outcome !== prepared.manualOutcome
       ) {
@@ -662,9 +673,12 @@ export class TaskLifecycleService {
       };
       if (observation.outcome === "pending") {
         check.errorCount = 0;
-        check.nextCheckAt = new Date(
-          this.deps.now() + (this.deps.prPollIntervalMs ?? 900_000),
-        ).toISOString();
+        check.nextCheckAt =
+          check.kind === "manual"
+            ? null
+            : new Date(
+                this.deps.now() + (this.deps.prPollIntervalMs ?? 900_000),
+              ).toISOString();
         const next = recordCheckObservation(
           { ...latest, activeCheck: check },
           operationId,
@@ -679,14 +693,17 @@ export class TaskLifecycleService {
       }
       if (observation.outcome === "error") {
         check.errorCount = latest.activeCheck.errorCount + 1;
-        check.nextCheckAt = new Date(
-          this.deps.now() +
-            nextCheckBackoffMs(
-              check.errorCount,
-              this.deps.prPollIntervalMs ?? 900_000,
-              this.deps.maxBackoffMs ?? 21_600_000,
-            ),
-        ).toISOString();
+        check.nextCheckAt =
+          check.kind === "manual"
+            ? null
+            : new Date(
+                this.deps.now() +
+                  nextCheckBackoffMs(
+                    check.errorCount,
+                    this.deps.prPollIntervalMs ?? 900_000,
+                    this.deps.maxBackoffMs ?? 21_600_000,
+                  ),
+              ).toISOString();
         const next = recordCheckObservation(
           { ...latest, activeCheck: check },
           operationId,
