@@ -1,3 +1,7 @@
+import {
+  resolveSessionProject,
+  type SessionProjectReader,
+} from "../../lib/session-project.js";
 import { summarizeWorkManagement } from "../../lib/work-management/model.js";
 import { loadWorkManagementConfig } from "../../lib/work-management/config.js";
 import { randomUUID } from "node:crypto";
@@ -150,7 +154,7 @@ export interface TaskLifecycleToolService {
 
 interface ExtensionContext {
   cwd: string;
-  sessionManager: { getSessionId(): string };
+  sessionManager: SessionProjectReader & { getSessionId(): string };
   ui?: { notify(message: string, level: "info" | "warning"): void };
 }
 
@@ -317,25 +321,44 @@ export function createTaskLifecycleExtension(
       name: "task_create",
       label: "Create task",
       description:
-        "Create an explicitly approved lifecycle-managed work item in the Beads store.",
+        "Create an explicitly approved lifecycle-managed work item in the Beads store. Uses the current session project scope and rejects a conflicting workstream.",
       parameters: objectSchema(
         {
           title: { type: "string", minLength: 1 },
           why: { type: "string", minLength: 1 },
-          workstream: { type: "string", minLength: 1 },
+          workstream: {
+            type: "string",
+            minLength: 1,
+            description:
+              "Defaults to the current session project. If supplied in a scoped session, must match that project (case-insensitive). Switch with /project to create elsewhere.",
+          },
           needs_jp: { type: "boolean" },
         },
         ["title", "why", "needs_jp"],
       ),
       async execute(_id, params, _signal, _update, context) {
+        const project = resolveSessionProject(context.sessionManager);
+        if (project.source === "malformed-explicit") {
+          throw new Error(
+            "cannot create task: session project scope is malformed; select a project with /project before retrying",
+          );
+        }
+        if (
+          project.workstream !== undefined &&
+          params.workstream !== undefined &&
+          project.workstream.toLowerCase() !== params.workstream.toLowerCase()
+        ) {
+          throw new Error(
+            `cannot create task: workstream ${JSON.stringify(params.workstream)} conflicts with session project ${JSON.stringify(project.workstream)}; switch with /project before creating work in another project`,
+          );
+        }
+        const workstream = project.workstream ?? params.workstream;
         return toolResult(
           await deps.service.create(
             {
               title: params.title,
               why: params.why,
-              ...(params.workstream === undefined
-                ? {}
-                : { workstream: params.workstream }),
+              ...(workstream === undefined ? {} : { workstream }),
               needsJp: params.needs_jp,
             },
             ownerFor(context),
