@@ -62,7 +62,7 @@ type Context = {
     getSessionId(): string;
     getBranch(): unknown[];
     getEntries(): unknown[];
-    getSessionName(): undefined;
+    getSessionName(): string | undefined;
   };
   ui?: { notify(message: string, level: string): void };
 };
@@ -464,6 +464,211 @@ test("routes safe task mutations with strict field mappings", async () => {
       args: ["jp-1", "Pause this.", owner, "defer-call"],
     },
   ]);
+});
+
+for (const fixture of [
+  {
+    name: "inherits explicit scope instead of the session display name",
+    scope: "pi-setup",
+    displayName: "pi-setup-deadbeef",
+    requested: undefined,
+    expected: "pi-setup",
+  },
+  {
+    name: "accepts a workstream matching explicit scope",
+    scope: "pi-setup",
+    displayName: "different-display-name",
+    requested: "pi-setup",
+    expected: "pi-setup",
+  },
+  {
+    name: "matches scope case-insensitively and keeps the session spelling",
+    scope: "Pi-Setup",
+    displayName: undefined,
+    requested: "pi-setup",
+    expected: "Pi-Setup",
+  },
+  {
+    name: "inherits legacy display-name scope",
+    scope: undefined,
+    displayName: "legacy-project",
+    requested: undefined,
+    expected: "legacy-project",
+  },
+  {
+    name: "keeps unnamed sessions unscoped when workstream is omitted",
+    scope: undefined,
+    displayName: undefined,
+    requested: undefined,
+    expected: undefined,
+  },
+  {
+    name: "respects explicit global scope despite a display name",
+    scope: null,
+    displayName: "pi-setup-deadbeef",
+    requested: undefined,
+    expected: undefined,
+  },
+  {
+    name: "allows an explicit workstream in a globally scoped session",
+    scope: null,
+    displayName: "pi-setup-deadbeef",
+    requested: "another-project",
+    expected: "another-project",
+  },
+]) {
+  test(`task_create ${fixture.name}`, async () => {
+    const h = harness();
+    const context: Context = {
+      ...h.context,
+      sessionManager: {
+        ...h.context.sessionManager,
+        getEntries: () =>
+          fixture.scope === undefined
+            ? []
+            : [
+                {
+                  type: "custom",
+                  customType: "jp-project-scope",
+                  data: { version: 1, workstream: fixture.scope },
+                },
+              ],
+        getSessionName: () => fixture.displayName,
+      },
+    };
+
+    await h.tools.get("task_create")!.execute(
+      "create-call",
+      {
+        title: "Scoped task",
+        why: "Keep work in its project",
+        needs_jp: false,
+        ...(fixture.requested === undefined
+          ? {}
+          : { workstream: fixture.requested }),
+      },
+      null,
+      null,
+      context,
+    );
+
+    assert.equal(h.calls.length, 1);
+    assert.deepEqual(h.calls[0].args[0], {
+      title: "Scoped task",
+      why: "Keep work in its project",
+      needsJp: false,
+      ...(fixture.expected === undefined
+        ? {}
+        : { workstream: fixture.expected }),
+    });
+  });
+}
+
+for (const explicit of [true, false]) {
+  test(`task_create rejects mismatches against ${explicit ? "explicit" : "legacy"} scope before creation`, async () => {
+    const h = harness();
+    const context: Context = {
+      ...h.context,
+      sessionManager: {
+        ...h.context.sessionManager,
+        getEntries: () =>
+          explicit
+            ? [
+                {
+                  type: "custom",
+                  customType: "jp-project-scope",
+                  data: { version: 1, workstream: "pi-setup" },
+                },
+              ]
+            : [],
+        getSessionName: () => "pi-setup",
+      },
+    };
+
+    await assert.rejects(
+      h.tools.get("task_create")!.execute(
+        "create-call",
+        {
+          title: "Wrong project",
+          why: "Regression",
+          needs_jp: false,
+          workstream: "another-project",
+        },
+        null,
+        null,
+        context,
+      ),
+      (error: Error) => {
+        assert.match(error.message, /another-project/);
+        assert.match(error.message, /pi-setup/);
+        assert.match(error.message, /\/project/);
+        return true;
+      },
+    );
+    assert.deepEqual(h.calls, []);
+  });
+}
+
+test("task_create reads the current scope on every call", async () => {
+  const h = harness();
+  const entries: unknown[] = [];
+  const context: Context = {
+    ...h.context,
+    sessionManager: { ...h.context.sessionManager, getEntries: () => entries },
+  };
+  for (const scope of ["pi-setup", "another-project", null]) {
+    entries.push({
+      type: "custom",
+      customType: "jp-project-scope",
+      data: { version: 1, workstream: scope },
+    });
+    await h.tools
+      .get("task_create")!
+      .execute(
+        "create-call",
+        { title: "Scoped task", why: "Scope can change", needs_jp: false },
+        null,
+        null,
+        context,
+      );
+  }
+  assert.deepEqual(
+    h.calls.map(({ args }) => (args[0] as { workstream?: string }).workstream),
+    ["pi-setup", "another-project", undefined],
+  );
+});
+
+test("task_create rejects malformed scope rather than treating it as global", async () => {
+  const h = harness();
+  const context: Context = {
+    ...h.context,
+    sessionManager: {
+      ...h.context.sessionManager,
+      getEntries: () => [
+        {
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, workstream: "pi-setup" },
+        },
+      ],
+    },
+  };
+  await assert.rejects(
+    h.tools.get("task_create")!.execute(
+      "create-call",
+      {
+        title: "Unknown scope",
+        why: "Regression",
+        needs_jp: false,
+        workstream: "another-project",
+      },
+      null,
+      null,
+      context,
+    ),
+    /malformed.*\/project/,
+  );
+  assert.deepEqual(h.calls, []);
 });
 
 test("close drops irrelevant superseding placeholders", async () => {

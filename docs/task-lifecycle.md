@@ -101,6 +101,16 @@ Creates an explicitly approved Actionable task with version-1 lifecycle
 metadata. `workstream` maps to `workstream:<value>` and `needs_jp` maps to the
 `needs:jp` label.
 
+In a project-scoped session, an omitted `workstream` inherits the current
+project. An explicit value must match that project case-insensitively; creation
+uses the session's spelling. A mismatch is rejected before any task is written.
+Use `/project` to switch scope before creating work in another project.
+
+Scope is resolved at each call using explicit session project metadata, with the
+legacy display-name fallback only when no explicit scope exists. Explicit global
+scope and unnamed sessions retain the optional workstream behavior. Malformed
+project metadata blocks creation until scope is selected again with `/project`.
+
 ### `task_update`
 
 Required: `taskId`. Optional: `add_labels` and `remove_labels`; at least one
