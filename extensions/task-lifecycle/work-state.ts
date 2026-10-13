@@ -18,6 +18,7 @@ import {
   classifyReadiness,
   resolveBeadsDir,
   createBeadsClient,
+  withBeadsEnvironment,
   lifecycleAnnotation,
   listClassifiedIssues,
   type BeadsError,
@@ -383,14 +384,9 @@ export function registerTaskWorkState(
 ): void {
   const storePath = resolveBeadsDir();
   const readHealth = deps?.health ?? (() => readPiDaemonHealth(storePath));
-  const client = createBeadsClient(async (command, args) => {
-    const result = await pi.exec(command, [...args]);
-    return {
-      code: result.code,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    };
-  });
+  const client = createBeadsClient(
+    withBeadsEnvironment((command, args) => pi.exec(command, [...args])),
+  );
 
   async function queryState(project?: string): Promise<State> {
     const classified = await listClassifiedIssues(client);

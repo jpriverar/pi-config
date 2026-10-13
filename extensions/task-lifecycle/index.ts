@@ -20,7 +20,11 @@ import { fileURLToPath } from "node:url";
 import { loadLifecycleConfig } from "../../lib/task-lifecycle/config.js";
 import { hostname as readHostname } from "node:os";
 
-import { resolveBeadsDir, type BeadsExec } from "../../lib/beads.js";
+import {
+  resolveBeadsDir,
+  withBeadsEnvironment,
+  type BeadsExec,
+} from "../../lib/beads.js";
 import type {
   AcquireResult,
   ClaimObservationTransaction,
@@ -1189,7 +1193,7 @@ export default function taskLifecycle(
     fileURLToPath(new URL("./config.json", import.meta.url)),
   );
   const storePath = resolveBeadsDir();
-  const store = createLifecycleStore(pi.exec.bind(pi), {
+  const store = createLifecycleStore(withBeadsEnvironment(pi.exec.bind(pi)), {
     store: storePath,
     readWorkManagementConfig: () => loadWorkManagementConfig(storePath),
   });

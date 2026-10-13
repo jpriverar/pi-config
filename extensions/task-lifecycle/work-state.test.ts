@@ -153,6 +153,11 @@ function createHarness(
       } else appended.push({ customType, data });
     },
     async exec(command: string, args: string[]) {
+      if (command === "env") {
+        assert.deepEqual(args.slice(0, 2), ["BD_BACKUP_ENABLED=false", "bd"]);
+        command = "bd";
+        args = args.slice(2);
+      }
       calls.push({ command, args });
       return (options.exec ?? defaultExec)(command, args);
     },

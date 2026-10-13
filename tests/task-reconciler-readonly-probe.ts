@@ -36,7 +36,7 @@ export async function runReadonlyProbe(argv: string[]) {
   const commands = { total: 0, list: 0, show: 0 };
   let examined = 0;
   const store = createLifecycleStore(
-    async (command, args) => {
+    async (command, args, options) => {
       const action = args[0];
       if (command !== "bd" || (action !== "list" && action !== "show"))
         throw new Error(`probe refused non-read command: ${command} ${action}`);
@@ -45,7 +45,11 @@ export async function runReadonlyProbe(argv: string[]) {
       return runBoundedCommand(bd, args, {
         signal,
         timeoutMs: 10000,
-        env: { HOME: homedir(), PATH: `${dirname(bd)}:/usr/bin:/bin` },
+        env: {
+          HOME: homedir(),
+          PATH: `${dirname(bd)}:/usr/bin:/bin`,
+          ...options?.env,
+        },
       });
     },
     { store: db },

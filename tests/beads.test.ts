@@ -9,6 +9,7 @@ import {
   lifecycleAnnotation,
   listClassifiedIssues,
   resolveBeadsDir,
+  type BeadsClient,
   type BeadsExec,
   type BeadsExecResult,
   type BeadsIssue,
@@ -116,6 +117,81 @@ test("lists active issues by default and decodes normalized fields", async () =>
       },
     ],
   });
+});
+
+for (const { name, read, response } of [
+  {
+    name: "active issues",
+    read: (client: BeadsClient) => client.listIssues(),
+    response: [],
+  },
+  {
+    name: "closed issues",
+    read: (client: BeadsClient) => client.listIssues(["closed"]),
+    response: [],
+  },
+  {
+    name: "ready issues",
+    read: (client: BeadsClient) => client.listReadyIssueIds(),
+    response: [],
+  },
+  {
+    name: "issue details",
+    read: (client: BeadsClient) => client.showIssues(["jp-1"]),
+    response: [issue()],
+  },
+  {
+    name: "dependencies",
+    read: (client: BeadsClient) => client.listBlockingDependencies("jp-1"),
+    response: [],
+  },
+  {
+    name: "project renames",
+    read: (client: BeadsClient) => client.getProjectRenameRegistry(),
+    response: { value: "" },
+  },
+  {
+    name: "project archives",
+    read: (client: BeadsClient) => client.getProjectArchiveRegistry(),
+    response: { value: "" },
+  },
+]) {
+  test(`${name} reads suppress automatic backups`, async () => {
+    const environments: Array<Record<string, string> | undefined> = [];
+    const client = createBeadsClient(
+      async (_command, _args, options) => {
+        environments.push(options?.env);
+        return success(response);
+      },
+      { env: { BEADS_DIR: store } },
+    );
+
+    assert.equal((await read(client)).ok, true);
+    assert.deepEqual(environments, [{ BD_BACKUP_ENABLED: "false" }]);
+  });
+}
+
+test("raw commands do not implicitly disable backups", async () => {
+  const environments: Array<Record<string, string> | undefined> = [];
+  const client = createBeadsClient(
+    async (_command, _args, options) => {
+      environments.push(options?.env);
+      return success([]);
+    },
+    { env: { BEADS_DIR: store } },
+  );
+
+  assert.equal(
+    (
+      await client.runBd(
+        "custom update",
+        ["update", "jp-1", "--json"],
+        (value) => value,
+      )
+    ).ok,
+    true,
+  );
+  assert.deepEqual(environments, [undefined]);
 });
 
 test("normalizes terminal controls, whitespace, and field lengths at decode", async () => {

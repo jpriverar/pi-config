@@ -98,6 +98,10 @@ function createHarness(
       args: string[],
       limits?: { timeout?: number },
     ) {
+      if (_command === "env") {
+        assert.deepEqual(args.slice(0, 2), ["BD_BACKUP_ENABLED=false", "bd"]);
+        args = args.slice(2);
+      }
       if (stale) staleAccesses.push("pi.exec");
       calls.push(args);
       executionLimits.push(limits);
@@ -232,6 +236,11 @@ test("shows the current session task instead of aggregate counts", async () => {
   await start(harness);
 
   assert.match(harness.renderHeader(), /jp-b1om • Show session task in header/);
+  assert.equal(
+    harness.calls.length,
+    1,
+    "assigned-task display needs only the active read",
+  );
   assert.doesNotMatch(
     harness.renderHeader(),
     /in-progress|blocked|ready|waiting|needs you|closed/,
@@ -492,7 +501,7 @@ test("Herdr uses the existing issue read and actual current model", async () => 
   const h = createHarness({ issues: [task], herdr: true });
   await start(h);
   await setImmediate();
-  assert.equal(h.calls.length, 3);
+  assert.equal(h.calls.length, 1);
   assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-owned");
   assert.equal(h.metadata.at(-1)?.pi_model, "gpt-5.4");
   assert.equal(h.metadata.at(-1)?.pi_context_warning, "Context 82%");
@@ -500,7 +509,7 @@ test("Herdr uses the existing issue read and actual current model", async () => 
   await h.handlers.get("model_select")?.({}, h.context);
   await setImmediate();
   assert.equal(h.metadata.at(-1)?.pi_model, "another-model");
-  assert.equal(h.calls.length, 3, "model changes must not query Beads");
+  assert.equal(h.calls.length, 1, "model changes must not query Beads");
   await h.handlers.get("session_shutdown")?.({}, h.context);
 });
 
@@ -524,7 +533,7 @@ test("claim and release events re-read ownership, including failed close", async
     h.context,
   );
   await setImmediate();
-  assert.equal(h.calls.length, calls + 3);
+  assert.equal(h.calls.length, calls + 1);
   assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-owned");
   h.setIssues([]);
   await h.handlers.get("tool_execution_end")?.(
@@ -540,20 +549,20 @@ test("claim and release events re-read ownership, including failed close", async
   await h.handlers.get("session_shutdown")?.({}, h.context);
 });
 
-test("unrelated count-query failure cannot erase verified task ownership", async () => {
-  const task = issue("jp-owned", "in_progress");
-  task.lifecycle = activeLifecycle("session-1");
-  const h = createHarness({
-    issues: [task],
-    herdr: true,
-    unavailable: "ready",
+for (const unavailable of ["ready", "closed"] as const) {
+  test(`${unavailable} count failure cannot hide the assigned task in Pi or Herdr`, async () => {
+    const task = issue("jp-owned", "in_progress");
+    task.lifecycle = activeLifecycle("session-1");
+    const h = createHarness({ issues: [task], herdr: true, unavailable });
+    await start(h);
+    await setImmediate();
+    assert.match(h.renderHeader(), /jp-owned • Task jp-owned/);
+    assert.doesNotMatch(h.renderHeader(), /tasks unavailable/);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-owned");
+    await h.handlers.get("session_shutdown")?.({}, h.context);
   });
-  await start(h);
-  await setImmediate();
-  assert.match(h.renderHeader(), /tasks unavailable/);
-  assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-owned");
-  await h.handlers.get("session_shutdown")?.({}, h.context);
-});
+}
 
 test("RPC sessions inheriting a valid sender do not overwrite the parent", async () => {
   const h = createHarness({ herdr: true, mode: "rpc" });
@@ -627,7 +636,7 @@ test("coalesces overlapping task refreshes and preserves the latest snapshot", a
   await setImmediate();
   assert.equal(
     h.calls.length,
-    9,
+    5,
     "one active refresh plus one coalesced refresh",
   );
   assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-latest");

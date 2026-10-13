@@ -81,7 +81,37 @@ export interface BeadsExecResult {
 export type BeadsExec = (
   command: string,
   args: readonly string[],
+  options?: { env: Record<string, string> },
 ) => Promise<BeadsExecResult>;
+
+export function withBeadsEnvironment(
+  exec: (command: string, args: readonly string[]) => Promise<BeadsExecResult>,
+): BeadsExec {
+  // Pi's exec API has no environment option; env applies overrides to one child.
+  return (command, args, options) =>
+    options
+      ? exec("env", [
+          ...Object.entries(options.env).map(
+            ([key, value]) => `${key}=${value}`,
+          ),
+          command,
+          ...args,
+        ])
+      : exec(command, args);
+}
+
+export function executeBeads(
+  exec: BeadsExec,
+  args: readonly string[],
+  readOnly = false,
+): Promise<BeadsExecResult> {
+  // Beads can run an automatic backup even after a read has returned its data.
+  return exec(
+    "bd",
+    args,
+    readOnly ? { env: { BD_BACKUP_ENABLED: "false" } } : undefined,
+  );
+}
 
 export interface BeadsClient {
   runBd<T>(
@@ -321,10 +351,11 @@ export function createBeadsClient(
   async function execBd(
     operation: string,
     args: readonly string[],
+    readOnly = false,
   ): Promise<BeadsResult<BeadsExecResult>> {
     let result: BeadsExecResult;
     try {
-      result = await exec("bd", [...args, "--db", store]);
+      result = await executeBeads(exec, [...args, "--db", store], readOnly);
     } catch (error) {
       return {
         ok: false,
@@ -359,8 +390,9 @@ export function createBeadsClient(
     operation: string,
     args: readonly string[],
     decode: (value: unknown) => T,
+    readOnly = false,
   ): Promise<BeadsResult<T>> {
-    const executed = await execBd(operation, args);
+    const executed = await execBd(operation, args, readOnly);
     if (!executed.ok) return executed;
 
     let value: unknown;
@@ -383,24 +415,32 @@ export function createBeadsClient(
     }
   }
 
+  function readBd<T>(
+    operation: string,
+    args: readonly string[],
+    decode: (value: unknown) => T,
+  ): Promise<BeadsResult<T>> {
+    return runBd(operation, args, decode, true);
+  }
+
   return {
     runBd,
     listIssues(statuses = ["open", "in_progress", "blocked"]) {
-      return runBd(
+      return readBd(
         "list issues",
         ["list", "-s", statuses.join(","), "-n", "0", "--json"],
         decodeIssues,
       );
     },
     listReadyIssueIds() {
-      return runBd("list ready issues", ["ready", "--json"], (value) => {
+      return readBd("list ready issues", ["ready", "--json"], (value) => {
         const issues = decodeIssues(value);
         return new Set(issues.map((issue) => issue.id));
       });
     },
     showIssues(ids) {
       const normalizedIds = ids.map(normalizeId);
-      return runBd(
+      return readBd(
         "show issues",
         ["show", ...normalizedIds, "--json"],
         (value) => {
@@ -414,7 +454,7 @@ export function createBeadsClient(
       );
     },
     listBlockingDependencies(id) {
-      return runBd(
+      return readBd(
         `list blocking dependencies for ${normalizeId(id)}`,
         ["dep", "list", id, "--json"],
         (value) =>
@@ -422,7 +462,7 @@ export function createBeadsClient(
       );
     },
     getProjectArchiveRegistry() {
-      return runBd(
+      return readBd(
         "get project archive registry",
         ["config", "get", PROJECT_ARCHIVES_CONFIG_KEY, "--json"],
         (value) => {
@@ -464,7 +504,7 @@ export function createBeadsClient(
       return { ok: true, value: undefined };
     },
     getProjectRenameRegistry() {
-      return runBd(
+      return readBd(
         "get project rename registry",
         ["config", "get", PROJECT_RENAMES_CONFIG_KEY, "--json"],
         (value) => {

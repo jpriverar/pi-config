@@ -58,9 +58,12 @@ export async function createDaemonRuntime(
     timeoutMs: 5000,
   };
   const store = createLifecycleStore(
-    async (command, args) => {
+    async (command, args, options) => {
       if (command !== "bd") throw new Error("unsupported lifecycle command");
-      return runBoundedCommand(config.executables.bd, args, commandOptions);
+      return runBoundedCommand(config.executables.bd, args, {
+        ...commandOptions,
+        env: { ...env, ...options?.env },
+      });
     },
     {
       store: config.store,
@@ -141,11 +144,12 @@ export async function createDaemonRuntime(
     workManagement: createWorkManagementSync({
       // Known delivery receipts must drain after lifecycle cancellation, within the existing deadlines.
       store: createLifecycleStore(
-        async (command, args) => {
+        async (command, args, options) => {
           if (command !== "bd")
             throw new Error("unsupported lifecycle command");
           return runBoundedCommand(config.executables.bd, args, {
             ...commandOptions,
+            env: { ...env, ...options?.env },
             signal: undefined,
           });
         },

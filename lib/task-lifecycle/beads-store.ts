@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { canonicalWorkstream } from "../work-management/config.js";
 
-import type { BeadsExec, BeadsExecResult } from "../beads.js";
+import {
+  executeBeads,
+  type BeadsExec,
+  type BeadsExecResult,
+} from "../beads.js";
 import {
   withFileOperationLock,
   type FileOperationLockDependencies,
@@ -59,10 +63,11 @@ export function createLifecycleStore(
   async function execute(
     operation: string,
     args: readonly string[],
+    readOnly = false,
   ): Promise<BeadsExecResult> {
     let result: BeadsExecResult;
     try {
-      result = await exec("bd", [...args, "--db", store]);
+      result = await executeBeads(exec, [...args, "--db", store], readOnly);
     } catch (error) {
       const detail = hasCode(error, "ENOENT")
         ? "bd CLI is unavailable"
@@ -82,8 +87,9 @@ export function createLifecycleStore(
   async function executeJson(
     operation: string,
     args: readonly string[],
+    readOnly = false,
   ): Promise<unknown> {
-    const result = await execute(operation, args);
+    const result = await execute(operation, args, readOnly);
     try {
       return JSON.parse(result.stdout);
     } catch {
@@ -93,12 +99,11 @@ export function createLifecycleStore(
 
   async function readOne(id: string, operation: string): Promise<DecodedIssue> {
     assertIdentifier(id, "issue id");
-    const value = await executeJson(operation, [
-      "show",
-      id,
-      "--long",
-      "--json",
-    ]);
+    const value = await executeJson(
+      operation,
+      ["show", id, "--long", "--json"],
+      true,
+    );
     const records = decodeEnvelope(value, operation, store);
     if (records.length !== 1) {
       throw lifecycleStoreError(
@@ -122,12 +127,11 @@ export function createLifecycleStore(
     }
     if (requested.size === 0) return [];
     const operation = "read issues";
-    const value = await executeJson(operation, [
-      "show",
-      ...requested,
-      "--long",
-      "--json",
-    ]);
+    const value = await executeJson(
+      operation,
+      ["show", ...requested, "--long", "--json"],
+      true,
+    );
     const seen = new Set<string>();
     return decodeEnvelope(value, operation, store).map((record) => {
       const issue = decodeIssue(record, undefined, operation, store).issue;
@@ -150,21 +154,22 @@ export function createLifecycleStore(
       throw lifecycleStoreError("list issues", store, "statuses are required");
     }
     for (const status of statuses) assertStatus(status, "list issue status");
-    const value = await executeJson("list issues", [
-      "list",
-      "-s",
-      statuses.join(","),
-      "-n",
-      "0",
-      "--json",
-    ]);
+    const value = await executeJson(
+      "list issues",
+      ["list", "-s", statuses.join(","), "-n", "0", "--json"],
+      true,
+    );
     return decodeEnvelope(value, "list issues", store).map(
       (record) => decodeIssue(record, undefined, "list issues", store).issue,
     );
   }
 
   async function readyIds(): Promise<ReadonlySet<string>> {
-    const value = await executeJson("list ready issues", ["ready", "--json"]);
+    const value = await executeJson(
+      "list ready issues",
+      ["ready", "--json"],
+      true,
+    );
     const ids = decodeEnvelope(value, "list ready issues", store).map(
       (record) => {
         try {
@@ -388,11 +393,11 @@ export function createLifecycleStore(
 
   async function comments(id: string): Promise<NativeTaskComment[]> {
     assertIdentifier(id, "issue id");
-    const value = await executeJson(`read comments ${id}`, [
-      "comments",
-      id,
-      "--json",
-    ]);
+    const value = await executeJson(
+      `read comments ${id}`,
+      ["comments", id, "--json"],
+      true,
+    );
     if (!Array.isArray(value))
       throw lifecycleStoreError(
         "read comments",

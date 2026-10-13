@@ -132,14 +132,16 @@ test("reads lifecycle metadata and native dependency edges", async () => {
 
 test("creates a managed task and verifies it through the explicit store", async () => {
   const calls: Array<[string, readonly string[]]> = [];
+  const environments: Array<Record<string, string> | undefined> = [];
   let current: Record<string, unknown> = {
     ...rawIssue(),
     id: "jp-created",
     title: "Ship it",
   };
   const state = lifecycle();
-  const exec: BeadsExec = async (command, args) => {
+  const exec: BeadsExec = async (command, args, execution) => {
     calls.push([command, args]);
+    environments.push(execution?.env);
     if (args[0] === "create") {
       current = {
         ...current,
@@ -164,6 +166,7 @@ test("creates a managed task and verifies it through the explicit store", async 
 
   assert.equal(created.id, "jp-created");
   assert.equal(created.lifecycle?.phase, "actionable");
+  assert.deepEqual(environments, [undefined, { BD_BACKUP_ENABLED: "false" }]);
   assert.deepEqual(calls[0]?.[1], [
     "create",
     "Ship it",
@@ -293,9 +296,11 @@ test("list preserves Beads edge summaries with unknown target status", async () 
 
 test("serializes a full metadata merge, removes dotted lifecycle keys, and verifies", async () => {
   const calls: Array<[string, readonly string[]]> = [];
+  const environments: Array<Record<string, string> | undefined> = [];
   let current = rawIssue();
-  const exec: BeadsExec = async (command, args) => {
+  const exec: BeadsExec = async (command, args, execution) => {
     calls.push([command, args]);
+    environments.push(execution?.env);
     if (args[0] === "update") {
       current = {
         ...current,
@@ -313,6 +318,11 @@ test("serializes a full metadata merge, removes dotted lifecycle keys, and verif
 
   assert.equal(saved.lifecycle?.phase, "active");
   assert.equal(saved.status, "in_progress");
+  assert.deepEqual(environments, [
+    { BD_BACKUP_ENABLED: "false" },
+    undefined,
+    { BD_BACKUP_ENABLED: "false" },
+  ]);
   assert.equal(calls.length, 3);
   assert.deepEqual(calls[0], [
     "bd",

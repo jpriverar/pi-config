@@ -12,6 +12,7 @@ import {
 
 import {
   createBeadsClient,
+  withBeadsEnvironment,
   listClassifiedIssues,
   type ClassifiedIssue,
   type IssueStatus,
@@ -122,14 +123,9 @@ export default function tasksOverlay(pi: ExtensionAPI) {
       return undefined;
     },
   } satisfies SessionProjectWriter;
-  const client = createBeadsClient(async (command, args) => {
-    const result = await pi.exec(command, [...args]);
-    return {
-      code: result.code,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    };
-  });
+  const client = createBeadsClient(
+    withBeadsEnvironment((command, args) => pi.exec(command, [...args])),
+  );
 
   const projectsManager = createProjectManager(client);
 

@@ -105,6 +105,10 @@ function createHarness(
 
   const pi = {
     async exec(_command: string, args: string[]) {
+      if (_command === "env") {
+        assert.deepEqual(args.slice(0, 2), ["BD_BACKUP_ENABLED=false", "bd"]);
+        args = args.slice(2);
+      }
       calls.push(args);
       if (args[0] === "show") {
         const ids = args.slice(1, args.indexOf("--json"));
