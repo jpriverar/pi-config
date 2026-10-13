@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { normalizeScope, selectWindow } from "./model.mjs";
 import { readHistory, saveReport } from "./store.mjs";
+import { collectSessions } from "./sessions.mjs";
 
 /** @param {string|undefined} path */
 async function jsonFile(path) {
@@ -34,13 +35,13 @@ try {
   });
   if (values.help) {
     console.log(
-      "node standup.mjs history | prepare --scope FILE [--since DATE] [--regenerate] | save --request FILE --coverage FILE --body FILE [--root DIR]",
+      "node standup.mjs history | prepare --scope FILE [--since DATE] [--regenerate] | sessions --request FILE | save --request FILE --coverage FILE --body FILE [--root DIR]",
     );
   } else {
     assert.equal(
       positionals.length,
       1,
-      "Expected one command: prepare, history, or save",
+      "Expected one command: prepare, history, sessions, or save",
     );
     const root = resolve(values.root ?? join(homedir(), ".pi", "standup"));
     const [command] = positionals;
@@ -72,6 +73,13 @@ try {
           head: head?.meta ?? null,
           path: head ? join(root, "reports", `${head.meta.id}.md`) : null,
         }),
+      );
+    } else if (command === "sessions") {
+      const request = await jsonFile(values.request);
+      console.log(
+        JSON.stringify(
+          await collectSessions(request.scope.sessionsRoot, request.window),
+        ),
       );
     } else if (command === "save") {
       assert(values.body, "Missing --body Markdown file");
