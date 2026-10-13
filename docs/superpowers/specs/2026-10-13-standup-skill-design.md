@@ -1,7 +1,7 @@
 # Incremental standup summary skill
 
-Status: proposed written specification; in-chat design approved, written-spec
-review pending. Work item: `jp-7coq`.
+Status: written specification approved by JP on 2026-10-13; implementation-plan
+review and execution-method selection pending. Work item: `jp-7coq`.
 
 ## Intent and agreed scope
 
@@ -268,6 +268,7 @@ effect. No runtime behavior has been implemented or tested during this spec phas
 
 ## Approval boundary
 
-JP approved the in-chat design on 2026-10-13. This document now requires written
-spec review. Approval permits implementation planning; it does not authorize
-merging, installing a daemon, posting reports, or generating a live checkpoint.
+JP approved the in-chat design and written specification on 2026-10-13.
+Implementation requires plan review and execution-method selection. Spec approval
+does not authorize merging, installing a daemon, posting reports, or generating
+a live checkpoint.
