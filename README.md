@@ -208,12 +208,21 @@ The package manifest loads:
   and conversation cloning,
   bounded worktree allocation, lifecycle-safe task mutation and presentation,
   project status, and `/tasks`;
-- five skill roots: critical review, collaborative thinking, handoffs,
-  the Thermo-Nuclear code-quality review, and incremental standup updates;
+- six skill roots: critical review, collaborative thinking, handoffs,
+  the Thermo-Nuclear code-quality review, incremental standup updates, and
+  behavior-first technical explanations;
 - the `modus-vivendi-tinted` and `gold-rush` themes.
 
 Use `pi config` to enable or disable individual package resources after
 installation.
+
+## Technical explanations
+
+Use `/skill:explaining-technical-work` or ask for an explanation of an unfamiliar
+change, investigation, or design. The skill builds the behavioral picture before
+introducing implementation details: before/after for changes, expected/observed
+for investigations, and a compact example or diagram when it helps. Exact factual
+questions remain direct. It does not require a task or pull request.
 
 ## Incremental standup updates
 

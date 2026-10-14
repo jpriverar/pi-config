@@ -32,6 +32,7 @@ const skillNames = [
   "thinking-partner",
   "handoff",
   "thermo-nuclear-code-quality-review",
+  "explaining-technical-work",
 ] as const;
 type SkillName = (typeof skillNames)[number];
 type Mode = "baseline" | "package";

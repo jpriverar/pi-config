@@ -50,6 +50,8 @@ const publicManifest = {
     "./skills/thinking-partner",
     "./skills/handoff",
     "./skills/thermo-nuclear-code-quality-review",
+    "./skills/standup",
+    "./skills/explaining-technical-work",
   ],
   prompts: ["./prompts/review.md"],
   themes: ["./themes/modus-vivendi-tinted.json", "./themes/gold-rush.json"],

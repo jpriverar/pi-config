@@ -123,6 +123,30 @@ test("behavior evaluator requires two relevant questions and rejects concrete ad
   }
 });
 
+test("explanation scenario distinguishes behavior from symbols and unsupported claims", async () => {
+  const scenario = await loadScenario(
+    "explaining-technical-work",
+    scenariosDirectory,
+  );
+  const explanation =
+    "The caller needs a total, not detailed records. " +
+    "Before: eligible records + examples -> count locally. " +
+    "After: same eligibility filter -> total directly. " +
+    "Check that both paths count the same eligible records. " +
+    "Performance is not measured and production behavior is unverified.";
+
+  assert.equal(evaluateScenario(scenario, explanation).passed, true);
+  for (const inadequate of [
+    "`getTotal` calls `countEligible` instead of `listIssues`.",
+    "`getTotal` was changed. " + explanation,
+    explanation.replace("records + examples", "records"),
+    explanation + " It is 10x faster.",
+    explanation + " I deployed the change.",
+  ]) {
+    assert.equal(evaluateScenario(scenario, inadequate).passed, false);
+  }
+});
+
 test("runScenario awaits final persistence before deadline cleanup", async () => {
   const source = await readFile(
     join(testsDirectory, "skill-behavior.ts"),
