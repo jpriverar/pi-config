@@ -208,9 +208,9 @@ The package manifest loads:
   and conversation cloning,
   bounded worktree allocation, lifecycle-safe task mutation and presentation,
   project status, and `/tasks`;
-- seven skill roots: critical review, collaborative thinking, handoffs,
+- eight skill roots: critical review, collaborative thinking, handoffs,
   the Thermo-Nuclear code-quality review, incremental standup updates,
-  behavior-first technical explanations, and development workflows;
+  behavior-first technical explanations, development workflows, and brief RFCs;
 - the `modus-vivendi-tinted` and `gold-rush` themes.
 
 Use `pi config` to enable or disable individual package resources after
@@ -237,6 +237,15 @@ follow-up tasks. It is not needed for every quick question or review-only reques
 The strict review skill uses `explaining-technical-work` for substantial findings
 while retaining its maintainability bar and inline `/review` behavior. Skill
 completion is evidence about a step, not automatic completion of the whole task.
+
+## Brief technical RFCs
+
+Use `/skill:writing-rfcs` or ask to draft, revise, or format a technical RFC.
+The skill captures a five-section minimal RFC and native document typography,
+keeps unresolved decisions distinct from accepted trade-offs, and requires
+content and formatting read-back. It uses the user's template and examples at
+runtime; internal document links and project evidence do not belong in this
+public package. Unsupported document operations remain explicit manual steps.
 
 ## Incremental standup updates
 

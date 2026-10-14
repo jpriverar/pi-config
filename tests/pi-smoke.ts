@@ -53,6 +53,7 @@ const publicManifest = {
     "./skills/standup",
     "./skills/explaining-technical-work",
     "./skills/development-workflow",
+    "./skills/writing-rfcs",
   ],
   prompts: ["./prompts/review.md"],
   themes: ["./themes/modus-vivendi-tinted.json", "./themes/gold-rush.json"],

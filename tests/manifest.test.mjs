@@ -28,6 +28,7 @@ const expectedSkills = [
   "./skills/standup",
   "./skills/explaining-technical-work",
   "./skills/development-workflow",
+  "./skills/writing-rfcs",
 ];
 
 const expectedPrompts = ["./prompts/review.md"];
