@@ -208,12 +208,35 @@ The package manifest loads:
   and conversation cloning,
   bounded worktree allocation, lifecycle-safe task mutation and presentation,
   project status, and `/tasks`;
-- five skill roots: critical review, collaborative thinking, handoffs,
-  the Thermo-Nuclear code-quality review, and incremental standup updates;
+- seven skill roots: critical review, collaborative thinking, handoffs,
+  the Thermo-Nuclear code-quality review, incremental standup updates,
+  behavior-first technical explanations, and development workflows;
 - the `modus-vivendi-tinted` and `gold-rush` themes.
 
 Use `pi config` to enable or disable individual package resources after
 installation.
+
+## Technical explanations
+
+Use `/skill:explaining-technical-work` or ask for an explanation of an unfamiliar
+change, investigation, or design. The skill builds the behavioral picture before
+introducing implementation details: before/after for changes, expected/observed
+for investigations, and a compact example or diagram when it helps. Exact factual
+questions remain direct. It does not require a task or pull request.
+
+## Development workflows
+
+Use `/skill:development-workflow` or ask to resume or hand off approved
+development work. The skill selects the next useful action from the agreed finish
+line, current evidence, and existing authority. Conditional references cover
+review/CI loops, validation, waiting, related deliverables, and communication.
+It reuses existing specialist skills and task tools rather than adding task
+states, background watchers, or permission to merge, deploy, post, or create
+follow-up tasks. It is not needed for every quick question or review-only request.
+
+The strict review skill uses `explaining-technical-work` for substantial findings
+while retaining its maintainability bar and inline `/review` behavior. Skill
+completion is evidence about a step, not automatic completion of the whole task.
 
 ## Incremental standup updates
 

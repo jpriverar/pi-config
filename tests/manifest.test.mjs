@@ -26,6 +26,8 @@ const expectedSkills = [
   "./skills/handoff",
   "./skills/thermo-nuclear-code-quality-review",
   "./skills/standup",
+  "./skills/explaining-technical-work",
+  "./skills/development-workflow",
 ];
 
 const expectedPrompts = ["./prompts/review.md"];

@@ -123,6 +123,78 @@ test("behavior evaluator requires two relevant questions and rejects concrete ad
   }
 });
 
+test("explanation scenario distinguishes behavior from symbols and unsupported claims", async () => {
+  const scenario = await loadScenario(
+    "explaining-technical-work",
+    scenariosDirectory,
+  );
+  const explanation =
+    "The caller needs a total, not detailed records. " +
+    "Before: eligible records + examples -> count locally. " +
+    "After: same eligibility filter -> total directly. " +
+    "Check that both paths count the same eligible records. " +
+    "Performance is not measured and production behavior is unverified.";
+
+  assert.equal(evaluateScenario(scenario, explanation).passed, true);
+  for (const inadequate of [
+    "`getTotal` calls `countEligible` instead of `listIssues`.",
+    "`getTotal` was changed. " + explanation,
+    explanation.replace("records + examples", "records"),
+    explanation + " It is 10x faster.",
+    explanation + " I deployed the change.",
+  ]) {
+    assert.equal(evaluateScenario(scenario, inadequate).passed, false);
+  }
+});
+
+test("workflow scenario rejects lost verification and unauthorized handoffs", async () => {
+  const scenario = await loadScenario(
+    "development-workflow",
+    scenariosDirectory,
+  );
+  const handoff =
+    "The PR merged, but production behavior is unverified. " +
+    "Confirm deployment and observe qualifying traffic for the expected behavior. " +
+    "Keep the commitment in the current task, or obtain approval for an explicit handoff.";
+
+  assert.equal(evaluateScenario(scenario, handoff).passed, true);
+  for (const inadequate of [
+    "The PR merged. Everything is complete.",
+    handoff + " I created the verification task.",
+    handoff + " I'll create the verification task.",
+    handoff + " The merge proves production works.",
+    handoff + " I deployed the change.",
+  ]) {
+    assert.equal(evaluateScenario(scenario, inadequate).passed, false);
+  }
+});
+
+test("review scenario preserves structural rigor and scope context", async () => {
+  const scenario = await loadScenario(
+    "thermo-nuclear-code-quality-review",
+    scenariosDirectory,
+  );
+  const review =
+    "Request changes for structural simplification. " +
+    "Before, one router owned handler selection; now feature branches scatter that decision. " +
+    "Crossing 1,000 lines, optional booleans, an any cast, and a pass-through wrapper increase that cost. " +
+    "The unchanged legacy timeout stays deferred absent new evidence. " +
+    "The reviewed revision is unavailable in this hypothetical.";
+
+  assert.equal(evaluateScenario(scenario, review).passed, true);
+  assert.equal(
+    evaluateScenario(scenario, review + " Approve because tests pass.").passed,
+    false,
+  );
+  assert.equal(
+    evaluateScenario(
+      scenario,
+      "Structural simplification: 1,000 lines, optional booleans, any casts, branches, and wrappers.",
+    ).passed,
+    false,
+  );
+});
+
 test("runScenario awaits final persistence before deadline cleanup", async () => {
   const source = await readFile(
     join(testsDirectory, "skill-behavior.ts"),
