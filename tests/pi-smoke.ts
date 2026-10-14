@@ -52,6 +52,7 @@ const publicManifest = {
     "./skills/thermo-nuclear-code-quality-review",
     "./skills/standup",
     "./skills/explaining-technical-work",
+    "./skills/development-workflow",
   ],
   prompts: ["./prompts/review.md"],
   themes: ["./themes/modus-vivendi-tinted.json", "./themes/gold-rush.json"],

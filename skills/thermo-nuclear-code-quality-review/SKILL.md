@@ -24,6 +24,22 @@ Look for **code judo**: a careful reframing that preserves behavior while deleti
 - **Canonical ownership:** Keep feature logic in the package, service, module, or layer that owns it. Reuse canonical helpers instead of creating near-duplicates.
 - **Orchestration:** Flag unnecessary sequencing when independent work is clearer in parallel. Prefer atomic related updates when partial state would be hard to reason about.
 
+## Review context
+
+Identify the reviewed revision, agreed scope, and relevant prior findings with
+their disposition and rationale. If the revision is unavailable, say so rather
+than inventing one. A prior review does not cover later changes automatically.
+
+Distinguish introduced defects and relevant structural problems from unchanged
+pre-existing debt or optional improvements. Existing debt is not an automatic
+blocker, but new evidence or changed reachability can make a previously deferred
+problem relevant. Scope decisions inform review; they do not dictate the verdict.
+
+For substantial findings, use `explaining-technical-work`: establish the purpose,
+previous and changed behavior, and consequence before mapping it to symbols and
+file references. Explain structural cost even when public behavior is unchanged.
+Use a compact example or diagram where it clarifies the flow, not as ceremony.
+
 ## Findings
 
 Prioritize structural regressions, missed code-judo simplifications, spaghetti or branching growth, boundary and type-contract problems, then file-size and general maintainability concerns.

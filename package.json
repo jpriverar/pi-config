@@ -20,7 +20,7 @@
     "test:file": "tsx --test",
     "test:bootstrap": "tsx --test tests/reconcile-personal-profile.test.ts tests/bootstrap-macos.test.ts",
     "typecheck": "tsc --noEmit",
-    "format:check": "prettier --check package.json tsconfig*.json 'bin/**/*.mjs' 'extensions/**/*.ts' 'lib/**/*.{ts,mjs}' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md skills/thermo-nuclear-code-quality-review/SKILL.md 'skills/standup/**/*.md' 'skills/standup/**/*.mjs' 'skills/explaining-technical-work/**/*.md' 'prompts/*.md' 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
+    "format:check": "prettier --check package.json tsconfig*.json 'bin/**/*.mjs' 'extensions/**/*.ts' 'lib/**/*.{ts,mjs}' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md skills/thermo-nuclear-code-quality-review/SKILL.md 'skills/standup/**/*.md' 'skills/standup/**/*.mjs' 'skills/explaining-technical-work/**/*.md' 'skills/development-workflow/**/*.md' 'prompts/*.md' 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
     "verify:portable": "node scripts/verify-portable.mjs",
     "verify:smoke": "tsx tests/pi-smoke.ts",
     "verify:skills": "bash -lc 'set -euo pipefail; : \"${PI_SKILL_TEST_MODEL:?PI_SKILL_TEST_MODEL=<provider>/<model> is required}\"; output_root=$(mktemp -d \"${TMPDIR:-/tmp}/pi-skill-behavior.XXXXXX\"); trap \"rm -rf \\\"$output_root\\\"\" EXIT; if tsx tests/skill-behavior.ts --mode baseline --output \"$output_root/baseline\"; then echo \"baseline unexpectedly discovered one or more skills\" >&2; exit 1; fi; tsx tests/skill-behavior.ts --mode package --package \"$PWD\" --output \"$output_root/package\"'",
@@ -47,7 +47,8 @@
       "./skills/handoff",
       "./skills/thermo-nuclear-code-quality-review",
       "./skills/standup",
-      "./skills/explaining-technical-work"
+      "./skills/explaining-technical-work",
+      "./skills/development-workflow"
     ],
     "prompts": [
       "./prompts/review.md"

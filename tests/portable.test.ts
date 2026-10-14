@@ -97,7 +97,7 @@ test("package scripts cover the bootstrap release gates", () => {
   );
   assert.equal(
     pkg.scripts["format:check"],
-    "prettier --check package.json tsconfig*.json 'bin/**/*.mjs' 'extensions/**/*.ts' 'lib/**/*.{ts,mjs}' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md skills/thermo-nuclear-code-quality-review/SKILL.md 'skills/standup/**/*.md' 'skills/standup/**/*.mjs' 'skills/explaining-technical-work/**/*.md' 'prompts/*.md' 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
+    "prettier --check package.json tsconfig*.json 'bin/**/*.mjs' 'extensions/**/*.ts' 'lib/**/*.{ts,mjs}' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md skills/thermo-nuclear-code-quality-review/SKILL.md 'skills/standup/**/*.md' 'skills/standup/**/*.mjs' 'skills/explaining-technical-work/**/*.md' 'skills/development-workflow/**/*.md' 'prompts/*.md' 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
   );
   assert.match(pkg.scripts["verify:skills"], /--mode baseline/);
   assert.match(pkg.scripts["verify:skills"], /--mode package/);
