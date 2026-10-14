@@ -455,7 +455,7 @@ test(
       "release_pending",
     );
     const release = tools
-      .get("worktree_pool")
+      .get("worktree_release")
       .execute(
         call.toolCallId,
         call.input,

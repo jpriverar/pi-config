@@ -157,9 +157,12 @@ export async function createWorktreeLifecycleFixture(
     },
     ui: { notify() {} },
   };
-  const event = (id: string, input: Record<string, unknown>) => ({
+  const event = (
+    id: string,
+    { action, ...input }: Record<string, unknown>,
+  ) => ({
     toolCallId: id,
-    toolName: "worktree_pool",
+    toolName: `worktree_${action}`,
     input,
   });
   const hook = async (name: string, input: any) => {

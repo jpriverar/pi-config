@@ -21,11 +21,7 @@ export function classifyTaskToolRequirement(
       ? { kind: "none" }
       : { kind: "active-task" };
   }
-  if (
-    toolName === "worktree_pool" &&
-    isRecord(input) &&
-    input.action === "acquire"
-  ) {
+  if (toolName === "worktree_acquire") {
     return { kind: "active-task" };
   }
 

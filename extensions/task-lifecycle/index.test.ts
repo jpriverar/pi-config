@@ -964,33 +964,31 @@ test("requires an Active task and prepares ordinary pool acquisition", async () 
   const h = harness();
   const guard = h.handlers.get("tool_call")![0];
   const input: Record<string, unknown> = {
-    action: "acquire",
     repository: "repo",
     branch: "topic",
   };
 
   assert.deepEqual(
     await guard(
-      { toolCallId: "acquire-call", toolName: "worktree_pool", input },
+      { toolCallId: "acquire-call", toolName: "worktree_acquire", input },
       h.context,
     ),
     {
       block: true,
       reason:
-        "worktree_pool acquire requires an Active task; claim a task before retrying",
+        "worktree_acquire requires an Active task; claim a task before retrying",
     },
   );
 
   h.guardState.activeTasks = [activeIssue("jp-a")];
   assert.equal(
     await guard(
-      { toolCallId: "acquire-call", toolName: "worktree_pool", input },
+      { toolCallId: "acquire-call", toolName: "worktree_acquire", input },
       h.context,
     ),
     undefined,
   );
   assert.deepEqual(input, {
-    action: "acquire",
     repository: "repo",
     branch: "topic",
   });
@@ -1004,9 +1002,8 @@ test("records successful acquisition against the task captured at tool_call", as
   const h = harness();
   const acquire = {
     toolCallId: "acquire-call",
-    toolName: "worktree_pool",
+    toolName: "worktree_acquire",
     input: {
-      action: "acquire",
       repository: "repo",
       branch: "topic",
       startPoint: "origin/main",
@@ -1059,8 +1056,8 @@ test("rejects a malformed successful acquire receipt without mutation", async ()
   const h = harness();
   const acquire = {
     toolCallId: "acquire-call",
-    toolName: "worktree_pool",
-    input: { action: "acquire", repository: "repo", branch: "topic" },
+    toolName: "worktree_acquire",
+    input: { repository: "repo", branch: "topic" },
   };
   h.guardState.activeTasks = [activeIssue("jp-a")];
   await h.handlers.get("tool_call")![0](acquire, h.context);
@@ -1079,7 +1076,7 @@ test("rejects a malformed successful acquire receipt without mutation", async ()
       content: [
         {
           type: "text",
-          text: "unable to finalize worktree_pool acquire lifecycle state",
+          text: "unable to finalize worktree_acquire lifecycle state",
         },
       ],
       details: { action: "acquire" },
@@ -1095,35 +1092,27 @@ test("prepares associated release and preserves recovery operations", async () =
   h.guardState.activeTasks = [activeIssue("jp-a")];
   h.guardState.associatedTasks = [activeIssue("jp-a")];
   const input: Record<string, unknown> = {
-    action: "release",
     repository: "repo",
     claimId: "claim-1",
   };
 
   assert.equal(
     await guard(
-      { toolCallId: "release-call", toolName: "worktree_pool", input },
+      { toolCallId: "release-call", toolName: "worktree_release", input },
       h.context,
     ),
     undefined,
   );
   assert.deepEqual(input, {
-    action: "release",
     repository: "repo",
     claimId: "claim-1",
   });
   assert.equal(
-    await guard(
-      { toolName: "worktree_pool", input: { action: "list" } },
-      h.context,
-    ),
+    await guard({ toolName: "worktree_list", input: {} }, h.context),
     undefined,
   );
   assert.equal(
-    await guard(
-      { toolName: "worktree_pool", input: { action: "repair" } },
-      h.context,
-    ),
+    await guard({ toolName: "worktree_repair", input: {} }, h.context),
     undefined,
   );
 
@@ -1131,8 +1120,8 @@ test("prepares associated release and preserves recovery operations", async () =
   assert.equal(
     await recovery.handlers.get("tool_call")![0](
       {
-        toolName: "worktree_pool",
-        input: { action: "release", claimId: "unassociated" },
+        toolName: "worktree_release",
+        input: { claimId: "unassociated" },
       },
       recovery.context,
     ),
@@ -1143,8 +1132,8 @@ test("prepares associated release and preserves recovery operations", async () =
 test("fails associated release closed for foreign, ambiguous, or unknown ownership", async () => {
   const release = {
     toolCallId: "release-call",
-    toolName: "worktree_pool",
-    input: { action: "release", repository: "repo", claimId: "claim-1" },
+    toolName: "worktree_release",
+    input: { repository: "repo", claimId: "claim-1" },
   };
 
   const foreign = harness();
@@ -1192,8 +1181,8 @@ test("finalizes correlated release results and skips failures", async () => {
   h.guardState.associatedTasks = [activeIssue("jp-a")];
   const release = {
     toolCallId: "release-call",
-    toolName: "worktree_pool",
-    input: { action: "release", repository: "repo", claimId: "claim-1" },
+    toolName: "worktree_release",
+    input: { repository: "repo", claimId: "claim-1" },
   };
   await guard(release, h.context);
   await finalize(
@@ -1208,8 +1197,8 @@ test("finalizes correlated release results and skips failures", async () => {
 
   const acquire = {
     toolCallId: "failed-acquire",
-    toolName: "worktree_pool",
-    input: { action: "acquire", repository: "repo", branch: "topic" },
+    toolName: "worktree_acquire",
+    input: { repository: "repo", branch: "topic" },
   };
   await guard(acquire, h.context);
   const count = h.calls.length;
@@ -1236,8 +1225,8 @@ test("returns a curated error when pool result finalization fails", async () => 
   h.guardState.associatedTasks = [activeIssue("jp-a")];
   const release = {
     toolCallId: "release-call",
-    toolName: "worktree_pool",
-    input: { action: "release", repository: "repo", claimId: "claim-1" },
+    toolName: "worktree_release",
+    input: { repository: "repo", claimId: "claim-1" },
   };
   await h.handlers.get("tool_call")![0](release, h.context);
   h.guardState.finalizationError = new Error(
@@ -1256,7 +1245,7 @@ test("returns a curated error when pool result finalization fails", async () => 
     content: [
       {
         type: "text",
-        text: "worktree_pool release completed for claim claim-1, but task jp-a lifecycle finalization failed; reconcile the task before continuing",
+        text: "worktree_release completed for claim claim-1, but task jp-a lifecycle finalization failed; reconcile the task before continuing",
       },
     ],
     details: { action: "release", claimId: "claim-1", taskId: "jp-a" },

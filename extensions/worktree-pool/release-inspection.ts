@@ -15,6 +15,21 @@ export async function inspectRelease(
   git: Git,
   discard: boolean,
 ): Promise<{ requiresForce: boolean; warning?: string }> {
+  try {
+    return await inspect(path, git, discard);
+  } catch (error) {
+    throw new Error(
+      `Release inspection failed for ${path}: ${error instanceof Error ? error.message : String(error)}. force cannot bypass inspection failures. No worktree was removed.`,
+      { cause: error },
+    );
+  }
+}
+
+async function inspect(
+  path: string,
+  git: Git,
+  discard: boolean,
+): Promise<{ requiresForce: boolean; warning?: string }> {
   const checkout = await realpath(path);
   const gitDir = await realpath(
     (await git(path, ["rev-parse", "--absolute-git-dir"])).trim(),
@@ -25,35 +40,8 @@ export async function inspectRelease(
     gitDirs,
     gitDir,
   );
-  const initialized = (
-    await git(path, [
-      "submodule",
-      "foreach",
-      "--quiet",
-      "--recursive",
-      'printf "%s\\0" "$toplevel/$sm_path"',
-    ])
-  )
-    .split("\0")
-    .filter(Boolean);
-  const checkouts = new Map<string, string>([[path, "."]]);
-  for (const child of initialized) {
-    const canonical = await realpath(child);
-    if (!isWithin(checkout, canonical))
-      throw new Error(
-        `cannot release ${path}: submodule checkout ${child} is outside the managed worktree`,
-      );
-    const childGitDir = await realpath(
-      (await git(child, ["rev-parse", "--absolute-git-dir"])).trim(),
-    );
-    if (!isWithin(gitDir, childGitDir) && !isWithin(checkout, childGitDir))
-      throw new Error(
-        `cannot release ${path}: submodule Git directory ${childGitDir} is outside this worktree's ownership`,
-      );
-    const label = relative(checkout, canonical);
-    checkouts.set(child, label);
-    gitDirs.set(childGitDir, label);
-  }
+  const checkouts = new Map<string, string>([[checkout, "."]]);
+  await collectSubmodules(checkout, git, checkout, gitDir, checkouts, gitDirs);
   for (const [directory, label] of gitDirs) {
     const registered = await git(path, [
       `--git-dir=${directory}`,
@@ -103,7 +91,7 @@ export async function inspectRelease(
   }
   const summary = warnings.join("\n");
   return {
-    requiresForce: retained || initialized.length > 0,
+    requiresForce: retained || checkouts.size > 1,
     ...(summary
       ? {
           warning:
@@ -113,6 +101,81 @@ export async function inspectRelease(
         }
       : {}),
   };
+}
+
+async function collectSubmodules(
+  path: string,
+  git: Git,
+  checkout: string,
+  gitDir: string,
+  checkouts: Map<string, string>,
+  gitDirs: Map<string, string>,
+): Promise<void> {
+  // The index remains authoritative when .gitmodules is incomplete or absent.
+  const entries = await git(path, ["ls-files", "--stage", "-z"]);
+  const paths = new Set(
+    entries.split("\0").flatMap((entry) => {
+      const match = /^160000 [0-9a-f]+ [0-3]\t([\s\S]+)$/.exec(entry);
+      return match ? [match[1]] : [];
+    }),
+  );
+  for (const submodule of paths) {
+    const child = join(path, submodule);
+    if (!isWithin(path, child))
+      throw new Error(`submodule path ${child} escapes its parent checkout`);
+    const entry = await optionalStat(child);
+    if (entry === undefined) continue;
+    if (!entry.isDirectory() || entry.isSymbolicLink())
+      throw new Error(
+        `cannot inspect submodule checkout ${child}: expected a plain directory`,
+      );
+    const canonical = await realpath(child);
+    if (!isWithin(checkout, canonical))
+      throw new Error(
+        `submodule checkout ${child} is outside the managed worktree`,
+      );
+    const marker = await optionalStat(join(child, ".git"));
+    if (marker === undefined) {
+      if ((await readdir(child)).length > 0)
+        throw new Error(
+          `submodule checkout ${child} contains files but no .git; ownership cannot be established`,
+        );
+      continue;
+    }
+    if (marker.isSymbolicLink() || (!marker.isFile() && !marker.isDirectory()))
+      throw new Error(
+        `cannot inspect submodule Git marker ${child}/.git: expected a plain file or directory`,
+      );
+    const childGitDir = await realpath(
+      (await git(child, ["rev-parse", "--absolute-git-dir"])).trim(),
+    );
+    if (!isWithin(gitDir, childGitDir) && !isWithin(checkout, childGitDir))
+      throw new Error(
+        `submodule Git directory ${childGitDir} is outside this worktree's ownership`,
+      );
+    if (checkouts.has(canonical))
+      throw new Error(
+        `submodule checkout ${child} aliases an already inspected checkout`,
+      );
+    const label = relative(checkout, canonical);
+    checkouts.set(canonical, label);
+    gitDirs.set(childGitDir, label);
+    await collectSubmodules(
+      canonical,
+      git,
+      checkout,
+      gitDir,
+      checkouts,
+      gitDirs,
+    );
+  }
+}
+
+async function optionalStat(path: string) {
+  return lstat(path).catch((error) => {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  });
 }
 
 async function collectGitDirs(

@@ -1559,12 +1559,11 @@ function requireReleasedWorktrees(
   );
   if (resource === undefined) return;
   const release = JSON.stringify({
-    action: "release",
     repository: resource.repository.slice(0, 256),
     claimId: resource.claimId.slice(0, 128),
   });
   throw new Error(
-    `${tool} cannot transition task ${safeIdentifier(taskId)}: worktree ${safeIdentifier(resource.claimId)} is ${resource.cleanupState}. Release it first with worktree_pool ${release}, then retry ${tool}. Reconcile an interrupted acquisition before release; if release already completed, run task_reconcile to refresh the task record.`,
+    `${tool} cannot transition task ${safeIdentifier(taskId)}: worktree ${safeIdentifier(resource.claimId)} is ${resource.cleanupState}. Release it first with worktree_release(${release}), then retry ${tool}. Reconcile an interrupted acquisition before release; if release already completed, run task_reconcile to refresh the task record.`,
   );
 }
 

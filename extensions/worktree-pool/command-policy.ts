@@ -103,8 +103,8 @@ function block(
     allowed: false,
     reason:
       depth > 0
-        ? `${detail}. Ask the parent session to use worktree_pool ${action}.`
-        : `${detail}. Use worktree_pool ${action}.`,
+        ? `${detail}. Ask the parent session to use worktree_${action}.`
+        : `${detail}. Use worktree_${action}.`,
   };
 }
 function hasHeredoc(command: string): boolean {

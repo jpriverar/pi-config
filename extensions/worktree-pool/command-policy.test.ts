@@ -18,7 +18,7 @@ describe("evaluatePoolCommand", () => {
         0,
       );
       expect(decision.allowed).toBe(false);
-      if (!decision.allowed) expect(decision.reason).toContain("worktree_pool");
+      if (!decision.allowed) expect(decision.reason).toContain("worktree_");
     });
   }
 
@@ -71,7 +71,7 @@ describe("evaluatePoolCommand", () => {
   test("uses depth-aware cooperative guidance", () => {
     const parent = evaluatePoolCommand("git worktree add target HEAD", 0);
     expect(parent.allowed).toBe(false);
-    if (!parent.allowed) expect(parent.reason).toContain("Use worktree_pool");
+    if (!parent.allowed) expect(parent.reason).toContain("Use worktree_");
 
     const child = evaluatePoolCommand("git worktree add target HEAD", 1);
     expect(child.allowed).toBe(false);

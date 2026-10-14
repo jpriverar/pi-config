@@ -219,8 +219,9 @@ function harness(options: { runtimeError?: Error } = {}) {
       return result;
     },
     async call(params: any) {
-      const tool = tools.get("worktree_pool")!;
-      const prepared = tool.prepareArguments?.(params) ?? params;
+      const { action, ...input } = params;
+      const tool = tools.get(`worktree_${action}`)!;
+      const prepared = tool.prepareArguments?.(input) ?? input;
       return await tool.execute(
         "pool-call",
         prepared,
@@ -240,10 +241,15 @@ async function acquire(h: ReturnType<typeof harness>) {
   });
 }
 
-describe("worktree_pool tool", () => {
-  test("registers one tool and only the Bash command guard", () => {
+describe("worktree tools", () => {
+  test("registers action-specific tools and only the Bash command guard", () => {
     const h = harness();
-    expect([...h.tools.keys()]).toEqual(["worktree_pool"]);
+    expect([...h.tools.keys()]).toEqual([
+      "worktree_list",
+      "worktree_acquire",
+      "worktree_release",
+      "worktree_repair",
+    ]);
     expect(h.commands).toEqual([]);
     expect(h.statuses).toEqual([]);
     expect(h.handlers.get("session_start") ?? []).toHaveLength(0);
@@ -256,24 +262,47 @@ describe("worktree_pool tool", () => {
     expect(h.runtimeLoads).toBe(0);
   });
 
-  test("drops empty provider placeholders before action validation", async () => {
+  test("schemas expose only valid inputs and require operation identities", () => {
     const h = harness();
+    for (const [action, fields, required] of [
+      ["list", ["repository"], []],
+      [
+        "acquire",
+        ["repository", "branch", "startPoint"],
+        ["repository", "branch"],
+      ],
+      [
+        "release",
+        ["repository", "claimId", "force"],
+        ["repository", "claimId"],
+      ],
+      ["repair", ["repository", "slot"], ["repository", "slot"]],
+    ] as const) {
+      const schema = h.tools.get(`worktree_${action}`)!.parameters as any;
+      expect(Object.keys(schema.properties)).toEqual([...fields]);
+      expect(schema.required).toEqual([...required]);
+      expect(schema.additionalProperties).toBe(false);
+      for (const field of required)
+        expect(schema.properties[field].minLength).toBe(1);
+    }
+  });
 
-    await h.call({
-      action: "acquire",
-      repository: "demo",
-      branch: "topic",
-      startPoint: "",
-      claimId: "",
-      slot: "",
-      force: false,
-    });
-
-    expect(h.pool.calls).toHaveLength(1);
-    expect(h.pool.calls[0]).toMatchObject({
-      name: "acquire",
-      args: [{ repository: "demo", branch: "topic" }],
-    });
+  test("rejects foreign fields with correction guidance before loading the runtime", async () => {
+    const h = harness();
+    await expect(
+      h.call({
+        action: "release",
+        repository: "demo",
+        claimId: CLAIM_ID,
+        branch: "topic",
+      }),
+    ).rejects.toThrow(
+      "worktree_release does not accept branch. Allowed inputs: repository, claimId, force",
+    );
+    await expect(
+      h.call({ action: "release", claimId: CLAIM_ID }),
+    ).rejects.toThrow("worktree_release.repository must be a non-empty string");
+    expect(h.runtimeLoads).toBe(0);
   });
 
   test("force is a boolean opt-in for release only", async () => {
@@ -289,14 +318,14 @@ describe("worktree_pool tool", () => {
       ).rejects.toThrow("release.force");
     }
     await expect(h.call({ action: "list", force: true })).rejects.toThrow(
-      "list.force",
+      "does not accept force",
     );
     expect(h.runtimeLoads).toBe(0);
   });
 
   test("does not expose stable identity inputs through raw acquire", async () => {
     const h = harness();
-    const parameters = h.tools.get("worktree_pool")!.parameters as {
+    const parameters = h.tools.get("worktree_acquire")!.parameters as {
       properties: Record<string, unknown>;
     };
     expect(parameters.properties).not.toHaveProperty("pathId");
@@ -308,7 +337,7 @@ describe("worktree_pool tool", () => {
         branch: "topic",
         claimId: CLAIM_ID,
       }),
-    ).rejects.toThrow("acquire.claimId");
+    ).rejects.toThrow("does not accept claimId");
   });
 
   test("uses pool-generated acquire identities", async () => {
@@ -350,11 +379,71 @@ describe("worktree_pool tool", () => {
     expect(h.pool.calls[0]).toEqual({ name: "list", args: [undefined] });
   });
 
+  test("accepts an empty repository placeholder when listing all pools", async () => {
+    const h = harness();
+    await h.call({ action: "list", repository: "" });
+    expect(h.runtimeRequests).toEqual([[]]);
+    expect(h.pool.calls[0]).toEqual({ name: "list", args: [undefined] });
+  });
+
+  test("lists actionable identities, ownership, capacity and blocker reasons in model-facing text", async () => {
+    const h = harness();
+    h.pool.list = async () => ({
+      repositories: [
+        {
+          name: "demo",
+          capacity: 3,
+          used: 1,
+          worktrees: [
+            {
+              claimId: CLAIM_ID,
+              path: POOLED_PATH,
+              branch: "topic",
+              currentBranch: "topic",
+              head: ACQUIRED_HEAD,
+              clean: false,
+              branchProtectsHead: true,
+              state: "needs-attention",
+              reason: "worktree is dirty",
+              owner: {
+                sessionId: "session-a",
+                host: "test-host",
+                pid: 4242,
+                started: 1700000000000,
+              },
+              evidence: {
+                pathExists: true,
+                registered: true,
+                nativeClaimMatches: true,
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await h.call({ action: "list", repository: "demo" });
+    for (const value of [
+      CLAIM_ID,
+      POOLED_PATH,
+      "session-a",
+      "test-host",
+      "4242",
+      "topic",
+      "needs-attention",
+      "worktree is dirty",
+      "1/3",
+    ])
+      expect(result.content[0].text).toContain(value);
+  });
+
   test("returns readable acquire text and structured fields", async () => {
     const h = harness();
     const result = await acquire(h);
     expect(result.content[0].text).toContain(POOLED_PATH);
     expect(result.content[0].text).toContain(`HEAD ${ACQUIRED_HEAD}`);
+    expect(result.content[0].text).toContain(
+      `worktree_release(${JSON.stringify({ repository: "demo", claimId: CLAIM_ID })})`,
+    );
     expect(result.details).toMatchObject({
       action: "acquire",
       claimId: CLAIM_ID,
@@ -454,7 +543,7 @@ describe("worktree_pool tool", () => {
       }),
     ).toEqual({
       block: true,
-      reason: expect.stringContaining("Use worktree_pool acquire"),
+      reason: expect.stringContaining("Use worktree_acquire"),
     });
     process.env.PI_SUBAGENT_DEPTH = "2";
     expect(

@@ -983,7 +983,7 @@ describe("bearer-capability lifecycle", () => {
           nativeClaimMatches: true,
         },
       });
-      expect(report.reason).toContain("worktree_pool release");
+      expect(report.reason).toContain("worktree_release");
     } finally {
       await h.cleanup();
     }

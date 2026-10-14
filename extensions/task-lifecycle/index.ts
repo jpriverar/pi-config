@@ -493,7 +493,7 @@ export function createTaskLifecycleExtension(
       name: "task_wait",
       label: "Wait on task",
       description:
-        "Wait on dependencies or one typed check after explicitly releasing all task worktrees with worktree_pool.",
+        "Wait on dependencies or one typed check after explicitly releasing all task worktrees with worktree_release.",
       parameters: objectSchema(
         {
           taskId: taskIdProperty,
@@ -560,7 +560,7 @@ export function createTaskLifecycleExtension(
       name: "task_defer",
       label: "Defer task",
       description:
-        "Defer the current session's active task after explicitly releasing all task worktrees with worktree_pool.",
+        "Defer the current session's active task after explicitly releasing all task worktrees with worktree_release.",
       parameters: objectSchema(
         {
           taskId: taskIdProperty,
@@ -689,7 +689,7 @@ export function createTaskLifecycleExtension(
       name: "task_close",
       label: "Close task",
       description:
-        "Close a lifecycle task with an explicit disposition after releasing all task worktrees with worktree_pool.",
+        "Close a lifecycle task with an explicit disposition after releasing all task worktrees with worktree_release.",
       parameters: objectSchema(
         {
           taskId: taskIdProperty,
@@ -835,11 +835,7 @@ export function createTaskLifecycleExtension(
     pi.on("tool_call", async (event, context) => {
       const toolName =
         typeof event?.toolName === "string" ? event.toolName : "";
-      if (
-        toolName === "worktree_pool" &&
-        isRecord(event.input) &&
-        event.input.action === "release"
-      ) {
+      if (toolName === "worktree_release" && isRecord(event.input)) {
         const prepared = await preparePoolRelease(
           event,
           context,
@@ -867,13 +863,13 @@ export function createTaskLifecycleExtension(
       if (requirement.kind === "active-task") {
         if (activeTask === null) {
           return block(
-            toolName === "worktree_pool"
-              ? "worktree_pool acquire requires an Active task; claim a task before retrying"
+            toolName === "worktree_acquire"
+              ? "worktree_acquire requires an Active task; claim a task before retrying"
               : `${toolName} execution requires an Active task; claim a task before retrying`,
           );
         }
         if (
-          toolName !== "worktree_pool" ||
+          toolName !== "worktree_acquire" ||
           !isRecord(event.input) ||
           typeof event.toolCallId !== "string"
         ) {
@@ -898,8 +894,8 @@ export function createTaskLifecycleExtension(
         } catch (error) {
           const reason =
             error instanceof WorktreeAssociationError
-              ? `${error.message}; inspect the exact claim with worktree_pool list or repair before retrying`
-              : "unable to verify worktree_pool acquire lifecycle state";
+              ? `${error.message}; inspect the exact claim with worktree_list or worktree_repair before retrying`
+              : "unable to verify worktree_acquire lifecycle state";
           return block(`${reason}; no worktree was allocated`);
         }
         pendingPoolOperations.set(event.toolCallId, {
@@ -932,7 +928,8 @@ export function createTaskLifecycleExtension(
 
     pi.on("tool_result", async (event, context) => {
       if (
-        event?.toolName !== "worktree_pool" ||
+        (event?.toolName !== "worktree_acquire" &&
+          event?.toolName !== "worktree_release") ||
         typeof event.toolCallId !== "string"
       ) {
         return undefined;
@@ -941,7 +938,10 @@ export function createTaskLifecycleExtension(
       if (operation === undefined) return undefined;
       pendingPoolOperations.delete(event.toolCallId);
       if (event.isError === true) return undefined;
-      if (!isRecord(event.input) || event.input.action !== operation.mode) {
+      if (
+        !isRecord(event.input) ||
+        event.toolName !== `worktree_${operation.mode}`
+      ) {
         return lifecycleFinalizationError(operation.mode);
       }
 
@@ -1077,7 +1077,7 @@ async function preparePoolRelease(
   }
 
   const active = await activeTaskForProtectedCall(
-    "worktree_pool",
+    "worktree_release",
     context,
     service,
   );
@@ -1086,7 +1086,7 @@ async function preparePoolRelease(
   if (active.task === null) {
     return {
       block: true,
-      reason: `worktree_pool release requires active task ${task.id}; claim it before retrying`,
+      reason: `worktree_release requires active task ${task.id}; claim it before retrying`,
     };
   }
   if (active.task.id !== task.id) {
@@ -1107,7 +1107,7 @@ async function preparePoolRelease(
   } catch {
     return {
       block: true,
-      reason: "unable to prepare worktree_pool release lifecycle state",
+      reason: "unable to prepare worktree_release lifecycle state",
     };
   }
 }
@@ -1167,8 +1167,8 @@ function lifecycleFinalizationError(
 ) {
   const text =
     context === undefined
-      ? `unable to finalize worktree_pool ${mode} lifecycle state`
-      : `worktree_pool ${mode} completed for claim ${context.claimId}, but task ${context.taskId} lifecycle finalization failed; reconcile the task before continuing`;
+      ? `unable to finalize worktree_${mode} lifecycle state`
+      : `worktree_${mode} completed for claim ${context.claimId}, but task ${context.taskId} lifecycle finalization failed; reconcile the task before continuing`;
   return {
     content: [
       {

@@ -170,7 +170,10 @@ test("imports and registers every manifest extension without collisions", async 
     "task_reopen",
     "task_update",
     "task_wait",
-    "worktree_pool",
+    "worktree_acquire",
+    "worktree_list",
+    "worktree_release",
+    "worktree_repair",
     "write",
   ]);
   for (const command of [

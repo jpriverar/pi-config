@@ -1412,7 +1412,7 @@ test("keeps phase and ownership active when resource release fails", async () =>
       session("s1"),
       "close-1",
     ),
-    /task_close.*jp-1.*claim-1.*worktree_pool/,
+    /task_close.*jp-1.*claim-1.*worktree_release/,
   );
 
   assert.equal(store.saved.lifecycle?.phase, "active");
@@ -1981,7 +1981,7 @@ test("pending acquisition prevents waiting or closing", async () => {
     "acquire-pending",
   );
   const reason = new RegExp(
-    `task_(?:wait|close).*jp-1.*${prepared.claimId}.*worktree_pool`,
+    `task_(?:wait|close).*jp-1.*${prepared.claimId}.*worktree_release`,
   );
 
   await assert.rejects(
@@ -2836,7 +2836,7 @@ for (const state of ["active", "acquiring", "release_pending"] as const) {
         }
       };
       await assert.rejects(transition(), (error: Error) => {
-        assert.match(error.message, /worktree_pool/);
+        assert.match(error.message, /worktree_release/);
         assert.match(error.message, /release/);
         assert.ok(error.message.includes(claimId));
         assert.ok(error.message.includes("repo"));
@@ -2981,7 +2981,7 @@ for (const retainedWorktree of [false, true]) {
       const before = structuredClone(store.saved);
       await assert.rejects(
         sut.waitForDependencies("jp-1", ["jp-blocker"], owner, "replan"),
-        /worktree_pool/,
+        /worktree_release/,
       );
       assert.deepEqual(store.saved, before);
       assert.deepEqual(store.blockers, []);

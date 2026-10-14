@@ -25,15 +25,11 @@ test("classifies task-scoped tool requirements", () => {
       { kind: "same-task", taskId: "jp-a" },
     ],
     [
-      "worktree_pool",
-      { action: "acquire", repository: "repo", branch: "topic" },
+      "worktree_acquire",
+      { repository: "repo", branch: "topic" },
       { kind: "active-task" },
     ],
-    [
-      "worktree_pool",
-      { action: "release", claimId: "claim-1" },
-      { kind: "none" },
-    ],
+    ["worktree_release", { claimId: "claim-1" }, { kind: "none" }],
     ["task_reopen", { taskId: "jp-a" }, { kind: "none" }],
     ["task_reconcile", { taskId: "jp-a" }, { kind: "none" }],
     ["bash", { command: "git status" }, { kind: "none" }],

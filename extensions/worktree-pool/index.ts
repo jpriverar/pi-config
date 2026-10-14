@@ -1,5 +1,6 @@
 import { hostname as readHostname } from "node:os";
 
+import type { PoolListing } from "./pool.js";
 import { evaluatePoolCommand } from "./command-policy.js";
 import {
   currentOwner,
@@ -13,7 +14,6 @@ export type { WorktreePoolRuntime } from "./runtime.js";
 const ACTIONS = ["list", "acquire", "release", "repair"] as const;
 type PoolAction = (typeof ACTIONS)[number];
 type PoolParameters = {
-  action: PoolAction;
   repository?: string;
   branch?: string;
   startPoint?: string;
@@ -22,11 +22,26 @@ type PoolParameters = {
   force?: boolean;
 };
 
-const ACTION_FIELDS: Record<PoolAction, ReadonlySet<string>> = {
-  list: new Set(["action", "repository"]),
-  acquire: new Set(["action", "repository", "branch", "startPoint"]),
-  release: new Set(["action", "repository", "claimId", "force"]),
-  repair: new Set(["action", "repository", "slot"]),
+const ACTION_FIELDS = {
+  list: ["repository"],
+  acquire: ["repository", "branch", "startPoint"],
+  release: ["repository", "claimId", "force"],
+  repair: ["repository", "slot"],
+} as const;
+const REQUIRED_FIELDS = {
+  list: [],
+  acquire: ["repository", "branch"],
+  release: ["repository", "claimId"],
+  repair: ["repository", "slot"],
+} as const;
+const DESCRIPTIONS: Record<PoolAction, string> = {
+  list: "Inspect bounded ephemeral worktree pools, including claim IDs, paths, owners, capacity and observed blockers. Omit repository to list all configured repositories. Does not release or repair anything.",
+  acquire:
+    "Acquire an isolated ephemeral worktree on a branch. Returns its claim ID and exact worktree_release call. Repository and branch are required. One writer per worktree; release explicitly when work is durable and no child uses it.",
+  release:
+    "Release one exact managed worktree claim. Required: repository and claimId from worktree_acquire or worktree_list, NOT branch or path. Clean initialized submodules are supported. force deliberately discards local work but never bypasses ownership or safe inspection. Ignored files are removed in either mode.",
+  repair:
+    "Non-destructively inspect or repair managed worktree metadata. Required: repository and slot (managed path or claim ID). Does not release an existing checkout; use worktree_release for that.",
 };
 
 type ExtensionContext = {
@@ -65,36 +80,41 @@ export type WorktreePoolExtensionDependencies = {
   ): Promise<WorktreePoolRuntime>;
 };
 
-const toolParameters = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    action: { type: "string", enum: ACTIONS },
-    repository: {
-      type: "string",
-      description: "Repository name or safe relative path beneath ~/dd.",
-    },
-    branch: { type: "string", description: "Branch to acquire." },
-    startPoint: {
-      type: "string",
-      description:
-        "Optional start point. Recognized remote-tracking refs are fetched before acquisition.",
-    },
-    claimId: {
-      type: "string",
-      description: "Opaque claim ID returned by acquire.",
-    },
-    slot: {
-      type: "string",
-      description: "Managed path or claim ID to repair.",
-    },
-    force: {
-      type: "boolean",
-      description:
-        "Release only: deliberately discard uncommitted/untracked files and submodule-local commits or stashes. Default false warns and preserves local work. Never overrides ownership or managed-path checks.",
-    },
+const properties = {
+  repository: {
+    type: "string",
+    minLength: 1,
+    description:
+      "Repository name or safe relative path beneath ~/dd. Required except when listing all pools.",
   },
-  required: ["action"],
+  branch: {
+    type: "string",
+    minLength: 1,
+    description: "Branch to acquire, e.g. jpriverar/my-feature.",
+  },
+  startPoint: {
+    type: "string",
+    description:
+      "Optional acquisition start point. Recognized remote-tracking refs are fetched first. Omit or use an empty string for the repository default.",
+  },
+  claimId: {
+    type: "string",
+    minLength: 1,
+    description:
+      "Exact opaque claim ID returned by worktree_acquire or worktree_list. Not a branch or path.",
+  },
+  slot: {
+    type: "string",
+    minLength: 1,
+    description:
+      "Managed worktree path or exact claim ID to inspect or repair.",
+  },
+  force: {
+    type: "boolean",
+    default: false,
+    description:
+      "Explicitly discard uncommitted/untracked work and submodule-local commits or stashes. Default false preserves local work. Never bypasses ownership, managed-path, or inspection failures; retrying an inspection failure with force will not help.",
+  },
 } as const;
 
 export function createWorktreePoolExtension(
@@ -108,73 +128,96 @@ export function createWorktreePoolExtension(
         now: deps.now,
       });
 
-    pi.registerTool({
-      name: "worktree_pool",
-      label: "Worktree pool",
-      description:
-        "List, acquire, release, or non-destructively repair machine-wide bounded ephemeral worktrees. Release supports clean submodules; force: true explicitly discards local work. Ignored files are removed in either mode.",
-      parameters: toolParameters,
-      prepareArguments: normalizeActionParameters,
-      async execute(_id, params, _signal, _update, ctx) {
-        validateActionParameters(params);
-        const purpose = params.action === "acquire" ? "acquire" : "identity";
-        const repositories =
-          params.repository === undefined ? [] : [params.repository];
-        const runtime = await deps.loadRuntime(repositories, purpose);
-        const owner = ownerFor(ctx);
+    for (const action of ACTIONS)
+      pi.registerTool({
+        name: `worktree_${action}`,
+        label: `Worktree ${action}`,
+        description: DESCRIPTIONS[action],
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            ACTION_FIELDS[action].map((field) => [
+              field,
+              action === "list"
+                ? {
+                    ...properties.repository,
+                    minLength: 0,
+                    description:
+                      "Optional repository name or safe relative path beneath ~/dd. Omit or use an empty string to list all pools.",
+                  }
+                : properties[field],
+            ]),
+          ),
+          required: REQUIRED_FIELDS[action],
+        },
+        prepareArguments(value) {
+          if (action !== "list" || !isRecord(value) || value.repository !== "")
+            return value;
+          const { repository: _repository, ...params } = value;
+          return params;
+        },
+        async execute(_id, params, _signal, _update, ctx) {
+          validateParameters(action, params);
+          const purpose = action === "acquire" ? "acquire" : "identity";
+          const repositories =
+            params.repository === undefined ? [] : [params.repository];
+          const runtime = await deps.loadRuntime(repositories, purpose);
+          const owner = ownerFor(ctx);
 
-        if (params.action === "list") {
-          const listing = await runtime.pool.list(params.repository);
-          return result(`Pool listing: ${summarizeListing(listing)}`, {
-            action: "list",
-            ...listing,
-          });
-        }
-        if (params.action === "acquire") {
-          const acquired = await runtime.pool.acquire(
-            {
-              repository: params.repository!,
-              branch: params.branch!,
-              ...(params.startPoint === undefined || params.startPoint === ""
-                ? {}
-                : { startPoint: params.startPoint }),
-            },
-            owner,
-          );
-          return result(
-            `${acquired.reused ? "Reused" : "Acquired"} ${acquired.path} on ${acquired.branch} ` +
-              `(HEAD ${acquired.head}; ${acquired.relationship} ${acquired.startPoint} at ${acquired.startPointHead} ` +
-              `[${acquired.startPointFetched ? "fetched" : "local"}]; claim ${acquired.claimId}).`,
-            { action: "acquire", ...acquired },
-          );
-        }
-        if (params.action === "release") {
-          const released = await runtime.pool.release(
+          if (action === "list") {
+            const listing = await runtime.pool.list(params.repository);
+            return result(formatListing(listing), {
+              action: "list",
+              ...listing,
+            });
+          }
+          if (action === "acquire") {
+            const acquired = await runtime.pool.acquire(
+              {
+                repository: params.repository!,
+                branch: params.branch!,
+                ...(params.startPoint === undefined || params.startPoint === ""
+                  ? {}
+                  : { startPoint: params.startPoint }),
+              },
+              owner,
+            );
+            return result(
+              `${acquired.reused ? "Reused" : "Acquired"} ${acquired.path} on ${acquired.branch} ` +
+                `(HEAD ${acquired.head}; ${acquired.relationship} ${acquired.startPoint} at ${acquired.startPointHead} ` +
+                `[${acquired.startPointFetched ? "fetched" : "local"}]; claim ${acquired.claimId}).\n` +
+                `When work is durable and no child uses it, release with worktree_release(${JSON.stringify({ repository: params.repository, claimId: acquired.claimId })}).`,
+              { action: "acquire", ...acquired },
+            );
+          }
+          if (action === "release") {
+            const released = await runtime.pool.release(
+              params.repository!,
+              params.claimId!,
+              owner,
+              undefined,
+              { force: params.force === true },
+            );
+            return result(
+              released.released
+                ? `Released ${released.path}.`
+                : `Claim ${params.claimId} was not released.${released.reason ? `\n${released.reason}` : " Ownership or worktree identity checks did not pass; inspect this claim with worktree_list or worktree_repair."}`,
+              { action: "release", ...released },
+            );
+          }
+
+          const report = await runtime.pool.repair(
             params.repository!,
-            params.claimId!,
+            params.slot!,
             owner,
-            undefined,
-            { force: params.force === true },
           );
           return result(
-            released.released
-              ? `Released ${released.path}.`
-              : `Claim ${params.claimId} was not released.${released.reason ? `\n${released.reason}` : " Ownership or worktree identity checks did not pass; inspect this claim with worktree_pool list or repair."}`,
-            { action: "release", ...released },
+            `${report.repaired ? "Repaired" : "Inspected"} ${report.path}: ${report.state}${report.reason ? ` (${report.reason})` : ""}.`,
+            { action: "repair", ...report },
           );
-        }
-
-        const report = await runtime.pool.repair(
-          params.repository!,
-          params.slot!,
-          owner,
-        );
-        return result(
-          `${report.repaired ? "Repaired" : "Inspected"} ${report.path}: ${report.state}${report.reason ? ` (${report.reason})` : ""}.`,
-          { action: "repair", ...report },
-        );
-      },
-    });
+        },
+      });
 
     pi.on("tool_call", async (event: ToolCallEvent) => {
       if (
@@ -194,62 +237,52 @@ export function createWorktreePoolExtension(
   };
 }
 
-function normalizeActionParameters(value: unknown): unknown {
-  if (!isRecord(value) || !ACTIONS.includes(value.action)) return value;
-  const action = value.action as PoolAction;
-  const normalized = { ...value };
-  for (const [field, fieldValue] of Object.entries(normalized)) {
-    if (
-      !ACTION_FIELDS[action].has(field) &&
-      (fieldValue === "" || (field === "force" && fieldValue === false))
-    ) {
-      delete normalized[field];
-    }
-  }
-  return normalized;
-}
-
-function validateActionParameters(params: PoolParameters): void {
-  if (!ACTIONS.includes(params.action))
-    throw new Error(
-      `unknown worktree_pool action ${JSON.stringify(params.action)}`,
-    );
+function validateParameters(action: PoolAction, params: PoolParameters): void {
+  const fields: readonly string[] = ACTION_FIELDS[action];
   for (const field of Object.keys(params)) {
-    if (!ACTION_FIELDS[params.action].has(field)) {
-      throw new Error(`worktree_pool ${params.action}.${field} is not allowed`);
+    if (!fields.includes(field)) {
+      throw new Error(
+        `worktree_${action} does not accept ${field}. Allowed inputs: ${fields.join(", ")}. Required: ${REQUIRED_FIELDS[action].join(", ") || "none"}.`,
+      );
     }
   }
-  if (params.action !== "list" || params.repository !== undefined)
-    requireText(params.repository, `${params.action}.repository`);
-  if (params.action === "acquire") requireText(params.branch, "acquire.branch");
-  if (params.action === "release")
-    requireText(params.claimId, "release.claimId");
-  if (params.action === "repair") requireText(params.slot, "repair.slot");
+  for (const field of REQUIRED_FIELDS[action])
+    requireText(params[field], `worktree_${action}.${field}`);
+  if (action === "list" && params.repository !== undefined)
+    requireText(params.repository, "worktree_list.repository");
+  if (params.startPoint !== undefined && typeof params.startPoint !== "string")
+    throw new Error("worktree_acquire.startPoint must be a string");
   if (params.force !== undefined && typeof params.force !== "boolean")
-    throw new Error("worktree_pool release.force must be a boolean");
+    throw new Error("worktree_release.force must be a boolean");
 }
 
 function requireText(value: unknown, field: string): asserts value is string {
-  if (typeof value !== "string" || value.length === 0)
-    throw new Error(`worktree_pool ${field} must be a non-empty string`);
+  if (typeof value !== "string" || value.trim().length === 0)
+    throw new Error(`${field} must be a non-empty string`);
 }
 
 function result(text: string, details: Record<string, unknown>) {
   return { content: [{ type: "text" as const, text }], details };
 }
 
-function summarizeListing(listing: {
-  repositories: Array<{ name: string; worktrees: Array<{ state: string }> }>;
-}): string {
-  if (listing.repositories.length === 0) return "no configured repositories";
+function formatListing(listing: PoolListing): string {
+  if (listing.repositories.length === 0)
+    return "No configured worktree repositories.";
   return listing.repositories
-    .map((repository) => {
-      const states =
-        repository.worktrees.map((worktree) => worktree.state).join(", ") ||
-        "no managed worktrees";
-      return `${repository.name}: ${states}`;
-    })
-    .join("; ");
+    .map((repository) =>
+      [
+        `${repository.name}: ${repository.used}/${repository.capacity} slots used`,
+        ...repository.worktrees.map((worktree) =>
+          [
+            `  ${worktree.path} — ${worktree.state}`,
+            `    claimId: ${worktree.claimId ?? "unknown"}; branch: ${worktree.branch ?? worktree.currentBranch ?? "unknown"}`,
+            `    owner: ${worktree.owner ? `${worktree.owner.sessionId} (${worktree.owner.host}, pid ${worktree.owner.pid})` : "unknown"}`,
+            ...(worktree.reason ? [`    blocker: ${worktree.reason}`] : []),
+          ].join("\n"),
+        ),
+      ].join("\n"),
+    )
+    .join("\n");
 }
 
 function subagentDepth(): number {

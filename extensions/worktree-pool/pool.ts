@@ -93,6 +93,7 @@ export type PoolStateEvidence = {
   nativeClaimMatches: boolean | null;
 };
 export type PoolWorktreeListing = {
+  owner?: OwnerIdentity;
   claimId?: string;
   path: string;
   state: string;
@@ -380,7 +381,7 @@ export class WorktreePool {
           state: "needs-attention",
           evidence: observation.evidence,
           reason: releasable
-            ? `exact clean claim ${record.claimId} still exists; use worktree_pool release with this claim ID`
+            ? `exact clean claim ${record.claimId} still exists; use worktree_release with this claim ID`
             : this.observationReason(record, observation),
         };
       },
@@ -415,7 +416,7 @@ export class WorktreePool {
       return {
         path: record.path,
         released: false,
-        reason: `Local work would be lost:\n${before.warning}\nSave this work, or retry worktree_pool release with the same repository and claimId and force: true to deliberately discard it.`,
+        reason: `Local work would be lost:\n${before.warning}\nSave this work, or retry worktree_release with the same repository and claimId and force: true to deliberately discard it.`,
       };
     }
     if (record.state !== "removing") {
@@ -575,6 +576,12 @@ export class WorktreePool {
           observation.branchProtectsHead === true;
         return {
           claimId: record.claimId,
+          owner: {
+            sessionId: record.sessionId,
+            host: record.host,
+            pid: record.pid,
+            started: record.started,
+          },
           path: record.path,
           state: healthy ? "active" : "needs-attention",
           branch: record.branch,
