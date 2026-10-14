@@ -50,6 +50,8 @@ export interface WorkManagementTarget {
   orgUuid: string;
   projectId: string;
   typeId: string;
+  assigneeId?: string;
+  workstreamAttributeKey?: string;
   statuses: Record<StatusKey, string> & { waitingOnPullRequest?: string };
 }
 export interface WorkManagementConfig {
@@ -71,7 +73,7 @@ export interface RemoteItem {
 export interface WorkManagementState {
   version: 1;
   target: WorkManagementTarget;
-  initial: { title: string; description: string };
+  initial: { title: string; description: string; workstream?: string };
   remote: RemoteItem | null;
   lastSentStatus: string | null;
   deliveredCommentIds: string[];
@@ -134,6 +136,12 @@ export function decodeTarget(value: unknown): WorkManagementTarget {
     orgUuid: uuid(r.orgUuid),
     projectId: uuid(r.projectId),
     typeId: uuid(r.typeId),
+    ...(Object.hasOwn(r, "assigneeId")
+      ? { assigneeId: uuid(r.assigneeId) }
+      : {}),
+    ...(Object.hasOwn(r, "workstreamAttributeKey")
+      ? { workstreamAttributeKey: text(r.workstreamAttributeKey) }
+      : {}),
     statuses,
   };
 }
@@ -145,11 +153,16 @@ export function newWorkManagementState(
   target: WorkManagementTarget,
   title: string,
   description: string,
+  workstream?: string,
 ): WorkManagementState {
   return {
     version: 1,
     target: decodeTarget(target),
-    initial: { title, description },
+    initial: {
+      title,
+      description,
+      ...(workstream === undefined ? {} : { workstream: text(workstream) }),
+    },
     remote: null,
     lastSentStatus: null,
     deliveredCommentIds: [],
@@ -221,7 +234,13 @@ export function decodeWorkManagement(
   return {
     version: 1,
     target,
-    initial: { title: initial.title, description: initial.description },
+    initial: {
+      title: initial.title,
+      description: initial.description,
+      ...(Object.hasOwn(initial, "workstream")
+        ? { workstream: text(initial.workstream) }
+        : {}),
+    },
     remote,
     lastSentStatus,
     deliveredCommentIds,

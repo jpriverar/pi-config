@@ -15,7 +15,7 @@ export interface DatadogOperationRequest {
   target: WorkManagementTarget;
   taskId: string;
   operation: WorkManagementOperation;
-  initial?: { title: string; description: string };
+  initial?: { title: string; description: string; workstream?: string };
   remoteId?: string;
   comment?: NativeTaskComment;
 }
@@ -56,9 +56,23 @@ function payload(request: DatadogOperationRequest): {
             type_id: target.typeId,
             priority: "NOT_DEFINED",
             status_name: target.statuses.actionable,
+            ...(target.workstreamAttributeKey && request.initial.workstream
+              ? {
+                  custom_attributes: {
+                    [target.workstreamAttributeKey]: {
+                      type: "TEXT",
+                      is_multi: false,
+                      value: request.initial.workstream,
+                    },
+                  },
+                }
+              : {}),
           },
           relationships: {
             project: { data: { id: target.projectId, type: "project" } },
+            ...(target.assigneeId
+              ? { assignee: { data: { id: target.assigneeId, type: "user" } } }
+              : {}),
           },
         },
       },

@@ -129,6 +129,104 @@ test("create, status and comment requests preserve their exact API contract with
   });
 });
 
+test("assignment and workstream are sent only in the create payload", async () => {
+  const bodies: Array<{
+    data: {
+      attributes: Record<string, unknown>;
+      relationships?: Record<string, unknown>;
+    };
+  }> = [];
+  const configured = {
+    ...target,
+    assigneeId: "11111111-1111-1111-1111-111111111111",
+    workstreamAttributeKey: "pi_workstream",
+  };
+  const run: typeof runBoundedCommand = async (file, _args, options) => {
+    if (file === runtime.ddAuthPath) return authenticated;
+    bodies.push(JSON.parse(options.input!));
+    return reply(bodies.length === 1 ? 201 : 200, {
+      data: { id: "case-1", attributes: { key: "TEAM-1" } },
+    });
+  };
+  assert.equal(
+    (
+      await sendDatadogOperation(
+        {
+          ...request,
+          target: configured,
+          initial: { ...request.initial!, workstream: "pi-setup" },
+        },
+        { ...runtime, run },
+      )
+    ).kind,
+    "success",
+  );
+  assert.deepEqual(bodies[0].data.relationships, {
+    project: { data: { id: target.projectId, type: "project" } },
+    assignee: {
+      data: { id: "11111111-1111-1111-1111-111111111111", type: "user" },
+    },
+  });
+  assert.deepEqual(bodies[0].data.attributes.custom_attributes, {
+    pi_workstream: { type: "TEXT", is_multi: false, value: "pi-setup" },
+  });
+  await sendDatadogOperation(
+    {
+      target: configured,
+      taskId: "jp-test",
+      remoteId: "case-1",
+      operation: { kind: "status", statusName: "In Progress" },
+    },
+    { ...runtime, run },
+  );
+  await sendDatadogOperation(
+    {
+      target: configured,
+      taskId: "jp-test",
+      remoteId: "case-1",
+      operation: { kind: "comment", commentId: "c1" },
+      comment: {
+        id: "c1",
+        issueId: "jp-test",
+        text: "progress\n\n[pi-task-log:v1]",
+        createdAt: "2026-10-07T12:00:00Z",
+      },
+    },
+    { ...runtime, run },
+  );
+  assert.deepEqual(bodies.slice(1), [
+    { data: { type: "case", attributes: { status_name: "In Progress" } } },
+    {
+      data: {
+        type: "case",
+        attributes: { comment: "progress\n\n2026-10-07T12:00:00Z" },
+      },
+    },
+  ]);
+});
+
+test("create omits workstream metadata without both a field mapping and a value", async () => {
+  for (const input of [
+    { ...request, initial: { ...request.initial!, workstream: "pi-setup" } },
+    {
+      ...request,
+      target: { ...target, workstreamAttributeKey: "pi_workstream" },
+    },
+  ]) {
+    let body: { data: { attributes: Record<string, unknown> } } | undefined;
+    const outcome = await sendDatadogOperation(input, {
+      ...runtime,
+      run: async (file, _args, options) => {
+        if (file === runtime.ddAuthPath) return authenticated;
+        body = JSON.parse(options.input!);
+        return reply(201, { data: { id: "case-1" } });
+      },
+    });
+    assert.equal(outcome.kind, "success");
+    assert.equal(body!.data.attributes.custom_attributes, undefined);
+  }
+});
+
 test("ambiguous writes are not classified as retryable", async () => {
   for (const [response, kind] of [
     [reply(429, {}, "10"), "retryable"],

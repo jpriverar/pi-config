@@ -570,6 +570,8 @@ task is written. Configure absolute paths for `dd-auth` and curl >= 8.3.0:
     "orgUuid": "11111111-1111-1111-1111-111111111111",
     "projectId": "44444444-4444-4444-4444-444444444444",
     "typeId": "33333333-3333-3333-3333-333333333333",
+    "assigneeId": "55555555-5555-5555-5555-555555555555",
+    "workstreamAttributeKey": "pi_workstream",
     "statuses": {
       "actionable": "Open",
       "active": "In Progress",
@@ -626,8 +628,23 @@ and time waits still use `waiting` (for example, `"Blocked"`). Active tasks use
 single-waiting-status behavior, including for previously captured targets.
 Completed, cancelled, and superseded outcomes have their own mappings.
 
-The task snapshots the project and status mapping at creation. Editing/removing
-the default, a mapping, or task labels does not reroute previously enrolled tasks.
+A target may set `assigneeId` to a Datadog user UUID for assignment on creation.
+It may also set `workstreamAttributeKey` to an existing, single-value TEXT custom
+attribute on its case type. New items then receive the canonical Pi workstream
+as that attribute's value. Tasks without a workstream omit the attribute.
+Provision the field separately with explicit approval: custom attributes belong
+to the shared case type, not just one project. Omit either option to retain its
+previous behavior. Workstream overrides are complete targets and do not inherit
+these optional fields from `defaultTarget`.
+
+Assignment and workstream metadata are sent only on creation. Later remote
+reassignment or field edits are not overwritten by status/comment delivery;
+local workstream renames do not rewrite the captured value. Enabling these
+options does not update existing items.
+
+The task snapshots its target, status mapping, and initial workstream at creation.
+Editing/removing the default, a mapping, or task labels does not reroute previously
+enrolled tasks.
 A later workstream opt-out does not stop delivery for tasks already enrolled.
 Keep the configuration file and executable paths available for those tasks even
 if the default is removed and the `workstreams` object becomes empty.

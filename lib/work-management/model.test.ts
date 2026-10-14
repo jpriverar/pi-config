@@ -22,6 +22,38 @@ test("state validation preserves binding and rejects malformed persisted receipt
   }
 });
 
+test("creation metadata is validated and captured without changing legacy records", () => {
+  const configured = {
+    ...target,
+    assigneeId: "11111111-1111-1111-1111-111111111111",
+    workstreamAttributeKey: "pi_workstream",
+  };
+  const state = newWorkManagementState(configured, "task", "why", "pi-setup");
+  configured.assigneeId = "22222222-2222-2222-2222-222222222222";
+  configured.workstreamAttributeKey = "changed";
+  const decoded = decodeWorkManagement(state)!;
+  assert.equal(
+    decoded.target.assigneeId,
+    "11111111-1111-1111-1111-111111111111",
+  );
+  assert.equal(decoded.target.workstreamAttributeKey, "pi_workstream");
+  assert.equal(decoded.initial.workstream, "pi-setup");
+  const legacy = decodeWorkManagement(
+    newWorkManagementState(target, "task", "why"),
+  )!;
+  assert.equal(legacy.target.assigneeId, undefined);
+  assert.equal(legacy.target.workstreamAttributeKey, undefined);
+  assert.deepEqual(legacy.initial, { title: "task", description: "why" });
+  for (const invalid of [
+    { ...state, target: { ...state.target, assigneeId: "not-a-uuid" } },
+    { ...state, target: { ...state.target, assigneeId: null } },
+    { ...state, target: { ...state.target, workstreamAttributeKey: "" } },
+    { ...state, initial: { ...state.initial, workstream: "" } },
+    { ...state, initial: { ...state.initial, workstream: 42 } },
+  ])
+    assert.throws(() => decodeWorkManagement(invalid));
+});
+
 test("optional PR-wait mapping survives snapshots and validates its status", () => {
   const configured = {
     ...target,

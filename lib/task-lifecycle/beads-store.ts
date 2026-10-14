@@ -226,6 +226,7 @@ export function createLifecycleStore(
                   target,
                   input.title,
                   input.why,
+                  workstream || undefined,
                 ),
               }),
         };

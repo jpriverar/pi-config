@@ -809,6 +809,42 @@ test("new tasks use the default unless their workstream overrides or opts out", 
   }
 });
 
+test("enrollment captures the normalized workstream without inventing one for unscoped tasks", async () => {
+  for (const workstream of ["PI-SETUP  ", undefined]) {
+    let raw = rawIssue();
+    const store = createLifecycleStore(
+      async (_, args) => {
+        if (args[0] === "create")
+          raw = {
+            ...raw,
+            metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+          };
+        return result(raw);
+      },
+      {
+        ...options(),
+        readWorkManagementConfig: () => ({
+          version: 1,
+          ddAuthPath: "/bin/dd-auth",
+          curlPath: "/usr/bin/curl",
+          defaultTarget: {
+            ...WM_TARGET,
+            workstreamAttributeKey: "pi_workstream",
+          },
+          workstreams: {},
+        }),
+      },
+    );
+    const issue = await store.create(
+      { title: "Task", why: "Why", workstream, needsJp: false },
+      lifecycle(),
+      OWNER,
+    );
+    const state = issue.metadata.piWorkManagement as WorkManagementState;
+    assert.equal(state.initial.workstream, workstream ? "pi-setup" : undefined);
+  }
+});
+
 test("legacy configuration leaves unmapped and unscoped tasks local", async () => {
   for (const workstream of ["new-workstream", undefined]) {
     let raw = rawIssue();
