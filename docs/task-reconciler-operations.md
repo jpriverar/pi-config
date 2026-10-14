@@ -185,14 +185,16 @@ status mapping, and a disposable validation task. A default destination enrolls
 all newly created tasks without an explicit workstream override or opt-out,
 including tasks without a workstream; review that publication scope too.
 
-Before adding `defaultTarget` or null workstream opt-outs, update the installed
-daemon runtime and reload every Pi session using the store onto code that
-supports those fields. Older parsers reject the extended configuration: task
-creation fails closed and enrolled-task delivery cannot read its configuration.
+Before adding `defaultTarget`, null workstream opt-outs, or
+`statuses.waitingOnPullRequest`, update the installed daemon runtime and reload
+every Pi session using the store onto code that supports those fields. Older
+parsers reject default/null configuration: task creation fails closed and
+enrolled-task delivery cannot read its configuration. They also discard an
+unrecognized PR-wait override when decoding a captured binding.
 For rollback to an older runtime, first restore compatible configuration (omit
-`defaultTarget` and null entries); already captured task bindings are unchanged.
-Do not create new tasks during this coordinated cutover. No existing tasks are
-backfilled by activation.
+`defaultTarget` and null entries), and review existing bindings: an older worker
+cannot preserve the PR-wait distinction. Do not create new tasks during this
+coordinated cutover. No existing tasks are backfilled by activation.
 
 Verify the configured curl
 supports variables (`curl --version`, minimum 8.3.0). Use unmodified stock

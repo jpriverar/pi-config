@@ -618,7 +618,13 @@ sites are `datadoghq.com`, `datadoghq.eu`, and the `us3`, `us5`, `ap1`, `ap2`, a
 `uk1` subdomains of `datadoghq.com`. Workstream matching uses the same label
 normalization as task displays, then compares case-insensitively. Mappings that
 collide after normalization are rejected. No credentials belong in this file.
-Both waiting reasons share a status; done outcomes can differ.
+`statuses.waiting` applies to all waits by default. An optional
+`statuses.waitingOnPullRequest` (for example, `"In Review"`) overrides it only
+while the task is Waiting on a `github_pull_request` check. Dependency, manual,
+and time waits still use `waiting` (for example, `"Blocked"`). Active tasks use
+`active` even when retaining a PR check. Omitting the override preserves the
+single-waiting-status behavior, including for previously captured targets.
+Completed, cancelled, and superseded outcomes have their own mappings.
 
 The task snapshots the project and status mapping at creation. Editing/removing
 the default, a mapping, or task labels does not reroute previously enrolled tasks.

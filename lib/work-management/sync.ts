@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { LifecycleStore, LockOwner } from "../task-lifecycle/types.js";
 import {
   decodeWorkManagement,
+  desiredWorkManagementStatus,
   LOG_TAG,
   type WorkManagementConfig,
   type WorkManagementState,
@@ -109,16 +110,14 @@ export function createWorkManagementSync(
           pending.result = "attention";
           return attention(state, "configuration_unavailable");
         }
-        const lifecycle = issue.lifecycle;
-        const key =
-          lifecycle?.phase === "done"
-            ? lifecycle.disposition?.kind
-            : lifecycle?.phase;
-        if (!key) {
+        const desired = desiredWorkManagementStatus(
+          state.target,
+          issue.lifecycle,
+        );
+        if (!desired) {
           pending.result = "attention";
           return attention(state, "lifecycle_unavailable");
         }
-        const desired = state.target.statuses[key];
         const request: DatadogOperationRequest = {
           taskId,
           target: state.target,

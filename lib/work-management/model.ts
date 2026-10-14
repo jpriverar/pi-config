@@ -1,4 +1,8 @@
-import type { LifecycleIssue, LockOwner } from "../task-lifecycle/types.js";
+import type {
+  LifecycleIssue,
+  LifecycleMetadataV1,
+  LockOwner,
+} from "../task-lifecycle/types.js";
 
 export const LOG_TAG = "\n\n[pi-task-log:v1]";
 export const SITES: Readonly<Record<string, { api: string; app: string }>> = {
@@ -46,7 +50,7 @@ export interface WorkManagementTarget {
   orgUuid: string;
   projectId: string;
   typeId: string;
-  statuses: Record<StatusKey, string>;
+  statuses: Record<StatusKey, string> & { waitingOnPullRequest?: string };
 }
 export interface WorkManagementConfig {
   version: 1;
@@ -122,7 +126,9 @@ export function decodeTarget(value: unknown): WorkManagementTarget {
   const rawStatuses = record(r.statuses);
   const statuses = Object.fromEntries(
     STATUS_KEYS.map((k) => [k, text(rawStatuses[k])]),
-  ) as Record<StatusKey, string>;
+  ) as WorkManagementTarget["statuses"];
+  if (Object.hasOwn(rawStatuses, "waitingOnPullRequest"))
+    statuses.waitingOnPullRequest = text(rawStatuses.waitingOnPullRequest);
   return {
     site,
     orgUuid: uuid(r.orgUuid),
@@ -224,9 +230,26 @@ export function decodeWorkManagement(
   };
 }
 
+export function desiredWorkManagementStatus(
+  target: WorkManagementTarget,
+  lifecycle: LifecycleMetadataV1 | null,
+): string | null {
+  if (
+    lifecycle?.phase === "waiting" &&
+    lifecycle.waiting?.kind === "check" &&
+    lifecycle.activeCheck?.kind === "github_pull_request"
+  )
+    return target.statuses.waitingOnPullRequest ?? target.statuses.waiting;
+  const key =
+    lifecycle?.phase === "done"
+      ? lifecycle.disposition?.kind
+      : lifecycle?.phase;
+  return key ? target.statuses[key] : null;
+}
+
 export function summarizeWorkManagement(
   metadata: Record<string, unknown>,
-  lifecycle: import("../task-lifecycle/types.js").LifecycleMetadataV1 | null,
+  lifecycle: LifecycleMetadataV1 | null,
 ): {
   url?: string;
   text: string;
@@ -243,13 +266,9 @@ export function summarizeWorkManagement(
     else if (state.inFlight) text = `WM pending ${state.inFlight.kind}`;
     else if (!state.remote) text = "WM pending create";
     else {
-      const key =
-        lifecycle?.phase === "done"
-          ? lifecycle.disposition?.kind
-          : lifecycle?.phase;
-      if (!key) text = "WM attention";
-      else if (state.lastSentStatus !== state.target.statuses[key])
-        text = "WM pending status";
+      const desired = desiredWorkManagementStatus(state.target, lifecycle);
+      if (!desired) text = "WM attention";
+      else if (state.lastSentStatus !== desired) text = "WM pending status";
     }
     return {
       text,

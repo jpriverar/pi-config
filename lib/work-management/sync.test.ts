@@ -126,6 +126,62 @@ test("completed before the first scan still creates then sends the terminal stat
   assert.equal(h.raw.metadata.piLifecycle.phase, "done");
 });
 
+test("PR waits deliver In Review and other waits retain their captured fallback", async (t) => {
+  const h = await harness(t);
+  h.raw.metadata.piWorkManagement = newWorkManagementState(
+    {
+      ...target,
+      statuses: {
+        ...target.statuses,
+        waiting: "Blocked",
+        waitingOnPullRequest: "In Review",
+      },
+    },
+    "task",
+    "why",
+  );
+  const lifecycle = h.raw.metadata.piLifecycle;
+  lifecycle.phase = "waiting";
+  lifecycle.waiting = { kind: "check" };
+  lifecycle.activeCheck = {
+    id: "review",
+    kind: "github_pull_request",
+    targetArtifactIds: [],
+    predicate: { mode: "all" },
+    onSatisfied: "close",
+    wakeOn: [],
+    state: "pending",
+    createdAt: new Date(now).toISOString(),
+    lastCheckedAt: null,
+    nextCheckAt: new Date(now).toISOString(),
+    lastObservation: null,
+    errorCount: 0,
+  };
+  h.raw.status = "blocked";
+  assert.equal(await h.sync.step("jp-test"), "delivered");
+  assert.equal(await h.sync.step("jp-test"), "delivered");
+  assert.deepEqual(
+    h.calls.map((c) => c.operation),
+    [{ kind: "create" }, { kind: "status", statusName: "In Review" }],
+  );
+  assert.equal(h.state().lastSentStatus, "In Review");
+  const restarted = createWorkManagementSync(h.deps);
+  assert.equal(await restarted.step("jp-test"), "idle");
+  h.raw.metadata.piLifecycle.waiting = { kind: "dependency" };
+  h.raw.metadata.piLifecycle.activeCheck = null;
+  assert.equal(await restarted.step("jp-test"), "delivered");
+  assert.deepEqual(h.calls.at(-1)?.operation, {
+    kind: "status",
+    statusName: "Blocked",
+  });
+  assert.equal(h.state().target.statuses.waitingOnPullRequest, "In Review");
+  h.raw.metadata.piLifecycle.waiting = { kind: "check" };
+  h.raw.metadata.piLifecycle.activeCheck = lifecycle.activeCheck;
+  delete h.raw.metadata.piWorkManagement.target.statuses.waitingOnPullRequest;
+  assert.equal(await restarted.step("jp-test"), "idle");
+  assert.equal(h.calls.length, 3);
+});
+
 test("restart discovers ordered native logs and never replays confirmed IDs", async (t) => {
   const h = await harness(t);
   await h.sync.step("jp-test");
