@@ -207,13 +207,19 @@ export function createLifecycleStore(
       owner,
       async () => {
         const config = options.readWorkManagementConfig?.();
-        const target =
+        const workstream =
           input.workstream === undefined
             ? undefined
-            : config?.workstreams[canonicalWorkstream(input.workstream)];
+            : canonicalWorkstream(input.workstream);
+        const target =
+          config &&
+          workstream !== undefined &&
+          Object.hasOwn(config.workstreams, workstream)
+            ? config.workstreams[workstream]
+            : config?.defaultTarget;
         const metadata = {
           piLifecycle: lifecycle,
-          ...(target === undefined
+          ...(target == null
             ? {}
             : {
                 piWorkManagement: newWorkManagementState(

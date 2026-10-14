@@ -754,6 +754,133 @@ test("enrollment shares the native create command and snapshots its target", asy
   );
 });
 
+test("new tasks use the default unless their workstream overrides or opts out", async (t) => {
+  const defaultTarget = {
+    ...WM_TARGET,
+    projectId: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+  };
+  for (const [workstream, expected] of [
+    ["new-workstream", defaultTarget],
+    [undefined, defaultTarget],
+    ["PI-SETUP  ", WM_TARGET],
+    ["LOCAL  ", null],
+    ["constructor", defaultTarget],
+    ["__proto__", defaultTarget],
+  ] as const) {
+    await t.test(workstream ?? "unscoped", async () => {
+      const calls: string[][] = [];
+      let raw = rawIssue();
+      const store = createLifecycleStore(
+        async (_, args) => {
+          calls.push([...args]);
+          if (args[0] === "create")
+            raw = {
+              ...raw,
+              metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+            };
+          return result(raw);
+        },
+        {
+          ...options(),
+          readWorkManagementConfig: () => ({
+            version: 1,
+            ddAuthPath: "/bin/dd-auth",
+            curlPath: "/usr/bin/curl",
+            defaultTarget,
+            workstreams: { "pi-setup": WM_TARGET, local: null },
+          }),
+        },
+      );
+      const issue = await store.create(
+        { title: "Task", why: "Why", workstream, needsJp: false },
+        lifecycle(),
+        OWNER,
+      );
+      const state = issue.metadata.piWorkManagement as
+        | WorkManagementState
+        | undefined;
+      if (expected === null) assert.equal(state, undefined);
+      else assert.deepEqual(state?.target, expected);
+      assert.deepEqual(
+        calls.map((args) => args[0]),
+        ["create", "show"],
+      );
+    });
+  }
+});
+
+test("legacy configuration leaves unmapped and unscoped tasks local", async () => {
+  for (const workstream of ["new-workstream", undefined]) {
+    let raw = rawIssue();
+    const store = createLifecycleStore(
+      async (_, args) => {
+        if (args[0] === "create")
+          raw = {
+            ...raw,
+            metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+          };
+        return result(raw);
+      },
+      {
+        ...options(),
+        readWorkManagementConfig: () => ({
+          version: 1,
+          ddAuthPath: "/bin/dd-auth",
+          curlPath: "/usr/bin/curl",
+          workstreams: { "pi-setup": WM_TARGET },
+        }),
+      },
+    );
+    const issue = await store.create(
+      { title: "Task", why: "Why", workstream, needsJp: false },
+      lifecycle(),
+      OWNER,
+    );
+    assert.equal(issue.metadata.piWorkManagement, undefined);
+  }
+});
+
+test("default changes neither relocate captured tasks nor enroll existing tasks", async () => {
+  const config = {
+    version: 1 as const,
+    ddAuthPath: "/bin/dd-auth",
+    curlPath: "/usr/bin/curl",
+    defaultTarget: structuredClone(WM_TARGET),
+    workstreams: {},
+  };
+  let raw = rawIssue();
+  const store = createLifecycleStore(
+    async (_, args) => {
+      if (args[0] === "create" || args[0] === "update") {
+        raw = {
+          ...raw,
+          metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+          ...(args.includes("-s")
+            ? { status: args[args.indexOf("-s") + 1] }
+            : {}),
+        };
+      }
+      return result(raw);
+    },
+    { ...options(), readWorkManagementConfig: () => config },
+  );
+  await store.create(
+    { title: "Task", why: "Why", needsJp: false },
+    lifecycle(),
+    OWNER,
+  );
+  config.defaultTarget.projectId = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+  config.defaultTarget.statuses.active = "Different";
+  const changed = await store.mutate("jp-1", OWNER, () => claimedMutation());
+  assert.deepEqual(
+    (changed.metadata.piWorkManagement as WorkManagementState)?.target,
+    WM_TARGET,
+  );
+  raw = rawIssue();
+  const existing = await store.mutate("jp-1", OWNER, () => claimedMutation());
+  assert.equal(existing.metadata.piWorkManagement, undefined);
+});
+
 test("tagged native journal entry survives a lost append response", async () => {
   let raw = rawIssue();
   const comments: unknown[] = [];

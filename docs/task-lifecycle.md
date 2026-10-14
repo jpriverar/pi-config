@@ -548,11 +548,12 @@ package instead.
 
 ## Optional Datadog work items
 
-A workstream can opt new tasks into a Datadog Work Management project. The local
-Beads task remains authoritative: creation produces a linked item, local lifecycle
-changes update its status, and explicit `task_log` entries become comments. The
-existing reconciliation daemon performs delivery; local operations do not wait
-for Datadog. Existing tasks are never enrolled automatically.
+New tasks can sync to a default Datadog Work Management project, with explicit
+workstream overrides or local-only opt-outs. The local Beads task remains
+authoritative: creation produces a linked item, local lifecycle changes update
+its status, and explicit `task_log` entries become comments. The existing
+reconciliation daemon performs delivery; local operations do not wait for
+Datadog. Existing tasks are never enrolled automatically.
 
 The private configuration lives at `<Beads store>/pi-work-management.json` (the
 same store selected by `BEADS_DIR`). Do not commit it to this package. No file
@@ -564,7 +565,23 @@ task is written. Configure absolute paths for `dd-auth` and curl >= 8.3.0:
   "version": 1,
   "ddAuthPath": "/opt/homebrew/bin/dd-auth",
   "curlPath": "/usr/bin/curl",
+  "defaultTarget": {
+    "site": "datadoghq.com",
+    "orgUuid": "11111111-1111-1111-1111-111111111111",
+    "projectId": "44444444-4444-4444-4444-444444444444",
+    "typeId": "33333333-3333-3333-3333-333333333333",
+    "statuses": {
+      "actionable": "Open",
+      "active": "In Progress",
+      "waiting": "Open",
+      "deferred": "Open",
+      "completed": "Done",
+      "cancelled": "Done",
+      "superseded": "Done"
+    }
+  },
   "workstreams": {
+    "local-only": null,
     "example-workstream": {
       "site": "datadoghq.com",
       "orgUuid": "11111111-1111-1111-1111-111111111111",
@@ -584,6 +601,17 @@ task is written. Configure absolute paths for `dd-auth` and curl >= 8.3.0:
 }
 ```
 
+Routing is selected only when the task is created:
+
+1. A matching workstream target overrides `defaultTarget`.
+2. A matching workstream set to `null` stays local, even when a default exists.
+3. An unmatched workstream, or a task without a workstream, uses `defaultTarget`.
+4. Without a default or matching target, the task stays local.
+
+`defaultTarget` is optional; omit it to retain explicit-workstream-only behavior.
+An empty `workstreams` object is valid. Remove `defaultTarget` rather than setting
+it to `null`. Null is only a workstream opt-out.
+
 Replace every sample UUID and status with explicitly approved values for the
 actual project/type. Nothing creates projects or statuses for you. Supported
 sites are `datadoghq.com`, `datadoghq.eu`, and the `us3`, `us5`, `ap1`, `ap2`, and
@@ -593,9 +621,10 @@ collide after normalization are rejected. No credentials belong in this file.
 Both waiting reasons share a status; done outcomes can differ.
 
 The task snapshots the project and status mapping at creation. Editing/removing
-a mapping or changing labels does not reroute previously enrolled tasks. Keep the
-configuration file and executable paths available for those tasks even if the
-`workstreams` object becomes empty.
+the default, a mapping, or task labels does not reroute previously enrolled tasks.
+A later workstream opt-out does not stop delivery for tasks already enrolled.
+Keep the configuration file and executable paths available for those tasks even
+if the default is removed and the `workstreams` object becomes empty.
 
 `piWorkManagement` metadata stores only the binding, current external identity,
 delivery receipts, and pending/error state. It is separate from `piLifecycle` and
@@ -610,9 +639,10 @@ sync record does not prevent owned local logging; those entries retain their tag
 for delivery after repair. Only tagged entries publish, identified by native
 comment ID, so identical messages can be
 legitimate separate comments. Neither transcripts nor arbitrary native comments
-are published. Enabling a workstream makes its new titles/descriptions and
-explicit logs publishable; do not put secrets in them. There is no automatic
-secret detection.
+are published. Enabling a default or workstream target makes the routed tasks' new
+titles/descriptions and explicit logs publishable; do not put secrets in them.
+A personal project is not necessarily private. There is no automatic secret
+detection.
 
 There is no remote polling, drift correction, backlog import, or comment editing.
 Remote manual edits remain until a later local status change requires delivery.

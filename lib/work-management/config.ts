@@ -32,7 +32,13 @@ export function loadWorkManagementConfig(
       r.version !== 1 ||
       Object.keys(r).some(
         (k) =>
-          !["version", "ddAuthPath", "curlPath", "workstreams"].includes(k),
+          ![
+            "version",
+            "ddAuthPath",
+            "curlPath",
+            "defaultTarget",
+            "workstreams",
+          ].includes(k),
       )
     )
       throw new Error("invalid config schema");
@@ -45,7 +51,7 @@ export function loadWorkManagementConfig(
         throw new Error("invalid executable path");
       return value;
     };
-    const workstreams: Record<string, WorkManagementTarget> =
+    const workstreams: Record<string, WorkManagementTarget | null> =
       Object.create(null);
     for (const [name, target] of Object.entries(record(r.workstreams))) {
       const key = canonicalWorkstream(name);
@@ -55,12 +61,15 @@ export function loadWorkManagementConfig(
         Object.hasOwn(workstreams, key)
       )
         throw new Error("invalid or duplicate workstream");
-      workstreams[key] = decodeTarget(target);
+      workstreams[key] = target === null ? null : decodeTarget(target);
     }
     return {
       version: 1,
       ddAuthPath: executable(r.ddAuthPath),
       curlPath: executable(r.curlPath),
+      ...(Object.hasOwn(r, "defaultTarget")
+        ? { defaultTarget: decodeTarget(r.defaultTarget) }
+        : {}),
       workstreams,
     };
   } catch {

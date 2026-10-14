@@ -49,6 +49,58 @@ test("config is opt-in, case-normalized and fails closed with its file path", ()
   }
 });
 
+test("config decodes a default destination and preserves normalized opt-outs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "wm-default-"));
+  try {
+    writeFileSync(
+      join(dir, "pi-work-management.json"),
+      JSON.stringify({
+        version: 1,
+        ddAuthPath: "/bin/dd-auth",
+        curlPath: "/usr/bin/curl",
+        defaultTarget: target,
+        workstreams: { "LOCAL  ": null, Team: target },
+      }),
+    );
+    const config = loadWorkManagementConfig(dir)!;
+    assert.deepEqual(config.defaultTarget, target);
+    assert.equal(config.workstreams.local, null);
+    assert.deepEqual(config.workstreams.team, target);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("config rejects invalid defaults and collisions involving opt-outs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "wm-default-invalid-"));
+  const path = join(dir, "pi-work-management.json");
+  const config = {
+    version: 1,
+    ddAuthPath: "/bin/dd-auth",
+    curlPath: "/usr/bin/curl",
+    defaultTarget: target,
+    workstreams: {},
+  };
+  try {
+    for (const invalid of [
+      { ...config, defaultTarget: null },
+      { ...config, defaultTarget: { ...target, site: "attacker.example" } },
+      { ...config, defaultTarget: { ...target, projectId: "" } },
+      { ...config, defaultTarget: { ...target, statuses: {} } },
+      { ...config, workstreams: { local: null, "LOCAL  ": target } },
+      { ...config, workstreams: { local: false } },
+    ]) {
+      writeFileSync(path, JSON.stringify(invalid));
+      assert.throws(
+        () => loadWorkManagementConfig(dir),
+        /invalid work management configuration.*pi-work-management.json/,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
 test("configuration canonicalizes displayed labels before detecting duplicate mappings", () => {
   const dir = mkdtempSync(join(tmpdir(), "wm-canonical-"));
   const path = join(dir, "pi-work-management.json");

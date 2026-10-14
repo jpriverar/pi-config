@@ -52,7 +52,8 @@ export interface WorkManagementConfig {
   version: 1;
   ddAuthPath: string;
   curlPath: string;
-  workstreams: Record<string, WorkManagementTarget>;
+  defaultTarget?: WorkManagementTarget;
+  workstreams: Record<string, WorkManagementTarget | null>;
 }
 export type WorkManagementOperation =
   | { kind: "create" }
