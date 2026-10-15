@@ -23,7 +23,13 @@ export interface DaemonConfig {
   poolConfigPath: string;
   lifecycleConfigPath: string;
   runtimeRoot: string;
-  executables: { node: string; bd: string; git: string; gh: string };
+  executables: {
+    node: string;
+    bd: string;
+    git: string;
+    gh: string;
+    dolt?: string;
+  };
   githubAccounts: Readonly<Record<string, string>>;
   limits: { -readonly [K in keyof typeof DEFAULT_DAEMON_LIMITS]: number };
 }
@@ -102,7 +108,7 @@ export async function loadDaemonConfig(
   );
   if (config.version !== 1) throw new Error("daemon config version must be 1");
   const paths = record(config.executables, "executables");
-  keys(paths, ["node", "bd", "git", "gh"], "executables");
+  keys(paths, ["node", "bd", "git", "gh", "dolt"], "executables");
   const accounts: Record<string, string> = Object.create(null);
   for (const [owner, account] of Object.entries(
     record(config.githubAccounts, "githubAccounts"),
@@ -159,6 +165,9 @@ export async function loadDaemonConfig(
       bd: await executable(paths.bd, "executables.bd"),
       git: await executable(paths.git, "executables.git"),
       gh: await executable(paths.gh, "executables.gh"),
+      ...(paths.dolt === undefined
+        ? {}
+        : { dolt: await executable(paths.dolt, "executables.dolt") }),
     },
     githubAccounts: { ...accounts },
     limits,

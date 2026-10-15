@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { access, realpath, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { access, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 import { loadDaemonConfig, daemonEnvironment } from "./config.js";
 import { configFixture } from "./test-fixtures.js";
 
@@ -9,6 +11,7 @@ test("loads explicit paths and bounded defaults without creating runtime state",
   const f = await configFixture(t);
   const config = await loadDaemonConfig(f.configPath);
   assert.equal(config.store, await realpath(join(f.root, ".beads")));
+  assert.equal(Object.hasOwn(config.executables, "dolt"), false);
   assert.equal(config.limits.scanIntervalMs, 60_000);
   assert.equal(config.limits.externalConcurrency, 2);
   assert.equal(config.limits.maxQueuedTasks, 100);
@@ -48,6 +51,70 @@ test("validates command paths before any runtime is created", async (t) => {
   await f.save();
   await assert.rejects(loadDaemonConfig(f.configPath), /gh/);
   await assert.rejects(access(join(f.root, "runtime")));
+});
+
+test("configured Dolt is available to Beads child commands", async (t) => {
+  const f = await configFixture(t);
+  const bin = join(f.root, "dolt-bin");
+  await mkdir(bin);
+  const dolt = join(bin, "dolt");
+  await writeFile(dolt, "#!/bin/sh\nprintf 'dolt-runtime-fixture\\n'\n", {
+    mode: 0o755,
+  });
+  const alias = join(f.root, "dolt-link");
+  await symlink(dolt, alias);
+  f.raw.executables = {
+    ...(f.raw.executables as Record<string, string>),
+    dolt: alias,
+  };
+  await f.save();
+
+  const config = await loadDaemonConfig(f.configPath);
+  assert.equal(config.executables.dolt, await realpath(dolt));
+  const { stdout } = await promisify(execFile)(
+    config.executables.bd,
+    [
+      "-e",
+      "process.stdout.write(require('node:child_process').execFileSync('dolt', ['--version']))",
+    ],
+    { env: daemonEnvironment(config), timeout: 3000 },
+  );
+  assert.equal(stdout, "dolt-runtime-fixture\n");
+});
+
+test("validates optional Dolt paths before creating runtime state", async (t) => {
+  const f = await configFixture(t);
+  const notExecutable = join(f.root, "not-executable");
+  await writeFile(notExecutable, "not an executable", { mode: 0o644 });
+  for (const dolt of [
+    null,
+    "dolt",
+    join(f.root, "missing-dolt"),
+    join(f.root, ".beads"),
+    notExecutable,
+  ]) {
+    f.raw.executables = {
+      ...(f.raw.executables as Record<string, unknown>),
+      dolt,
+    };
+    await f.save();
+    await assert.rejects(loadDaemonConfig(f.configPath), /executables\.dolt/);
+  }
+  await assert.rejects(access(join(f.root, "runtime")));
+});
+
+test("administration can load a retired Dolt executable path", async (t) => {
+  const f = await configFixture(t);
+  const retired = join(f.root, "retired-dolt");
+  f.raw.executables = {
+    ...(f.raw.executables as Record<string, string>),
+    dolt: retired,
+  };
+  await f.save();
+  const config = await loadDaemonConfig(f.configPath, {
+    allowMissingExecutables: true,
+  });
+  assert.equal(config.executables.dolt, retired);
 });
 
 test("rejects invalid limits and incompatible timing/backoff values", async (t) => {

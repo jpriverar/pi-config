@@ -89,6 +89,25 @@ second runtime root cannot bypass ownership. Service administration serializes
 updates and requires verified ownership of all files it changes. Foreign labels,
 unknown launchctl output and ambiguous draining PIDs fail closed.
 
+## Beads-managed Dolt servers
+
+When Beads owns a local Dolt server's startup and recovery, add its absolute
+executable path as `executables.dolt` in the daemon source configuration. The
+loader validates and canonicalizes it like the other executables, and its
+containing directory enters the daemon's restricted `PATH`. A running server
+can hide a missing dependency until the next cold start or crash recovery.
+Do not rely on the interactive shell's `PATH` or hand-edit the generated plist.
+
+Dolt remains optional for embedded stores and independently managed servers.
+Older Pi clients and daemon runtimes reject the new configuration key. First
+load compatible package code and reload every Pi session using this store;
+clients also parse the installed daemon configuration when checking health or
+requesting reconciliation. Update the installed runtime with the existing
+configuration, then add `executables.dolt` and perform another explicit update
+to install that configuration. Changing the source JSON alone does not update
+the installed runtime snapshot. Before rolling back to a runtime without this
+field, restore compatible source configuration.
+
 ## Authentication recovery
 
 GitHub account mappings are explicit and case-normalized by repository owner.
