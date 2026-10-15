@@ -280,6 +280,118 @@ test("a stopped update stays stopped and retains the previous runtime", async (t
   );
 });
 
+test("consecutive stopped updates keep published administration usable", async (t) => {
+  const f = await fixture(t);
+  const installed = await manageService("install", f.configPath, f.deps);
+  await manageService("start", f.configPath, f.deps);
+  await manageService("stop", f.configPath, f.deps);
+  f.calls.length = 0;
+  const publicationFailures: string[] = [];
+  f.deps.fs = {
+    ...fs,
+    rename: async (from, to) => {
+      await fs.rename(from, to);
+      try {
+        await manageService("status", f.configPath, f.deps);
+      } catch (error) {
+        publicationFailures.push(`${to}: ${(error as Error).message}`);
+      }
+    },
+  };
+
+  f.version = "fixture-v2";
+  await manageService("update", f.configPath, f.deps);
+  (f.raw.executables as Record<string, string>).dolt = process.execPath;
+  await f.save();
+  const configured = await manageService("update", f.configPath, f.deps);
+  assert.equal(configured.runtimeVersion, "fixture-v2");
+  assert.equal(configured.loaded, false);
+  const configuredDeployment = JSON.parse(
+    await fs.readFile(installed.paths.manifest, "utf8"),
+  ).currentDeployment;
+  f.version = "fixture-v3";
+  const updated = await manageService("update", f.configPath, f.deps);
+  assert.equal(updated.runtimeVersion, "fixture-v3");
+  assert.equal(updated.loaded, false);
+  const rolled = await manageService("update", f.configPath, f.deps, {
+    rollback: true,
+  });
+  assert.equal(rolled.runtimeVersion, "fixture-v2");
+  assert.equal(rolled.enabled, false);
+  assert.equal(
+    JSON.parse(await fs.readFile(installed.paths.manifest, "utf8"))
+      .currentDeployment,
+    configuredDeployment,
+  );
+  assert.ok(!f.calls.some((c) => ["enable", "bootstrap"].includes(c.args[0])));
+  f.version = "fixture-v2";
+  assert.equal(
+    (await manageService("start", f.configPath, f.deps)).enabled,
+    true,
+  );
+  assert.deepEqual(publicationFailures, []);
+});
+
+for (const priorUpdate of [false, true])
+  test(`failed final inspection restores administration (prior update: ${priorUpdate})`, async (t) => {
+    const f = await fixture(t);
+    const installed = await manageService("install", f.configPath, f.deps);
+    await manageService("start", f.configPath, f.deps);
+    await manageService("stop", f.configPath, f.deps);
+    if (priorUpdate) {
+      f.version = "fixture-v2";
+      await manageService("update", f.configPath, f.deps);
+    }
+    const priorVersion = priorUpdate ? "fixture-v2" : "fixture-v1";
+    const previous = await fs.readFile(installed.paths.manifest, "utf8");
+    const health = f.deps.health;
+    f.deps.health = async () => {
+      throw new Error("fixture final inspection failed");
+    };
+    f.version = "fixture-v3";
+    await assert.rejects(
+      manageService("update", f.configPath, f.deps),
+      /fixture final inspection failed/,
+    );
+    f.deps.health = health;
+    const status = await manageService("status", f.configPath, f.deps);
+    assert.equal(status.runtimeVersion, priorVersion);
+    assert.equal(status.loaded, false);
+    assert.equal(status.enabled, false);
+    assert.equal(await fs.readFile(installed.paths.manifest, "utf8"), previous);
+    f.version = priorVersion;
+    assert.equal(
+      (await manageService("start", f.configPath, f.deps)).enabled,
+      true,
+    );
+  });
+
+test("stopped update preserves an unrelated definition introduced during staging", async (t) => {
+  const f = await fixture(t);
+  const installed = await manageService("install", f.configPath, f.deps);
+  await manageService("start", f.configPath, f.deps);
+  await manageService("stop", f.configPath, f.deps);
+  const previous = await fs.readFile(installed.paths.manifest, "utf8");
+  const build = f.deps.build;
+  f.deps.build = async () => {
+    const result = await build();
+    await fs.writeFile(installed.paths.agent, "unrelated definition");
+    return result;
+  };
+  f.version = "fixture-v2";
+  await assert.rejects(
+    manageService("update", f.configPath, f.deps),
+    /unrelated LaunchAgent ownership/,
+  );
+  assert.equal(
+    await fs.readFile(installed.paths.agent, "utf8"),
+    "unrelated definition",
+  );
+  assert.equal(await fs.readFile(installed.paths.manifest, "utf8"), previous);
+  assert.equal(f.loaded, false);
+  assert.equal(f.disabled, true);
+});
+
 test("failed enabled update drains first and does not resume old policy", async (t) => {
   const f = await fixture(t);
   await manageService("install", f.configPath, f.deps);
@@ -309,7 +421,7 @@ test("unrecognized status refuses mutation instead of guessing ownership", async
   assert.ok(f.calls.every((c) => c.args[0].startsWith("print")));
 });
 
-test("status is read-only and uninstall refuses an unrelated agent definition", async (t) => {
+test("status is read-only and mutations refuse an unrelated agent definition", async (t) => {
   const f = await fixture(t);
   const installed = await manageService("install", f.configPath, f.deps);
   const before = await fs.readFile(installed.paths.manifest, "utf8");
@@ -321,10 +433,11 @@ test("status is read-only and uninstall refuses an unrelated agent definition", 
   await fs.writeFile(installed.paths.agent, "unrelated definition", {
     mode: 0o600,
   });
-  await assert.rejects(
-    manageService("uninstall", f.configPath, f.deps),
-    /ownership|unowned|unrelated/,
-  );
+  for (const action of ["start", "stop", "update", "uninstall"] as const)
+    await assert.rejects(
+      manageService(action, f.configPath, f.deps),
+      /ownership|unowned|unrelated/,
+    );
   assert.equal(
     await fs.readFile(installed.paths.agent, "utf8"),
     "unrelated definition",

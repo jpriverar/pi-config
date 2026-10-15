@@ -784,6 +784,11 @@ export async function manageService(
             : await stage();
           if (candidate)
             await loadDaemonConfig(join(candidate.path, "daemon.json"));
+          if (await exists(paths.agent)) {
+            // Keep the plist valid on both sides of the manifest switch.
+            await definitions(previous);
+            await atomic(paths.agent, priorTemplate);
+          }
           return select(
             replacement,
             replacement.id === previous.currentDeployment
@@ -793,10 +798,13 @@ export async function manageService(
         });
         selected = true;
         if (before.loaded && !before.disabled) await start(current);
-        return result(current);
+        return await result(current);
       } catch (error) {
         if (selected) await stop(current);
-        if (await exists(paths.agent)) await atomic(paths.agent, priorTemplate);
+        if (await exists(paths.agent)) {
+          await definitions(current);
+          await atomic(paths.agent, priorTemplate);
+        }
         await save(previous);
         throw error;
       }
