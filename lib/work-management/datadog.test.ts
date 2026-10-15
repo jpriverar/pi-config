@@ -5,6 +5,7 @@ import {
   type DatadogRuntime,
   type DatadogOperationRequest,
 } from "./datadog.js";
+import * as datadog from "./datadog.js";
 import { target } from "./test-fixtures.js";
 import type { runBoundedCommand } from "../task-reconciler/commands.js";
 
@@ -84,7 +85,8 @@ test("create, status and comment requests preserve their exact API contract with
       type: "case",
       attributes: {
         title: "$(private title)",
-        description: "private description\n\nLocal task: jp-test",
+        description:
+          "private description\n\nLocal task: jp-test\n\nPi sync: v1/8dee7c38-00cb-11ea-a77b-8b5a08d3b091/e555e290-ed65-49bd-ae18-8acbfcf18db7/jp-test/case",
         type_id: target.typeId,
         priority: "NOT_DEFINED",
         status_name: "Open",
@@ -124,9 +126,43 @@ test("create, status and comment requests preserve their exact API contract with
   assert.deepEqual(JSON.parse(calls[2].input), {
     data: {
       type: "case",
-      attributes: { comment: "private progress\n\n2026-10-07T12:00:00Z" },
+      attributes: {
+        comment:
+          "private progress\n\n2026-10-07T12:00:00Z\n\nPi sync: v1/8dee7c38-00cb-11ea-a77b-8b5a08d3b091/e555e290-ed65-49bd-ae18-8acbfcf18db7/jp-test/comment/c1",
+      },
     },
   });
+});
+
+test("identical journal text and timestamps retain distinct stable native identities", async () => {
+  const bodies: string[] = [];
+  for (const id of ["c1", "c1", "c2"]) {
+    await sendDatadogOperation(
+      {
+        target,
+        taskId: "jp-test",
+        remoteId: "case-1",
+        operation: { kind: "comment", commentId: id },
+        comment: {
+          id,
+          issueId: "jp-test",
+          text: "same progress\n\n[pi-task-log:v1]",
+          createdAt: "2026-10-07T12:00:00Z",
+        },
+      },
+      {
+        ...runtime,
+        run: async (file, _args, options) => {
+          if (file === runtime.ddAuthPath) return authenticated;
+          bodies.push(JSON.parse(options.input!).data.attributes.comment);
+          return reply(200);
+        },
+      },
+    );
+  }
+  assert.equal(bodies[0], bodies[1]);
+  assert.notEqual(bodies[0], bodies[2]);
+  assert.ok(bodies[2].endsWith("/jp-test/comment/c2"));
 });
 
 test("assignment and workstream are sent only in the create payload", async () => {
@@ -199,7 +235,10 @@ test("assignment and workstream are sent only in the create payload", async () =
     {
       data: {
         type: "case",
-        attributes: { comment: "progress\n\n2026-10-07T12:00:00Z" },
+        attributes: {
+          comment:
+            "progress\n\n2026-10-07T12:00:00Z\n\nPi sync: v1/8dee7c38-00cb-11ea-a77b-8b5a08d3b091/e555e290-ed65-49bd-ae18-8acbfcf18db7/jp-test/comment/c1",
+        },
       },
     },
   ]);
@@ -434,6 +473,137 @@ test("partial, duplicate, and malformed credentials never reach curl", async () 
     });
     assert.equal(curls, 0);
   }
+});
+
+test("prepared reads share authentication but stay GET-only and inside the case API", async () => {
+  const calls: Array<{ file: string; args: readonly string[] }> = [];
+  const prepared = await datadog.prepareDatadogReader?.(target, {
+    ...runtime,
+    run: async (file, args, options) => {
+      calls.push({ file, args });
+      assert.equal(options.input, undefined);
+      if (file === runtime.ddAuthPath) return authenticated;
+      assert.equal(args[0], "-q");
+      assert.equal(args[args.indexOf("--request") + 1], "GET");
+      assert.equal(args[args.indexOf("--retry") + 1], "0");
+      assert.ok(args.includes("--no-location"));
+      assert.ok(!args.includes("--data-binary"));
+      assert.ok(!args.join(" ").includes("your_secret_here"));
+      assert.equal(options.env.DD_APP_KEY, "your_secret_here");
+      return reply(200, { data: [] });
+    },
+  });
+  assert.equal(prepared?.kind, "ready");
+  if (prepared?.kind !== "ready") throw new Error("expected reader");
+  assert.deepEqual(JSON.parse(JSON.stringify(prepared)), { kind: "ready" });
+  assert.deepEqual(await prepared.get("/api/v2/cases/case-1"), {
+    kind: "success",
+    body: { data: [] },
+  });
+  assert.equal(
+    (await prepared.get("/api/v2/cases/case-1/timelines")).kind,
+    "success",
+  );
+  for (const path of [
+    "https://attacker.example/cases",
+    "//attacker.example/cases",
+    "/api/v2/users",
+    "/api/v2/cases/../users",
+    "/api/v2/cases/..%2fusers",
+  ]) {
+    assert.equal((await prepared.get(path)).kind, "rejected");
+  }
+  assert.equal(calls.filter((c) => c.file === runtime.ddAuthPath).length, 1);
+  assert.deepEqual(
+    calls
+      .filter((c) => c.file === runtime.curlPath)
+      .map((c) => c.args[c.args.indexOf("--url") + 1]),
+    [
+      "https://api.datadoghq.com/api/v2/cases/case-1",
+      "https://api.datadoghq.com/api/v2/cases/case-1/timelines",
+    ],
+  );
+});
+
+test("read failures never become successful empty results or expose command output", async () => {
+  for (const [response, expected] of [
+    [
+      reply(429, {}, "10"),
+      { kind: "retryable", code: "rate_limited", retryAfterMs: 10_000 },
+    ],
+    [reply(500), { kind: "retryable", code: "http_500" }],
+    [reply(403), { kind: "rejected", code: "http_403" }],
+    [reply(404), { kind: "rejected", code: "http_404" }],
+    [reply(302), { kind: "rejected", code: "http_302" }],
+    [
+      { code: 0, stdout: "broken JSON\n200\n", stderr: "secret" },
+      { kind: "retryable", code: "invalid_response" },
+    ],
+    [
+      { code: 1, stdout: "secret", stderr: "secret" },
+      { kind: "retryable", code: "command_failed" },
+    ],
+  ] as const) {
+    const prepared = await datadog.prepareDatadogReader?.(target, {
+      ...runtime,
+      run: async (file) =>
+        file === runtime.ddAuthPath ? authenticated : response,
+    });
+    assert.equal(prepared?.kind, "ready");
+    if (prepared?.kind !== "ready") throw new Error("expected reader");
+    assert.deepEqual(await prepared.get("/api/v2/cases/case-1"), expected);
+  }
+});
+
+test("one observation budget includes authentication and every page", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 10_000 });
+  const budgets: Array<number | undefined> = [];
+  const prepared = await datadog.prepareDatadogReader?.(target, {
+    ...runtime,
+    run: async (file, _args, options) => {
+      budgets.push(options.timeoutMs);
+      t.mock.timers.tick(1000);
+      return file === runtime.ddAuthPath
+        ? authenticated
+        : reply(200, { data: [] });
+    },
+  });
+  assert.equal(prepared?.kind, "ready");
+  if (prepared?.kind !== "ready") throw new Error("expected reader");
+  await prepared.get("/api/v2/cases/case-1/timelines");
+  await prepared.get("/api/v2/cases/case-1/timelines?page%5Bnumber%5D=1");
+  assert.deepEqual(budgets, [30_000, 29_000, 28_000]);
+  t.mock.timers.tick(30_000);
+  assert.deepEqual(await prepared.get("/api/v2/cases/case-1"), {
+    kind: "retryable",
+    code: "observation_timeout",
+  });
+  assert.equal(budgets.length, 3);
+});
+
+test("cancelled reads preserve credentials and make no further requests", async () => {
+  const controller = new AbortController();
+  let curls = 0;
+  const prepared = await datadog.prepareDatadogReader?.(
+    target,
+    {
+      ...runtime,
+      run: async (file) => {
+        if (file === runtime.ddAuthPath) return authenticated;
+        curls++;
+        return reply(200, {});
+      },
+    },
+    controller.signal,
+  );
+  assert.equal(prepared?.kind, "ready");
+  if (prepared?.kind !== "ready") throw new Error("expected reader");
+  controller.abort();
+  assert.deepEqual(await prepared.get("/api/v2/cases/case-1"), {
+    kind: "retryable",
+    code: "interrupted",
+  });
+  assert.equal(curls, 0);
 });
 
 test("create supplies the required priority without assigning a severity", async () => {
