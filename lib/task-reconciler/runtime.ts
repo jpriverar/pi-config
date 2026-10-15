@@ -1,6 +1,7 @@
 import { loadWorkManagementConfig } from "../work-management/config.js";
 import { createWorkManagementSync } from "../work-management/sync.js";
 import { prepareDatadogOperation } from "../work-management/datadog.js";
+import { observeDatadogOperation } from "../work-management/recovery.js";
 import type { ClaimObservationTransaction } from "../../extensions/worktree-pool/pool.js";
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
@@ -174,6 +175,25 @@ export async function createDaemonRuntime(
             code: "configuration_unavailable",
           });
         return prepareDatadogOperation(
+          request,
+          {
+            ddAuthPath: integration.ddAuthPath,
+            curlPath: integration.curlPath,
+            env,
+            timeoutMs: config.limits.commandTimeoutMs,
+            maxOutputBytes: config.limits.maxOutputBytes,
+          },
+          signal,
+        );
+      },
+      observe: (request, signal) => {
+        const integration = loadWorkManagementConfig(config.store);
+        if (!integration)
+          return Promise.resolve({
+            kind: "attention",
+            code: "configuration_unavailable",
+          });
+        return observeDatadogOperation(
           request,
           {
             ddAuthPath: integration.ddAuthPath,

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { DatadogObservation } from "./recovery.js";
 import type { LifecycleStore, LockOwner } from "../task-lifecycle/types.js";
 import {
   decodeWorkManagement,
@@ -27,6 +28,10 @@ export interface SyncDependencies {
     request: DatadogOperationRequest,
     signal?: AbortSignal,
   ): Promise<DatadogPreparation>;
+  observe(
+    request: DatadogOperationRequest,
+    signal?: AbortSignal,
+  ): Promise<DatadogObservation>;
   now(): number;
   retryBaseMs: number;
   retryMaxMs: number;
@@ -46,9 +51,104 @@ function attention(
     },
   };
 }
+function backoff(
+  state: WorkManagementState,
+  outcome: { code: string; retryAfterMs?: number },
+  deps: SyncDependencies,
+): WorkManagementState {
+  const count = (state.failure?.count ?? 0) + 1;
+  const delay = Math.max(
+    outcome.retryAfterMs ?? 0,
+    Math.min(deps.retryMaxMs, deps.retryBaseMs * 2 ** Math.min(30, count - 1)),
+  );
+  const retryAt = deps.now() + delay;
+  if (!Number.isSafeInteger(retryAt))
+    return attention(state, "invalid_retry_delay");
+  return {
+    ...state,
+    failure: { kind: "retryable", code: outcome.code, count, retryAt },
+  };
+}
+
 export function createWorkManagementSync(
   deps: SyncDependencies,
 ): WorkManagementSync {
+  async function recover(
+    taskId: string,
+    before: WorkManagementState,
+    signal?: AbortSignal,
+  ): Promise<SyncResult> {
+    const operation = before.inFlight!;
+    let configured = false;
+    try {
+      configured = Boolean(deps.readConfig());
+    } catch {
+      /* Invalid configuration is an operational pause. */
+    }
+    let observation: DatadogObservation;
+    if (!configured)
+      observation = { kind: "attention", code: "configuration_unavailable" };
+    else {
+      try {
+        const request: DatadogOperationRequest = {
+          taskId,
+          target: before.target,
+          operation,
+          ...(before.remote ? { remoteId: before.remote.id } : {}),
+          ...(operation.kind === "create" ? { initial: before.initial } : {}),
+        };
+        if (operation.kind === "comment")
+          request.comment = (await deps.store.comments(taskId)).find(
+            (c) => c.id === operation.commentId,
+          );
+        if (
+          (operation.kind === "comment" && !request.comment) ||
+          (operation.kind === "create" && before.remote)
+        )
+          observation = { kind: "attention", code: "invalid_recovery_request" };
+        else
+          observation = signal?.aborted
+            ? { kind: "retryable", code: "interrupted" }
+            : await deps.observe(request, signal);
+      } catch {
+        observation = {
+          kind: "retryable",
+          code: signal?.aborted ? "interrupted" : "observation_failed",
+        };
+      }
+    }
+    let result: SyncResult = "idle";
+    await deps.store.mutateWorkManagement(taskId, deps.owner, (issue) => {
+      const state = decodeWorkManagement(issue.metadata.piWorkManagement);
+      if (!state || !isDeepStrictEqual(state, before)) return null;
+      result = "attention";
+      if (observation.kind === "attention")
+        return attention(state, observation.code);
+      if (observation.kind === "retryable") {
+        const next = backoff(state, observation, deps);
+        result = next.failure?.kind === "retryable" ? "retry" : "attention";
+        return next;
+      }
+      if (operation.kind === "create" && !observation.remote)
+        return attention(state, "missing_remote_identity");
+      if (operation.kind !== "comment") {
+        if (
+          typeof observation.statusName !== "string" ||
+          !observation.statusName.trim()
+        )
+          return attention(state, "missing_remote_status");
+        state.lastSentStatus = observation.statusName;
+        if (operation.kind === "create") state.remote = observation.remote!;
+      } else if (!state.deliveredCommentIds.includes(operation.commentId))
+        state.deliveredCommentIds.push(operation.commentId);
+      state.inFlight = null;
+      state.failure = null;
+      result = "delivered";
+      return state;
+    });
+    return result;
+  }
+
   return {
     async candidates() {
       const issues = await deps.store.list([
@@ -83,6 +183,7 @@ export function createWorkManagementSync(
       if (!before) return "idle";
       if (before.failure?.kind === "attention") return "attention";
       if ((before.failure?.retryAt ?? 0) > deps.now()) return "idle";
+      if (before.inFlight) return recover(taskId, before, signal);
       const comments =
         before.remote && !before.inFlight
           ? await deps.store.comments(taskId)
@@ -100,10 +201,7 @@ export function createWorkManagementSync(
           return null;
         }
         if ((state.failure?.retryAt ?? 0) > deps.now()) return null;
-        if (state.inFlight) {
-          pending.result = "attention";
-          return attention(state, "outcome_unknown");
-        }
+        if (state.inFlight) return null;
         try {
           if (!deps.readConfig()) throw new Error("missing config");
         } catch {
@@ -197,27 +295,11 @@ export function createWorkManagementSync(
           result = "delivered";
           return state;
         }
-        if (outcome.kind === "unknown") return attention(state, outcome.code);
-        state.inFlight = null;
+        if (outcome.kind !== "unknown") state.inFlight = null;
         if (outcome.kind === "rejected") return attention(state, outcome.code);
-        const count = (state.failure?.count ?? 0) + 1;
-        const delay = Math.max(
-          outcome.retryAfterMs ?? 0,
-          Math.min(
-            deps.retryMaxMs,
-            deps.retryBaseMs * 2 ** Math.min(30, count - 1),
-          ),
-        );
-        if (!Number.isSafeInteger(deps.now() + delay))
-          return attention(state, "invalid_retry_delay");
-        state.failure = {
-          kind: "retryable",
-          code: outcome.code,
-          count,
-          retryAt: deps.now() + delay,
-        };
-        result = "retry";
-        return state;
+        const next = backoff(state, outcome, deps);
+        result = next.failure?.kind === "retryable" ? "retry" : "attention";
+        return next;
       });
       return result;
     },

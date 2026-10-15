@@ -14,6 +14,7 @@ import {
 } from "./model.js";
 import { target } from "./test-fixtures.js";
 import type { DatadogOperationRequest, DatadogOutcome } from "./datadog.js";
+import type { DatadogObservation } from "./recovery.js";
 
 const now = Date.parse("2026-10-07T12:00:00Z");
 async function harness(t: TestContext) {
@@ -50,6 +51,13 @@ async function harness(t: TestContext) {
     { store: dir },
   );
   const calls: DatadogOperationRequest[] = [];
+  const observations: DatadogOperationRequest[] = [];
+  let observe: (
+    request: DatadogOperationRequest,
+  ) => Promise<DatadogObservation> = async () => ({
+    kind: "attention",
+    code: "remote_delivery_not_found",
+  });
   let respond: (
     request: DatadogOperationRequest,
   ) => Promise<DatadogOutcome> = async (request) =>
@@ -80,6 +88,10 @@ async function harness(t: TestContext) {
       curlPath: "/usr/bin/curl",
       workstreams: {},
     }),
+    observe: async (request: DatadogOperationRequest) => {
+      observations.push(request);
+      return observe(request);
+    },
     prepare: async (request: DatadogOperationRequest) => ({
       kind: "ready" as const,
       send: async () => {
@@ -93,6 +105,10 @@ async function harness(t: TestContext) {
     store,
     comments,
     calls,
+    observations,
+    observe: (fn: typeof observe) => {
+      observe = fn;
+    },
     deps,
     sync: createWorkManagementSync(deps),
     state: () => decodeWorkManagement(raw.metadata.piWorkManagement)!,
@@ -104,6 +120,175 @@ async function harness(t: TestContext) {
     },
   };
 }
+
+test("an unknown comment is observed after restart and never posted twice", async (t) => {
+  const h = await harness(t);
+  await h.sync.step("jp-test");
+  h.comments.push({
+    id: "c1",
+    issue_id: "jp-test",
+    text: "progress\n\n[pi-task-log:v1]",
+    created_at: new Date(now).toISOString(),
+  });
+  h.respond(async () => ({ kind: "unknown", code: "timeout" }));
+  assert.equal(await h.sync.step("jp-test"), "retry");
+  assert.deepEqual(h.state().inFlight, { kind: "comment", commentId: "c1" });
+  assert.deepEqual(await h.sync.candidates(), []);
+  h.clock(now + 1000);
+  h.observe(async (request) => {
+    assert.deepEqual(request.operation, { kind: "comment", commentId: "c1" });
+    assert.equal(request.comment?.id, "c1");
+    assert.equal(request.remoteId, "case-1");
+    return { kind: "observed" };
+  });
+  const restarted = createWorkManagementSync(h.deps);
+  assert.equal(await restarted.step("jp-test"), "delivered");
+  assert.deepEqual(h.state().deliveredCommentIds, ["c1"]);
+  assert.equal(h.state().inFlight, null);
+  assert.equal(h.state().failure, null);
+  assert.equal(h.calls.length, 2);
+  assert.equal(await restarted.step("jp-test"), "idle");
+  h.comments.push({
+    id: "c2",
+    issue_id: "jp-test",
+    text: "next\n\n[pi-task-log:v1]",
+    created_at: new Date(now + 1000).toISOString(),
+  });
+  h.respond(async () => ({ kind: "success" }));
+  assert.equal(await restarted.step("jp-test"), "delivered");
+  assert.deepEqual(
+    h.calls.map((c) => c.operation),
+    [
+      { kind: "create" },
+      { kind: "comment", commentId: "c1" },
+      { kind: "comment", commentId: "c2" },
+    ],
+  );
+});
+
+test("failed observations back off without releasing the write reservation", async (t) => {
+  const h = await harness(t);
+  h.raw.metadata.piWorkManagement.inFlight = { kind: "create" };
+  h.observe(async () => ({
+    kind: "retryable",
+    code: "http_500",
+    retryAfterMs: 5000,
+  }));
+  assert.equal(await h.sync.step("jp-test"), "retry");
+  assert.deepEqual(h.state().inFlight, { kind: "create" });
+  assert.equal(h.state().failure?.retryAt, now + 5000);
+  assert.equal(await h.sync.step("jp-test"), "idle");
+  assert.equal(h.observations.length, 1);
+  h.clock(now + 5000);
+  h.observe(async () => ({
+    kind: "attention",
+    code: "multiple_remote_matches",
+  }));
+  assert.equal(await h.sync.step("jp-test"), "attention");
+  assert.deepEqual(h.state().inFlight, { kind: "create" });
+  assert.deepEqual(await h.sync.candidates(), []);
+  assert.equal(h.calls.length, 0);
+});
+
+test("old attention records are not reopened or backfilled", async (t) => {
+  const h = await harness(t);
+  h.raw.metadata.piWorkManagement.inFlight = { kind: "create" };
+  h.raw.metadata.piWorkManagement.failure = {
+    kind: "attention",
+    code: "outcome_unknown",
+    count: 1,
+    retryAt: null,
+  };
+  assert.deepEqual(await h.sync.candidates(), []);
+  assert.equal(await h.sync.step("jp-test"), "attention");
+  assert.equal(h.observations.length, 0);
+  assert.equal(h.calls.length, 0);
+});
+
+test("a pause or rebind while observing wins over a stale remote result", async (t) => {
+  for (const change of ["pause", "rebind"]) {
+    const h = await harness(t);
+    h.raw.metadata.piWorkManagement.inFlight = { kind: "create" };
+    h.observe(async () => {
+      await h.store.mutateWorkManagement("jp-test", h.deps.owner, (issue) => {
+        const state = decodeWorkManagement(issue.metadata.piWorkManagement)!;
+        if (change === "pause")
+          state.failure = {
+            kind: "attention",
+            code: "operator_pause",
+            count: 1,
+            retryAt: null,
+          };
+        else
+          state.remote = {
+            id: "other-case",
+            url: "https://app.datadoghq.com/cases/other-case",
+          };
+        return state;
+      });
+      return {
+        kind: "observed",
+        statusName: "Open",
+        remote: { id: "case-1", url: "https://app.datadoghq.com/cases/case-1" },
+      };
+    });
+    assert.equal(await h.sync.step("jp-test"), "idle");
+    if (change === "pause")
+      assert.equal(h.state().failure?.code, "operator_pause");
+    else assert.equal(h.state().remote?.id, "other-case");
+    assert.deepEqual(h.state().inFlight, { kind: "create" });
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test("observing an uncertain status converges to the latest local lifecycle state", async (t) => {
+  const h = await harness(t);
+  await h.sync.step("jp-test");
+  h.raw.metadata.piLifecycle.phase = "active";
+  h.respond(async () => ({ kind: "unknown", code: "timeout" }));
+  assert.equal(await h.sync.step("jp-test"), "retry");
+  h.raw.metadata.piLifecycle.phase = "done";
+  h.raw.metadata.piLifecycle.disposition = {
+    kind: "completed",
+    reason: "done",
+    at: new Date(now).toISOString(),
+    evidenceArtifactIds: [],
+  };
+  h.clock(now + 1000);
+  h.observe(async () => ({ kind: "observed", statusName: "In Progress" }));
+  assert.equal(await h.sync.step("jp-test"), "delivered");
+  assert.equal(h.state().lastSentStatus, "In Progress");
+  h.respond(async () => ({ kind: "success" }));
+  assert.equal(await h.sync.step("jp-test"), "delivered");
+  assert.deepEqual(
+    h.calls.map((c) => c.operation),
+    [
+      { kind: "create" },
+      { kind: "status", statusName: "In Progress" },
+      { kind: "status", statusName: "Done" },
+    ],
+  );
+  assert.equal(h.state().lastSentStatus, "Done");
+  assert.equal(h.raw.metadata.piLifecycle.phase, "done");
+});
+
+test("a known observation drains its receipt even when shutdown begins", async (t) => {
+  const h = await harness(t);
+  const controller = new AbortController();
+  h.raw.metadata.piWorkManagement.inFlight = { kind: "create" };
+  h.observe(async () => {
+    controller.abort();
+    return {
+      kind: "observed",
+      statusName: "Open",
+      remote: { id: "case-1", url: "https://app.datadoghq.com/cases/case-1" },
+    };
+  });
+  assert.equal(await h.sync.step("jp-test", controller.signal), "delivered");
+  assert.equal(h.state().inFlight, null);
+  assert.equal(h.state().remote?.id, "case-1");
+  assert.equal(h.calls.length, 0);
+});
 
 test("completed before the first scan still creates then sends the terminal status", async (t) => {
   const h = await harness(t);
@@ -251,7 +436,8 @@ test("persisted in-flight and unknown comment outcomes stop all replay", async (
     created_at: new Date(now).toISOString(),
   });
   h.respond(async () => ({ kind: "unknown", code: "timeout" }));
-  assert.equal(await h.sync.step("jp-test"), "attention");
+  assert.equal(await h.sync.step("jp-test"), "retry");
+  h.clock(now + 1000);
   h.raw.metadata.piLifecycle.phase = "active";
   assert.equal(await h.sync.step("jp-test"), "attention");
   assert.equal(h.calls.length, 2);
@@ -290,11 +476,22 @@ test("remote success followed by a lost local receipt cannot create a second ite
   assert.deepEqual(h.state().inFlight, { kind: "create" });
   assert.equal(h.calls.length, 1);
   h.store.mutateWorkManagement = original;
+  h.observe(async () => ({
+    kind: "observed",
+    statusName: "Open",
+    remote: {
+      id: "case-1",
+      url: "https://app.datadoghq.com/cases/case-1",
+    },
+  }));
   assert.equal(
     await createWorkManagementSync(h.deps).step("jp-test"),
-    "attention",
+    "delivered",
   );
   assert.equal(h.calls.length, 1);
+  assert.equal(h.observations.length, 1);
+  assert.equal(h.state().remote?.id, "case-1");
+  assert.equal(h.state().inFlight, null);
 });
 
 test("reopening a task updates its existing item rather than creating another", async (t) => {

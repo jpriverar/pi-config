@@ -505,8 +505,8 @@ test("prepared reads share authentication but stay GET-only and inside the case 
     "success",
   );
   for (const path of [
-    "https://attacker.example/cases",
-    "//attacker.example/cases",
+    "https://github.com/cases",
+    "//github.com/cases",
     "/api/v2/users",
     "/api/v2/cases/../users",
     "/api/v2/cases/..%2fusers",

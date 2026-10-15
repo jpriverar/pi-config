@@ -240,7 +240,7 @@ Stock `dd-auth` owns browser login and credential caching. Pi captures its
 supported `--output` privately in process memory, then passes the two keys only
 in curl's environment. Authentication never receives the write payload. A
 restart while authenticating leaves work pending; a restart after the durable
-write reservation remains conservative and requires outcome inspection.
+write reservation enters read-back recovery without replaying the uncertain write.
 
 The helper uses explicit org/site selection, native curl environment-variable
 expansion, and JSON on stdin. It ignores curlrc, disallows redirects and automatic
@@ -257,7 +257,41 @@ separate operator actions; building this package does neither. Use the existing
 reconciliation work too and cannot undo a request already dispatched. Local sync
 persistence drains under the existing command and lock deadlines rather than
 being cancelled with lifecycle work, allowing an already-known result to be
-recorded. A stalled receipt write still leaves its in-flight marker for attention.
+recorded. A stalled receipt write leaves its in-flight marker for remote inspection.
+
+### Forward-only automatic recovery
+
+New case descriptions and progress comments carry a versioned `Pi sync: v1/…`
+reference scoped to their captured org/project and native task/comment identities.
+Do not remove that reference when editing a case. Existing attention records are
+not reopened, and old unmarked comments are not matched by text or backfilled.
+
+An unknown send retains its durable reservation and schedules observation with
+backoff. A restart with an unfinished reservation also observes before doing
+anything else:
+
+- A unique matching case binds its existing ID/link and observed status.
+- A unique matching marked comment records its native comment receipt without
+  posting again. Matching requires the full new comment payload, not just a
+  reference copied onto different content.
+- A status observation records actual remote state. The next ordinary sync step
+  compares that state with current local intent, so a newer local transition is
+  not replaced by the old reserved status.
+
+Reads run outside the local metadata lock; their results are committed only if
+that task's captured Work Management state is still current. Authentication,
+transport, rate-limit, and malformed/inconsistent-page failures back off while
+preserving the reservation. Missing or conflicting deliveries, wrong bindings,
+permission/deletion errors, and scan limits require attention. Even an absent
+comment in a complete read does not authorize another POST: an earlier request
+could still complete later.
+
+Each observation has one configured command-timeout budget, including login and
+all pages. Scans request 50 items per page and stop after at most 20 pages. Case
+search is one-based and validates reported page totals; timelines are zero-based
+and can omit pagination metadata, so they continue to an empty page. Incomplete
+scans never acknowledge a partial match. This is uncertainty recovery, not
+periodic remote-drift correction or two-way synchronization.
 
 ### Inspect and recover an uncertain operation
 
@@ -284,6 +318,7 @@ recorded. A stalled receipt write still leaves its in-flight marker for attentio
    captured project/mapping to repair delivery. Native comments and local
    lifecycle changes remain the source of pending work.
 
-No automatic search/recovery tool is supplied in v1. Remote item deletion or lost
-permissions do not cause automatic recreation. Cleanup of a live validation item
-requires separate approval; it is not an implicit activation step.
+Manual repair remains necessary for old unmarked or genuinely ambiguous
+operations. Remote item deletion or lost permissions do not cause automatic
+recreation. Cleanup of a live validation item requires separate approval; it is
+not an implicit activation step.

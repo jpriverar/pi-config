@@ -280,6 +280,9 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
         curlPath: "/usr/bin/curl",
         workstreams: {},
       }),
+      observe: async () => {
+        assert.fail("confirmed deliveries must not require recovery");
+      },
       prepare: async (request: DatadogOperationRequest) => ({
         kind: "ready" as const,
         send: async (): Promise<DatadogOutcome> => {
