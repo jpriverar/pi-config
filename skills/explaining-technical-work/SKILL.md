@@ -28,10 +28,10 @@ Use ordinary descriptions for local terms: “loads the associated examples”
 before “hydrates the records.” Then introduce functions, files, and line references
 as evidence or as names for roles the reader now understands.
 
-A concrete example or small in-chat diagram is useful when the reader would
-otherwise have to reconstruct a flow, branch, or before/after relationship. This
-is a way to clarify the answer, not a requirement for five headings or a diagram
-in every response.
+A concrete example or small in-chat diagram, including a fenced `mermaid` block,
+is useful when the reader would otherwise have to reconstruct a flow, branch, or
+before/after relationship. This is a way to clarify the answer, not a requirement
+for five headings or a diagram in every response.
 
 ## Example
 
