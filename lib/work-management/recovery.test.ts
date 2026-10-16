@@ -279,6 +279,116 @@ test("case search honors verified one-based pagination metadata", async () => {
   assert.equal(h.urls.length, 1);
 });
 
+test("an empty nonterminal case-search page cannot confirm an earlier match", async () => {
+  const h = fixture((url) => {
+    const page = Number(url.searchParams.get("page[number]"));
+    const data =
+      page === 1
+        ? [
+            caseRow(),
+            ...Array.from({ length: 49 }, (_, i) =>
+              caseRow(`unrelated-${i}`, { description: "unrelated" }),
+            ),
+          ]
+        : [];
+    return {
+      body: {
+        data,
+        meta: { page: { current: page, size: data.length, total: 3 } },
+      },
+    };
+  });
+  assert.deepEqual(await observeDatadogOperation(createRequest, h.runtime), {
+    kind: "retryable",
+    code: "invalid_remote_response",
+  });
+  assert.equal(h.urls.length, 2);
+});
+
+for (const [firstTotal, nextTotal] of [
+  [3, 2],
+  [2, 3],
+]) {
+  test(`case-search totals changing from ${firstTotal} to ${nextTotal} cannot confirm an earlier match`, async () => {
+    const h = fixture((url) => {
+      const page = Number(url.searchParams.get("page[number]"));
+      return {
+        body: {
+          data: [
+            page === 1
+              ? caseRow()
+              : caseRow(`unrelated-${page}`, { description: "unrelated" }),
+          ],
+          meta: {
+            page: {
+              current: page,
+              size: 1,
+              total: page === 1 ? firstTotal : nextTotal,
+            },
+          },
+        },
+      };
+    });
+    assert.deepEqual(await observeDatadogOperation(createRequest, h.runtime), {
+      kind: "retryable",
+      code: "invalid_remote_response",
+    });
+    assert.equal(h.urls.length, 2);
+  });
+}
+
+test("missing case-search metadata cannot discard a previously reported total", async () => {
+  const h = fixture((url) => ({
+    body:
+      url.searchParams.get("page[number]") === "1"
+        ? {
+            data: [caseRow()],
+            meta: { page: { current: 1, size: 1, total: 3 } },
+          }
+        : { data: [] },
+  }));
+  assert.deepEqual(await observeDatadogOperation(createRequest, h.runtime), {
+    kind: "retryable",
+    code: "invalid_remote_response",
+  });
+  assert.equal(h.urls.length, 2);
+});
+
+test("consistent case-search totals confirm a match only after the final page", async () => {
+  const h = fixture((url) => {
+    const page = Number(url.searchParams.get("page[number]"));
+    return {
+      body: {
+        data: [
+          page === 1
+            ? caseRow()
+            : caseRow("unrelated", { description: "unrelated" }),
+        ],
+        meta: { page: { current: page, size: 1, total: 2 } },
+      },
+    };
+  });
+  const result = await observeDatadogOperation(createRequest, h.runtime);
+  assert.equal(result.kind, "observed");
+  assert.equal(h.urls.length, 2);
+});
+
+test("an empty first case-search page with no remaining pages stays not found", async () => {
+  for (const total of [0, 1]) {
+    const h = fixture(() => ({
+      body: {
+        data: [],
+        meta: { page: { current: 1, size: 0, total } },
+      },
+    }));
+    assert.deepEqual(await observeDatadogOperation(createRequest, h.runtime), {
+      kind: "attention",
+      code: "remote_delivery_not_found",
+    });
+    assert.equal(h.urls.length, 1);
+  }
+});
+
 test("unmarked, absent, conflicting and wrong-project creates do not bind an arbitrary case", async () => {
   const wrongProject = caseRow();
   wrongProject.relationships.project.data.id =

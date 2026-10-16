@@ -70,6 +70,7 @@ async function scan<T>(
 ): Promise<{ kind: "complete"; matches: T[] } | Failure> {
   const matches: T[] = [];
   const seen = new Set<string>();
+  let expectedTotal: number | undefined;
   for (let offset = 0; offset < 20; offset++) {
     const page = firstPage + offset;
     const result = await reader.get(path(page));
@@ -86,19 +87,27 @@ async function scan<T>(
       const found = match(row);
       if (found !== null) matches.push(found);
     }
-    if (body.data.length === 0) return { kind: "complete", matches };
     // Case search is one-based and supplies totals; timelines can omit metadata entirely.
     if (firstPage === 1 && body.meta !== undefined) {
       const pagination = record(record(body.meta).page);
+      const total = pagination.total as number;
+      const minimumTotal = page === 1 && body.data.length === 0 ? 0 : page;
       if (
         pagination.current !== page ||
         pagination.size !== body.data.length ||
-        !Number.isSafeInteger(pagination.total) ||
-        (pagination.total as number) < page
+        !Number.isSafeInteger(total) ||
+        total < minimumTotal ||
+        (expectedTotal !== undefined && total !== expectedTotal)
       )
-        throw new Error("invalid case pagination");
-      if (pagination.total === page) return { kind: "complete", matches };
+        throw new Error(`invalid case pagination at page ${page}`);
+      expectedTotal = total;
+      if (total <= page) return { kind: "complete", matches };
+      if (body.data.length === 0)
+        throw new Error(`empty case page ${page} before reported end ${total}`);
+    } else if (expectedTotal !== undefined) {
+      throw new Error(`missing case pagination at page ${page}`);
     }
+    if (body.data.length === 0) return { kind: "complete", matches };
   }
   return { kind: "attention", code: "remote_scan_limit" };
 }
