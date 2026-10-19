@@ -157,6 +157,12 @@ test("running daemon notices identify queue diagnostics and affected tasks", () 
   ]) {
     assert.ok(message.includes(detail), message);
   }
+  assert.deepEqual(message.split("\n").slice(1), [
+    "  - jp-1 — Ship notification visibility: local_reconciliation_failed",
+    "  - scan_failed",
+    "",
+    "Use /task-reconciler status for details.",
+  ]);
   assert.doesNotMatch(message, /setup|installation|activation/);
   assert.deepEqual({ task, unhealthy }, before);
   unhealthy.queue.diagnostics[0].count++;
@@ -180,7 +186,15 @@ test("queue summaries bound the displayed entries and disclose omitted diagnosti
   assert.match(message, /jp-0/);
   assert.match(message, /jp-2/);
   assert.doesNotMatch(message, /jp-3|jp-4/);
-  assert.match(message, /2 more/);
+  assert.deepEqual(
+    message.split("\n").filter((line) => line.startsWith("  - ")),
+    [
+      "  - jp-0: local_reconciliation_failed",
+      "  - jp-1: local_reconciliation_failed",
+      "  - jp-2: local_reconciliation_failed",
+      "  - 2 more",
+    ],
+  );
   assert.match(message, /\/task-reconciler status/);
 });
 
@@ -193,7 +207,7 @@ test("stale health notices show the last heartbeat and any queue diagnostic", ()
     .message;
   assert.match(message, /heartbeat.*stale/);
   assert.ok(message.includes(health.heartbeatAt));
-  assert.match(message, /scan_failed/);
+  assert.ok(message.split("\n").includes("  - scan_failed"));
   assert.doesNotMatch(message, /setup|installation|activation/);
 });
 

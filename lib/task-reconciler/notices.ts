@@ -140,13 +140,13 @@ function healthWarning(
   if (health.queue.diagnostics.length > summary.length)
     summary.push(`${health.queue.diagnostics.length - summary.length} more`);
   const diagnostics = summary.length
-    ? ` Queue diagnostics: ${summary.join("; ")}.`
+    ? `\n${summary.map((detail) => `  - ${detail}`).join("\n")}`
     : "";
   const state =
     health.state === "stale"
       ? `Task reconciler heartbeat is stale or clock-skewed (last heartbeat: ${noticeText(health.heartbeatAt, 64)}).`
       : "Task reconciler is running but has queue problems.";
-  return `${state}${diagnostics} ${status}`;
+  return `${state}${diagnostics}\n\n${status}`;
 }
 export function selectReconciliationNotices(
   issues: readonly BeadsIssue[],
