@@ -59,11 +59,12 @@ async function run(
       code?: number;
       stdout?: string;
       stderr?: string;
+      message?: string;
     };
     return {
       code: typeof failed.code === "number" ? failed.code : 1,
       stdout: failed.stdout ?? "",
-      stderr: failed.stderr ?? "",
+      stderr: failed.stderr || failed.message || "",
     };
   }
 }
@@ -73,7 +74,7 @@ async function mustRun(command: string, args: string[], cwd: string) {
   assert.equal(
     result.code,
     0,
-    `${command} ${args.join(" ")} exited ${result.code}`,
+    `${command} ${args.join(" ")} exited ${result.code}\n${result.stderr || result.stdout}`,
   );
   return result.stdout.trim();
 }
