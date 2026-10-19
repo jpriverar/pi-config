@@ -91,6 +91,7 @@ function createFakeBd(root: string) {
         next: 3,
         ready: ["jp-ready"],
         projectRenames: '{"version":1,"aliases":{}}',
+        projectArchives: '{"version":1,"archived":[]}',
         issues: [
           {
             id: "jp-ready",
@@ -135,20 +136,17 @@ if (command === "list") {
 } else if (command === "ready") {
   output(state.issues.filter((issue) => state.ready.includes(issue.id) && issue.status === "open"));
 } else if (command === "config") {
-  if (clean[1] === "get" && clean[2] === "custom.pi-project-renames") {
-    output({
-      key: "custom.pi-project-renames",
-      schema_version: 1,
-      value: state.projectRenames,
-    });
-  } else if (clean[1] === "set" && clean[2] === "custom.pi-project-renames") {
-    state.projectRenames = clean[3];
+  const fields = {
+    "custom.pi-project-renames": "projectRenames",
+    "custom.pi-project-archives": "projectArchives",
+  };
+  const field = fields[clean[2]];
+  if (clean[1] === "get" && field) {
+    output({ key: clean[2], schema_version: 1, value: state[field] });
+  } else if (clean[1] === "set" && field) {
+    state[field] = clean[3];
     save();
-    output({
-      key: "custom.pi-project-renames",
-      schema_version: 1,
-      value: state.projectRenames,
-    });
+    output({ key: clean[2], schema_version: 1, value: state[field] });
   } else {
     process.stderr.write("unsupported fake bd config command");
     process.exit(2);
@@ -851,11 +849,10 @@ async function verifyContractHarness(
   const previousDaemonConfig = process.env.PI_TASK_RECONCILER_CONFIG;
   process.env.PI_TASK_RECONCILER_CONFIG = join(cwd, "not-installed.json");
   try {
-    const reconciliation = await invokeTool(harness, "task_reconcile", {
-      taskId: created.id,
-    });
-    assert.equal(reconciliation.isError, true);
-    assert.equal(reconciliation.details.code, "unavailable");
+    await assert.rejects(
+      invokeTool(harness, "task_reconcile", { taskId: created.id }),
+      /Reconciliation failed \(unavailable\)/,
+    );
     assert.equal(
       harness.execCalls.length,
       commandCount,
@@ -866,15 +863,22 @@ async function verifyContractHarness(
       delete process.env.PI_TASK_RECONCILER_CONFIG;
     else process.env.PI_TASK_RECONCILER_CONFIG = previousDaemonConfig;
   }
-  assert.ok(
-    harness.execCalls.every(
-      (call) =>
-        call[0] === "bd" &&
-        call.includes("--json") &&
-        call.includes("--db") &&
-        call.includes(fakeBd.store),
-    ),
-  );
+  for (const call of harness.execCalls) {
+    const wrapped = call[0] === "env";
+    assert.deepEqual(
+      call.slice(0, wrapped ? 3 : 1),
+      wrapped ? ["env", "BD_BACKUP_ENABLED=false", "bd"] : ["bd"],
+      `unexpected fixture command: ${JSON.stringify(call)}`,
+    );
+    const args = call.slice(wrapped ? 3 : 1);
+    assert.ok(
+      args.includes("--json"),
+      `missing --json: ${JSON.stringify(call)}`,
+    );
+    const storeIndex = args.indexOf("--db");
+    assert.ok(storeIndex >= 0, `missing --db: ${JSON.stringify(call)}`);
+    assert.equal(args[storeIndex + 1], fakeBd.store);
+  }
   await assert.rejects(
     invokeTool(harness, "task_create", {
       title: "MALFORMED",

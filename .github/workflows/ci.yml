@@ -25,6 +25,27 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Install integration test tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/pi-test-tools"
+          mkdir -p "$tools/bin" "$tools/beads" "$tools/dolt"
+          curl --fail --silent --show-error --location \
+            https://github.com/gastownhall/beads/releases/download/v1.1.2/beads_1.1.2_linux_amd64.tar.gz \
+            --output "$tools/beads.tar.gz"
+          curl --fail --silent --show-error --location \
+            https://github.com/dolthub/dolt/releases/download/v2.2.3/dolt-linux-amd64.tar.gz \
+            --output "$tools/dolt.tar.gz"
+          echo "a72d71ed374955dc9f83a0f90b54bd7b6a0016709dd1676ae2e368651ed401c2  $tools/beads.tar.gz" | sha256sum --check
+          echo "ffafa7cc172cada5f77ca3fb96306545ddac44a111625f75f870306c7f197301  $tools/dolt.tar.gz" | sha256sum --check
+          tar -xzf "$tools/beads.tar.gz" -C "$tools/beads"
+          tar -xzf "$tools/dolt.tar.gz" -C "$tools/dolt"
+          install -m 755 "$tools/beads/bd" "$tools/bin/bd"
+          install -m 755 "$tools/dolt/dolt-linux-amd64/bin/dolt" "$tools/bin/dolt"
+          "$tools/bin/bd" version
+          "$tools/bin/dolt" version
+          echo "$tools/bin" >> "$GITHUB_PATH"
       - name: Run compatibility and public-safety gates
         shell: bash
         run: |
