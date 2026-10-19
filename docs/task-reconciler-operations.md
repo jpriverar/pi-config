@@ -75,13 +75,24 @@ to fifteen minutes, with one local lane and two external observations.
   replacement; a stale heartbeat alone does not authorize deleting ownership.
 - **Incompatible:** explicitly update the installed runtime/protocol. Reloading
   Pi or updating the package does not replace the running daemon.
-- **Repeated check errors:** inspect the affected task and account configuration.
-  Pi presents deduplicated attention notices, not raw observation/error strings.
+- **Check attention and repeated errors:** notices include the task ID/title and
+  its recorded observation (for example `merge_conflict` or `changes_requested`).
+  Missing observations are explicitly reported as “no reason recorded”; inspect
+  the task in `/tasks`. Text is normalized for terminal safety and truncated
+  with an ellipsis, not populated from raw command output.
+
 - **Pending release:** a present, valid explicit release remains pending until
   the owner retries it. Reconciliation does not retry deletion. Historical automatic
   cleanup reservations are cancelled only with valid native evidence; already
   removed claims are finalized. Preserve ambiguous or contradictory evidence;
   do not delete lock or worktree directories to make a warning disappear.
+
+Health notices distinguish unavailable health (with its recorded reason), stale
+heartbeats (with the last heartbeat timestamp), and a running daemon with queue
+diagnostics. Queue summaries show up to three diagnostic codes with affected
+task IDs/titles when available, plus the number omitted; `/task-reconciler status`
+shows the full bounded diagnostic list. Notices remain deduplicated and do not
+repair issues, install/activate the daemon, or change task state.
 
 Private runtime/health files are under the configured runtime root. The lifetime
 singleton is instead anchored at `<canonical-store>/pi-task-reconciler`, so a
