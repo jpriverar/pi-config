@@ -115,6 +115,159 @@ test("disappearance is not interpreted as completion", () => {
   assert.equal(missing.notices.length, 0);
   assert.deepEqual(missing.cursor.knownTaskIds, ["jp-1"]);
 });
+test("unavailable health notices retain the recorded reason", () => {
+  for (const reason of [
+    "setup_required",
+    "health_read_timeout",
+    "daemon unavailable (unsafe_path)",
+  ]) {
+    const result = selectReconciliationNotices(
+      [],
+      { state: "unavailable", reason },
+      null,
+    );
+    assert.match(result.notices[0].message, /unavailable/);
+    assert.ok(result.notices[0].message.includes(reason));
+    assert.match(result.notices[0].message, /\/task-reconciler status/);
+  }
+});
+
+test("running daemon notices identify queue diagnostics and affected tasks", () => {
+  const task = issue();
+  task.title = "Ship notification visibility";
+  const unhealthy = structuredClone(health);
+  unhealthy.queue.diagnostics = [
+    {
+      taskId: task.id,
+      code: "local_reconciliation_failed",
+      count: 2,
+      lastSeenAt: health.heartbeatAt,
+    },
+    { code: "scan_failed", count: 1, lastSeenAt: health.heartbeatAt },
+  ];
+  const before = structuredClone({ task, unhealthy });
+  const first = selectReconciliationNotices([task], unhealthy, null);
+  assert.equal(first.notices.length, 1);
+  const message = first.notices[0].message;
+  for (const detail of [
+    task.id,
+    task.title,
+    "local_reconciliation_failed",
+    "scan_failed",
+  ]) {
+    assert.ok(message.includes(detail), message);
+  }
+  assert.doesNotMatch(message, /setup|installation|activation/);
+  assert.deepEqual({ task, unhealthy }, before);
+  unhealthy.queue.diagnostics[0].count++;
+  unhealthy.queue.diagnostics[0].lastSeenAt = "2026-01-02T00:00:00Z";
+  assert.equal(
+    selectReconciliationNotices([task], unhealthy, first.cursor).notices.length,
+    0,
+  );
+});
+
+test("queue summaries bound the displayed entries and disclose omitted diagnostics", () => {
+  const unhealthy = structuredClone(health);
+  unhealthy.queue.diagnostics = Array.from({ length: 5 }, (_, i) => ({
+    taskId: `jp-${i}`,
+    code: "local_reconciliation_failed",
+    count: 1,
+    lastSeenAt: health.heartbeatAt,
+  }));
+  const message = selectReconciliationNotices([], unhealthy, null).notices[0]
+    .message;
+  assert.match(message, /jp-0/);
+  assert.match(message, /jp-2/);
+  assert.doesNotMatch(message, /jp-3|jp-4/);
+  assert.match(message, /2 more/);
+  assert.match(message, /\/task-reconciler status/);
+});
+
+test("stale health notices show the last heartbeat and any queue diagnostic", () => {
+  const stale = { ...structuredClone(health), state: "stale" as const };
+  stale.queue.diagnostics = [
+    { code: "scan_failed", count: 1, lastSeenAt: health.heartbeatAt },
+  ];
+  const message = selectReconciliationNotices([], stale, null).notices[0]
+    .message;
+  assert.match(message, /heartbeat.*stale/);
+  assert.ok(message.includes(health.heartbeatAt));
+  assert.match(message, /scan_failed/);
+  assert.doesNotMatch(message, /setup|installation|activation/);
+});
+
+test("attention notices show task context and the observation without changing state", () => {
+  const task = issue();
+  task.title = "Publish the package";
+  const check = task.lifecycle!.activeCheck!;
+  check.state = "action_required";
+  for (const reason of [
+    "merge_conflict",
+    "changes_requested",
+    "closed_unmerged",
+    "A manual decision is required",
+  ]) {
+    check.lastObservation = reason;
+    const before = structuredClone(task);
+    const first = selectReconciliationNotices([task], health, null);
+    const message = first.notices[0].message;
+    for (const detail of [task.id, task.title, reason])
+      assert.ok(message.includes(detail), message);
+    assert.deepEqual(task, before);
+    assert.equal(
+      selectReconciliationNotices([task], health, first.cursor).notices.length,
+      0,
+    );
+  }
+});
+
+test("attention notices preserve archived check reasons and disclose missing reasons", () => {
+  const task = issue();
+  const check = task.lifecycle!.activeCheck!;
+  check.state = "action_required";
+  check.lastObservation = "merge_conflict";
+  task.lifecycle!.checkHistory.push(check);
+  task.lifecycle!.activeCheck = null;
+  assert.match(
+    selectReconciliationNotices([task], health, null).notices[0].message,
+    /merge_conflict/,
+  );
+  for (const reason of [null, "  "]) {
+    check.lastObservation = reason;
+    const message = selectReconciliationNotices([task], health, null).notices[0]
+      .message;
+    assert.match(message, /no reason recorded/i);
+    assert.match(message, /\/tasks/);
+  }
+});
+
+test("diagnostic text is bounded and cannot inject terminal controls", () => {
+  const task = issue();
+  const escape = String.fromCharCode(27);
+  task.title = `${escape}[31mShip visibility${escape}[0m\n${"x".repeat(1000)}`;
+  const check = task.lifecycle!.activeCheck!;
+  check.state = "action_required";
+  check.lastObservation = `${escape}[31mmerge_conflict${escape}[0m\n${"y".repeat(1000)}`;
+  const message = selectReconciliationNotices([task], health, null).notices[0]
+    .message;
+  assert.match(message, /Ship visibility/);
+  assert.match(message, /merge_conflict/);
+  assert.ok(!message.includes(escape));
+  assert.ok(!message.includes("\n"));
+  assert.ok(message.length < 600);
+  assert.match(message, /…/);
+  const down = selectReconciliationNotices(
+    [],
+    { state: "unavailable", reason: check.lastObservation },
+    null,
+  ).notices[0].message;
+  assert.match(down, /merge_conflict/);
+  assert.ok(!down.includes(escape));
+  assert.ok(!down.includes("\n"));
+  assert.ok(down.length < 400);
+});
+
 test("health warning and recovery deduplicate independently of heartbeat", () => {
   const down: DaemonHealth = {
     state: "incompatible",

@@ -107,6 +107,47 @@ function observation(issue: BeadsIssue) {
   const signature = `${kind}:${hash([checkEvent ? null : l.phase, checkEvent ? null : issue.status, check?.id, kind, pending, kind === "error" || kind === "action_required" ? check?.lastObservation : null])}`;
   return { kind, signature, check };
 }
+function noticeText(value: string, limit: number): string {
+  const text = [...normalizeMetadata(value, limit + 1)];
+  return text.length > limit
+    ? `${text.slice(0, limit).join("")}…`
+    : text.join("");
+}
+function taskContext(issue: BeadsIssue): string {
+  const id = normalizeMetadata(issue.id, 128);
+  const title = noticeText(issue.title, 120);
+  return title ? `${id} — ${title}` : id;
+}
+function healthWarning(
+  health: DaemonHealth,
+  issues: readonly BeadsIssue[],
+): string {
+  const status = "Use /task-reconciler status for details.";
+  if ("reason" in health) {
+    if (health.state === "incompatible")
+      return "Task reconciler protocol is incompatible; explicit runtime update is required. Use /task-reconciler status.";
+    return `Task reconciler unavailable: ${noticeText(health.reason, 240) || "no reason recorded"}. ${status}`;
+  }
+  const summary = health.queue.diagnostics.slice(0, 3).map((diagnostic) => {
+    const code = noticeText(diagnostic.code, 64);
+    if (!diagnostic.taskId) return code;
+    const issue = issues.find((row) => row.id === diagnostic.taskId);
+    const task = issue
+      ? taskContext(issue)
+      : normalizeMetadata(diagnostic.taskId, 128);
+    return `${task}: ${code}`;
+  });
+  if (health.queue.diagnostics.length > summary.length)
+    summary.push(`${health.queue.diagnostics.length - summary.length} more`);
+  const diagnostics = summary.length
+    ? ` Queue diagnostics: ${summary.join("; ")}.`
+    : "";
+  const state =
+    health.state === "stale"
+      ? `Task reconciler heartbeat is stale or clock-skewed (last heartbeat: ${noticeText(health.heartbeatAt, 64)}).`
+      : "Task reconciler is running but has queue problems.";
+  return `${state}${diagnostics} ${status}`;
+}
 export function selectReconciliationNotices(
   issues: readonly BeadsIssue[],
   health: DaemonHealth,
@@ -135,10 +176,7 @@ export function selectReconciliationNotices(
       notices.push({
         key: "health",
         level: "warning",
-        message:
-          health.state === "incompatible"
-            ? "Task reconciler protocol is incompatible; explicit runtime update is required. Use /task-reconciler status."
-            : "Task reconciler needs attention or setup. Use /task-reconciler status; installation and activation are explicit.",
+        message: healthWarning(health, rows),
       });
     else if (
       previous?.healthSignature &&
@@ -161,15 +199,18 @@ export function selectReconciliationNotices(
       (kind === "cleanup" || wakes(check, kind))
     ) {
       level = "warning";
-      const detail = check?.lastObservation;
+      const task = taskContext(issue);
+      const detail =
+        noticeText(check?.lastObservation ?? "", 240) ||
+        "no reason recorded; inspect this task in /tasks";
       message =
         kind === "cleanup"
-          ? `${id}: worktree cleanup remains pending.`
+          ? `${task}: worktree cleanup remains pending.`
           : kind === "error"
-            ? `${id}: reconciliation check has repeated errors${detail ? `: ${normalizeMetadata(detail, detail.length)}` : "."}`
+            ? `${task}: reconciliation check has repeated errors: ${detail}`
             : kind === "manual"
-              ? `${id}: manual review is overdue.`
-              : `${id}: reconciliation check needs attention.`;
+              ? `${task}: manual review is overdue.`
+              : `${task}: reconciliation check needs attention: ${detail}`;
     } else if (prior !== undefined) {
       if (
         (kind === "done" || kind === "satisfied") &&
