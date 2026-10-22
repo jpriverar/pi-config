@@ -1567,3 +1567,61 @@ test("task result includes independent work management health without changing i
     unlinked.content[0].text + " · WM pending create",
   );
 });
+
+test("catalog task tool inherits a stable project and passes scope for locked revalidation", async () => {
+  const { P, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  const h = harness({ readCatalog: async () => catalogFixture() });
+  const context: Context = h.context;
+  context.sessionManager.getEntries = () => [
+    {
+      type: "custom",
+      customType: "jp-project-scope",
+      data: { version: 2, scope: { kind: "project", projectId: P } },
+    },
+  ];
+  await h.tools
+    .get("task_create")!
+    .execute(
+      "create",
+      { title: "new task", why: "goal", needs_jp: false },
+      undefined,
+      undefined,
+      context,
+    );
+  assert.deepEqual(h.calls.find((c) => c.name === "create")!.args[0], {
+    title: "new task",
+    why: "goal",
+    needsJp: false,
+    projectId: P,
+    scope: { kind: "project", projectId: P },
+  });
+});
+test("catalog task tool refuses ambiguous area placement before calling service", async () => {
+  const { A, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  const h = harness({ readCatalog: async () => catalogFixture() });
+  const context: Context = h.context;
+  context.sessionManager.getEntries = () => [
+    {
+      type: "custom",
+      customType: "jp-project-scope",
+      data: { version: 2, scope: { kind: "area", areaId: A } },
+    },
+  ];
+  await assert.rejects(
+    h.tools
+      .get("task_create")!
+      .execute(
+        "create",
+        { title: "new task", why: "goal", needs_jp: false },
+        undefined,
+        undefined,
+        context,
+      ),
+    /project/i,
+  );
+  assert.equal(h.calls.filter((c) => c.name === "create").length, 0);
+});

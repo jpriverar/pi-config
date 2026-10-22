@@ -7,6 +7,12 @@ import { loadWorkManagementConfig } from "./config.js";
 
 import { target } from "./test-fixtures.js";
 
+function loadLegacyConfig(path: string) {
+  const config = loadWorkManagementConfig(path);
+  assert.ok(config?.version === 1);
+  return config;
+}
+
 test("config is opt-in, case-normalized and fails closed with its file path", () => {
   const dir = mkdtempSync(join(tmpdir(), "wm-config-"));
   const path = join(dir, "pi-work-management.json");
@@ -19,7 +25,7 @@ test("config is opt-in, case-normalized and fails closed with its file path", ()
       workstreams: { Team: target },
     };
     writeFileSync(path, JSON.stringify(config));
-    assert.deepEqual(loadWorkManagementConfig(dir)?.workstreams.team, target);
+    assert.deepEqual(loadLegacyConfig(dir).workstreams.team, target);
     for (const invalid of [
       { ...config, workstreams: { Team: target, team: target } },
       {
@@ -62,7 +68,7 @@ test("config decodes a default destination and preserves normalized opt-outs", (
         workstreams: { "LOCAL  ": null, Team: target },
       }),
     );
-    const config = loadWorkManagementConfig(dir)!;
+    const config = loadLegacyConfig(dir);
     assert.deepEqual(config.defaultTarget, target);
     assert.equal(config.workstreams.local, null);
     assert.deepEqual(config.workstreams.team, target);
@@ -112,9 +118,7 @@ test("configuration canonicalizes displayed labels before detecting duplicate ma
   };
   try {
     writeFileSync(path, JSON.stringify(config));
-    assert.deepEqual(Object.keys(loadWorkManagementConfig(dir)!.workstreams), [
-      "alpha",
-    ]);
+    assert.deepEqual(Object.keys(loadLegacyConfig(dir).workstreams), ["alpha"]);
     writeFileSync(
       path,
       JSON.stringify({
@@ -126,6 +130,42 @@ test("configuration canonicalizes displayed labels before detecting duplicate ma
       () => loadWorkManagementConfig(dir),
       /invalid work management configuration/,
     );
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("catalog config carries only helpers and refuses legacy fallbacks", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wm-catalog-config-"));
+  const path = join(dir, "pi-work-management.json");
+  const config = {
+    version: 2,
+    routingMode: "catalog",
+    ddAuthPath: "/bin/dd-auth",
+    curlPath: "/bin/curl",
+  };
+  try {
+    writeFileSync(path, JSON.stringify(config));
+    assert.deepEqual(loadWorkManagementConfig(dir), config);
+    const legacy = await import(
+      "../../tests/fixtures/work-management-config-v1.js"
+    );
+    assert.throws(
+      () => legacy.loadWorkManagementConfig(dir),
+      /invalid work management configuration/,
+    );
+    for (const invalid of [
+      { ...config, defaultTarget: target },
+      { ...config, workstreams: {} },
+      { ...config, routingMode: "fallback" },
+      { ...config, ddAuthPath: "dd-auth" },
+    ]) {
+      writeFileSync(path, JSON.stringify(invalid));
+      assert.throws(
+        () => loadWorkManagementConfig(dir),
+        /invalid work management configuration/,
+      );
+    }
   } finally {
     rmSync(dir, { recursive: true });
   }

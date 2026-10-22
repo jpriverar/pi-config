@@ -28,20 +28,6 @@ export function loadWorkManagementConfig(
   }
   try {
     const r = record(JSON.parse(content));
-    if (
-      r.version !== 1 ||
-      Object.keys(r).some(
-        (k) =>
-          ![
-            "version",
-            "ddAuthPath",
-            "curlPath",
-            "defaultTarget",
-            "workstreams",
-          ].includes(k),
-      )
-    )
-      throw new Error("invalid config schema");
     const executable = (value: unknown) => {
       if (
         typeof value !== "string" ||
@@ -51,6 +37,36 @@ export function loadWorkManagementConfig(
         throw new Error("invalid executable path");
       return value;
     };
+    if (r.version === 2) {
+      if (
+        r.routingMode !== "catalog" ||
+        Object.keys(r).some(
+          (key) =>
+            !["version", "routingMode", "ddAuthPath", "curlPath"].includes(key),
+        )
+      )
+        throw new Error("invalid catalog config schema");
+      return {
+        version: 2,
+        routingMode: "catalog",
+        ddAuthPath: executable(r.ddAuthPath),
+        curlPath: executable(r.curlPath),
+      };
+    }
+    if (
+      r.version !== 1 ||
+      Object.keys(r).some(
+        (key) =>
+          ![
+            "version",
+            "ddAuthPath",
+            "curlPath",
+            "defaultTarget",
+            "workstreams",
+          ].includes(key),
+      )
+    )
+      throw new Error("invalid config schema");
     const workstreams: Record<string, WorkManagementTarget | null> =
       Object.create(null);
     for (const [name, target] of Object.entries(record(r.workstreams))) {

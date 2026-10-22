@@ -2,9 +2,16 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { canonicalWorkstream } from "../work-management/config.js";
+import { decodeWorkCatalog, type WorkCatalog } from "../work-catalog/model.js";
+import {
+  resolveCreateProject,
+  resolveNewTaskTarget,
+  workRoutingMode,
+} from "../work-catalog/routing.js";
 
 import {
   executeBeads,
+  normalizeBeadsLabel,
   type BeadsExec,
   type BeadsExecResult,
 } from "../beads.js";
@@ -37,6 +44,7 @@ export interface LifecycleStoreOptions {
   store: string;
   lockDependencies?: FileOperationLockDependencies;
   readWorkManagementConfig?: () => WorkManagementConfig | null;
+  readCatalog?: () => Promise<WorkCatalog | null>;
 }
 
 interface DecodedIssue {
@@ -207,18 +215,44 @@ export function createLifecycleStore(
       owner,
       async () => {
         const config = options.readWorkManagementConfig?.();
+        const catalog = decodeWorkCatalog(
+          (await options.readCatalog?.()) ?? undefined,
+        );
+        const mode = workRoutingMode(config, catalog);
+        if (
+          mode === "legacy" &&
+          (input.projectId !== undefined || input.scope !== undefined)
+        )
+          throw new Error(
+            "Catalog routing is not active; select a legacy project or complete activation",
+          );
+        const project =
+          mode === "catalog"
+            ? resolveCreateProject(
+                catalog!,
+                input.scope ?? { kind: "global" },
+                input,
+              )
+            : undefined;
         const workstream =
-          input.workstream === undefined
+          project?.workstreamKey ??
+          (input.workstream === undefined
             ? undefined
-            : canonicalWorkstream(input.workstream);
-        const target =
-          config &&
-          workstream !== undefined &&
-          Object.hasOwn(config.workstreams, workstream)
-            ? config.workstreams[workstream]
-            : config?.defaultTarget;
+            : canonicalWorkstream(input.workstream));
+        const labelWorkstream = project?.workstreamKey ?? input.workstream;
+        const target = project
+          ? resolveNewTaskTarget(catalog!, project)
+          : config?.version === 1
+            ? workstream !== undefined &&
+              Object.hasOwn(config.workstreams, workstream)
+              ? config.workstreams[workstream]
+              : config.defaultTarget
+            : undefined;
         const metadata = {
           piLifecycle: lifecycle,
+          ...(project
+            ? { piProject: { version: 1, projectId: project.id } }
+            : {}),
           ...(target == null
             ? {}
             : {
@@ -231,9 +265,9 @@ export function createLifecycleStore(
               }),
         };
         const labels = [
-          ...(input.workstream === undefined
+          ...(labelWorkstream === undefined
             ? []
-            : [`workstream:${input.workstream}`]),
+            : [`workstream:${labelWorkstream}`]),
           ...(input.needsJp ? ["needs:jp"] : []),
         ];
         const args = [
@@ -274,6 +308,26 @@ export function createLifecycleStore(
       join(store, "pi-task-lifecycle"),
       owner,
       async () => {
+        if (
+          [...input.addLabels, ...input.removeLabels].some((label) =>
+            normalizeBeadsLabel(label).startsWith("workstream:"),
+          )
+        ) {
+          const current = await readOne(
+            id,
+            "check project membership before label update",
+          );
+          const catalog = decodeWorkCatalog(
+            (await options.readCatalog?.()) ?? undefined,
+          );
+          if (
+            Object.hasOwn(current.rawMetadata, "piProject") ||
+            catalog?.state === "active"
+          )
+            throw new Error(
+              "Project membership cannot be changed through workstream labels; use explicit project management",
+            );
+        }
         const args = ["update", id];
         for (const label of input.addLabels) {
           assertNonEmpty(label, "label to add");

@@ -1,9 +1,13 @@
 import {
   resolveSessionProject,
+  resolveSessionWorkScope,
   type SessionProjectReader,
 } from "../../lib/session-project.js";
 import { summarizeWorkManagement } from "../../lib/work-management/model.js";
 import { loadWorkManagementConfig } from "../../lib/work-management/config.js";
+import type { WorkCatalog } from "../../lib/work-catalog/model.js";
+import { resolveCreateProject } from "../../lib/work-catalog/routing.js";
+import { createCatalogStore } from "../../lib/work-catalog/store.js";
 import { randomUUID } from "node:crypto";
 import {
   fingerprintCheck,
@@ -26,6 +30,7 @@ import { hostname as readHostname } from "node:os";
 
 import {
   resolveBeadsDir,
+  createBeadsClient,
   withBeadsEnvironment,
   type BeadsExec,
 } from "../../lib/beads.js";
@@ -206,6 +211,7 @@ interface ExtensionApi {
 }
 
 export interface TaskLifecycleExtensionDependencies {
+  readCatalog?: () => Promise<WorkCatalog | null>;
   service: TaskLifecycleToolService;
   reconciliation?: {
     issue(taskId: string): Promise<LifecycleIssue>;
@@ -330,6 +336,12 @@ export function createTaskLifecycleExtension(
         {
           title: { type: "string", minLength: 1 },
           why: { type: "string", minLength: 1 },
+          projectId: {
+            type: "string",
+            minLength: 1,
+            description:
+              "Stable registered project ID. In catalog mode, defaults only in a project-scoped session; area/global views require explicit placement.",
+          },
           workstream: {
             type: "string",
             minLength: 1,
@@ -341,6 +353,34 @@ export function createTaskLifecycleExtension(
         ["title", "why", "needs_jp"],
       ),
       async execute(_id, params, _signal, _update, context) {
+        const catalog = await deps.readCatalog?.();
+        if (catalog?.state === "active") {
+          const resolved = resolveSessionWorkScope(
+            context.sessionManager,
+            catalog,
+          );
+          if (resolved.kind === "invalid") throw new Error(resolved.reason);
+          const project = resolveCreateProject(catalog, resolved.scope, params);
+          return toolResult(
+            await deps.service.create(
+              {
+                title: params.title,
+                why: params.why,
+                needsJp: params.needs_jp,
+                projectId: project.id,
+                scope: resolved.scope,
+                ...(params.workstream === undefined
+                  ? {}
+                  : { workstream: params.workstream }),
+              },
+              ownerFor(context),
+            ),
+          );
+        }
+        if (params.projectId !== undefined)
+          throw new Error(
+            "Work catalog is not active; registered project IDs require catalog activation",
+          );
         const project = resolveSessionProject(context.sessionManager);
         if (project.source === "malformed-explicit") {
           throw new Error(
@@ -1216,9 +1256,14 @@ export default function taskLifecycle(
     fileURLToPath(new URL("./config.json", import.meta.url)),
   );
   const storePath = resolveBeadsDir();
-  const store = createLifecycleStore(withBeadsEnvironment(pi.exec.bind(pi)), {
+  const execBeads = withBeadsEnvironment(pi.exec.bind(pi));
+  const catalog = createCatalogStore(
+    createBeadsClient(execBeads, { env: { BEADS_DIR: storePath } }),
+  );
+  const store = createLifecycleStore(execBeads, {
     store: storePath,
     readWorkManagementConfig: () => loadWorkManagementConfig(storePath),
+    readCatalog: () => catalog.read(),
   });
   const pool = {
     async list(repository?: string) {
@@ -1281,6 +1326,7 @@ export default function taskLifecycle(
   });
   createTaskLifecycleExtension({
     service,
+    readCatalog: () => catalog.read(),
     reconciliation: {
       issue: (id) => store.show(id),
       request: (request, signal) =>
