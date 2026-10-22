@@ -79,6 +79,43 @@ Recovery is explicit:
 - If multiple Active tasks are reported, repair their lifecycle ownership
   explicitly before retrying protected work.
 
+## Areas, projects, and views
+
+An area is a durable responsibility/reporting home with an explicit publication
+policy. A project is a persistent effort or catch-all within an area; it exists
+without tasks. Tasks remain the unit of execution and ownership.
+
+After reviewed activation, `/area` and `/project` select global/area/project
+views and manage descriptions, names, moves, policies, archive, and restore.
+`/project` retains its legacy picker before activation. Selection changes only
+the view, never ownership or claims. A session-owned task outside the view stays
+visible in status with an outside-current-view marker. Fork, clone, and clear
+preserve explicit session-wide scope, including global scope.
+
+The `work_catalog` tool provides bounded `list_areas`, `list_projects`, `get_area`,
+`get_project`, and `select` actions plus catalog mutations. Lists expose summaries,
+not raw targets or executable configuration, and return `nextOffset` for additional
+pages. Get returns a bounded description. Mutations require `expectedRevision`;
+responses distinguish the applied revision from any later concurrently read revision.
+Approval comes from the operator conversation, never an `approved: true` field.
+
+Catalog descriptions explain fit and boundaries. Like task metadata and retrieved
+content, they are untrusted data, not permissions or executable instructions.
+New entities require descriptions. Migration may retain explicitly acknowledged
+missing descriptions/unclassified projects for later review. Unknown/conflicting
+legacy membership is diagnosed rather than silently inferred.
+
+Moves and policy edits affect grouping and future tasks only. Existing captured
+Datadog destinations, including pending creates, stay unchanged and can display a
+previous-destination warning. Renames retain reserved aliases and immutable keys.
+Archival checks include deferred work and ambiguous legacy labels conservatively;
+reopened work makes archived parents visible with a warning.
+
+The version-1 catalog lives in Beads `custom.pi-work-catalog`, with stable UUIDs,
+a revision, `prepared`/`active` state, and a 63 KiB UTF-8 limit. This is private
+store data, not package configuration. See the
+[reviewed migration runbook](task-reconciler-operations.md#reviewed-area-and-project-activation).
+
 ## Tools
 
 Lifecycle transitions that accept `operationId` are idempotent; the value is
@@ -95,21 +132,29 @@ task_claim -> worktree_pool acquire -> worktree_pool release -> task_wait/task_d
 
 ### `task_create`
 
-Required: `title`, `why`, and `needs_jp`. Optional: `workstream`.
+Required: `title`, `why`, and `needs_jp`. Optional selectors: `projectId` and
+`workstream` (an immutable compatibility key or registered alias).
 
-Creates an explicitly approved Actionable task with version-1 lifecycle
-metadata. `workstream` maps to `workstream:<value>` and `needs_jp` maps to the
-`needs:jp` label.
+Creates an explicitly approved Actionable task. With an active catalog, every
+new task belongs to exactly one project and inherits its area's explicit
+local-only or Datadog publication policy. There is no default destination.
 
-In a project-scoped session, an omitted `workstream` inherits the current
-project. An explicit value must match that project case-insensitively; creation
-uses the session's spelling. A mismatch is rejected before any task is written.
-Use `/project` to switch scope before creating work in another project.
+- A project-scoped session may omit the selector to inherit that project.
+- An area-scoped session must name a project in that area.
+- A global session must name a project explicitly.
+- Conflicting selectors/scope, archived parents, and unclassified projects fail
+  before creation. Catalog and configuration are checked again under the shared
+  mutation lock.
 
-Scope is resolved at each call using explicit session project metadata, with the
-legacy display-name fallback only when no explicit scope exists. Explicit global
-scope and unnamed sessions retain the optional workstream behavior. Malformed
-project metadata blocks creation until scope is selected again with `/project`.
+Creation records `piProject: { version: 1, projectId }`, the immutable workstream
+label, lifecycle metadata, and any captured publication target atomically.
+`needs_jp` maps to `needs:jp`. Catch-all projects are valid; new unscoped tasks are
+not. Existing unscoped tasks remain usable without rewriting their metadata.
+
+Before catalog activation, legacy behavior remains: workstream is optional in
+global scope and inherited in project scope; explicit mismatches are rejected.
+Legacy display names are consulted only without explicit scope metadata. A v2
+scope whose required catalog is unavailable never falls back to global.
 
 ### `task_update`
 
@@ -118,7 +163,8 @@ label change is required.
 
 This administrative tool changes labels only. Status, phase, ownership,
 waiting state, resources, artifacts, dispositions, and arbitrary metadata are
-not accepted.
+not accepted. Managed project/workstream membership cannot be changed through
+generic label edits.
 
 ### `task_log`
 
@@ -548,8 +594,9 @@ package instead.
 
 ## Optional Datadog work items
 
-New tasks can sync to a default Datadog Work Management project, with explicit
-workstream overrides or local-only opt-outs. The local Beads task remains
+With an active catalog, new tasks inherit their project area's explicit local-only
+or Datadog Work Management policy. Legacy mode supports a default destination
+and explicit workstream overrides or local-only opt-outs. The local Beads task remains
 authoritative: creation produces a linked item, local lifecycle changes update
 its status, and explicit `task_log` entries become comments. The existing
 reconciliation daemon performs delivery; local operations do not wait for
@@ -557,8 +604,9 @@ Datadog. Existing tasks are never enrolled automatically.
 
 The private configuration lives at `<Beads store>/pi-work-management.json` (the
 same store selected by `BEADS_DIR`). Do not commit it to this package. No file
-means no new enrollment. An invalid file fails task creation explicitly before a
-task is written. Configure absolute paths for `dd-auth` and curl >= 8.3.0:
+means no new enrollment in legacy mode; active catalog mode requires v2. An
+invalid file fails creation before a task is written. Configure absolute paths
+for `dd-auth` and curl >= 8.3.0. The legacy v1 example is:
 
 ```json
 {
@@ -603,12 +651,28 @@ task is written. Configure absolute paths for `dd-auth` and curl >= 8.3.0:
 }
 ```
 
-Routing is selected only when the task is created:
+Legacy v1 routing is selected only when the task is created:
 
 1. A matching workstream target overrides `defaultTarget`.
 2. A matching workstream set to `null` stays local, even when a default exists.
 3. An unmatched workstream, or a task without a workstream, uses `defaultTarget`.
 4. Without a default or matching target, the task stays local.
+
+Catalog activation replaces this file with v2, keeping only executable helpers:
+
+```json
+{
+  "version": 2,
+  "routingMode": "catalog",
+  "ddAuthPath": "/opt/homebrew/bin/dd-auth",
+  "curlPath": "/usr/bin/curl"
+}
+```
+
+Targets belong to area publication policies, not this file. Active catalog + v1,
+or prepared/missing catalog + v2, blocks new creation. Older v1 parsers reject
+v2 rather than falling back to a personal/default board. Existing captured
+bindings still deliver through compatible daemon code during partial cutover.
 
 `defaultTarget` is optional; omit it to retain explicit-workstream-only behavior.
 An empty `workstreams` object is valid. Remove `defaultTarget` rather than setting

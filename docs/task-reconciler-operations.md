@@ -61,6 +61,132 @@ is not success. This is a single-host design, not a distributed worker lease.
    and notices, not merely a green health file. Do not manufacture manual outcomes
    or create throwaway live tasks to exercise the daemon.
 
+## Reviewed area and project activation
+
+Catalog activation is a separate approval gate. These commands never migrate
+remote items, rewrite existing task membership/lifecycle/journals, run on startup,
+install code, or restart a daemon. Existing captured destinations—including
+pending creates—remain authoritative. Keep private assignments, plans, backups,
+and configuration outside public commits.
+
+1. **Inspect and review placement.** Inventory the exact store's legacy labels,
+   rename aliases, archives, unscoped tasks, and existing bindings. Review every
+   project-to-area assignment and description; do not infer scope from a name
+   prefix. Include archived projects and alias-only entries. Every area requires
+   a complete explicit policy: `{ "mode": "local" }`, or
+   `{ "mode": "datadog", "target": ... }` using the full approved target schema
+   in the [work-item configuration guide](task-lifecycle.md#optional-datadog-work-items).
+   Review site/org/project/type/status mapping, assignee, and custom attribute.
+   Each project assignment names its canonical legacy project and area name.
+   Deliberate `area: null` / `description: null` must be explicit, not omitted.
+   A minimal private assignments file looks like:
+
+   ```json
+   {
+     "version": 1,
+     "areas": [
+       {
+         "name": "Tooling",
+         "description": "Shared developer tooling and maintenance.",
+         "publication": { "mode": "local" }
+       }
+     ],
+     "projects": [
+       {
+         "name": "editor",
+         "area": "Tooling",
+         "description": "Editor integration and its maintenance."
+       }
+     ]
+   }
+   ```
+
+   This is only a shape example, not a suggested mapping. If the old store has
+   no WM config, assignments must also provide `helpers: { "ddAuthPath":
+"/absolute/trusted/dd-auth", "curlPath": "/absolute/trusted/curl" }`.
+   Existing helpers are preserved when overrides are omitted. The full catalog
+   must fit 63 KiB; plans/backups have a separate 1 MiB bound.
+
+2. **Preview without store writes.** Use explicit paths under owned, non-shared
+   directories. The output must not already exist; it is mode `0600`.
+
+   ```sh
+   npm run catalog -- preview --store STORE --assignments ASSIGNMENTS --output PLAN
+   ```
+
+   Inspect the saved plan's generated IDs, checksum, source fingerprint,
+   prepared catalog, old/new configuration, unclassified/missing-description
+   diagnostics, archives, and captured-destination mismatch counts. Preview
+   reads only local store/configuration data and writes the requested plan; it
+   does not validate remote access or prove mappings were approved. Do not edit
+   the saved plan to bypass a stale-source refusal.
+
+3. **Obtain cutover approval and pause creation/catalog edits.** Install/update
+   the compatible package and daemon using their existing approval gates.
+   Reload or retire _every_ old Pi session using this store; files on disk do
+   not replace loaded code. Inventory the clients explicitly. Build/verify the
+   matching runtime with `npm run build:reconciler -- --json`; the artifact must
+   declare `workCatalogVersion: 1`. Verify the running daemon's fresh heartbeat
+   and matching `runtimeVersion` against that artifact. The CLI checks this
+   local evidence, but cannot prove all old clients have retired. Existing
+   compatible delivery can continue using captured bindings.
+
+4. **Prepare the reviewed plan.** Under the shared store mutation lock, this
+   rechecks the source/config fingerprint, retains and reads back a private
+   backup in `STORE/pi-work-catalog-migrations/PLAN_ID.json`, then writes and
+   verifies the exact prepared catalog. No task data changes.
+
+   ```sh
+   npm run catalog -- prepare --store STORE --plan PLAN
+   ```
+
+   Prepared + v1 still permits legacy creation, so the operator's temporary
+   creation pause is essential. Any relevant source/config changes require a
+   new review; stale plans are refused rather than silently regenerated.
+
+5. **Activate only after approval.** Supply the matching verified build directory:
+
+   ```sh
+   npm run catalog -- activate --store STORE --plan PLAN --runtime BUILD_DIR
+   ```
+
+   It revalidates source, backup, exact prepared catalog, and live compatible
+   runtime. Before writing config it checks helper executables. It atomically
+   publishes/read-backs v2 WM config
+   first, then writes/read-backs the active catalog. V2 + prepared catalog
+   deliberately blocks task creation; compatible delivery still uses existing
+   snapshots. Active + v2 allows only classified, unarchived projects and their
+   area's policy, without legacy fallback. No generic force flag exists.
+
+6. **Read back before resuming creation.** Inspect catalog state/revision/IDs,
+   exact v2 config, daemon health, and `/area`, `/project`, and `/tasks`. Compare
+   saved existing task bindings/lifecycle/comments; do not create a disposable
+   live task without separate approval. Missing descriptions and unclassified
+   imported projects remain explicit review work, not implicit guesses.
+
+### Interrupted cutover and rollback boundaries
+
+There is no automatic apply retry or rollback. An error can mean the write
+committed but its reply/read-back failed. Preserve the same saved plan and inspect
+its IDs/checksum, private backup, actual catalog state/revision, and actual config
+before authorizing recovery. Preparation and activation recognize only exact
+already-applied states; recovery never allocates replacement IDs.
+
+- No catalog/prepared + original config: inspect backup and source before an
+  explicitly approved exact-plan prepare/activate.
+- Exact prepared + exact v2: creation stays blocked. After inspection, finish the
+  **same** plan with compatible runtime; do not restore a default target.
+- Exact active revision 1 + exact v2: the same activation verifies a completed
+  operation without rewriting task data, even if new tasks now exist.
+- Different catalog, source, config, or missing/contradictory backup: stop and
+  review; no force, metadata deletion, or blind replay.
+
+Before any incompatible code/config rollback, prove whether post-activation
+project references, tasks, or v2 session scopes exist across all clients. If they
+exist or evidence is incomplete, retain compatible code and request a reviewed
+reverse-migration decision. Deleting metadata is not rollback. Moving existing
+remote items is always a distinct, explicitly authorized operation.
+
 ## Health and diagnostics
 
 `status` is read-only. A healthy heartbeat shows process liveness, runtime/protocol
@@ -203,7 +329,7 @@ validation. Run against a real store only with read-only inspection approval.
 ## Work Management delivery
 
 The daemon can deliver work items using the optional
-[workstream configuration](task-lifecycle.md#optional-datadog-work-items). It uses
+[publication configuration](task-lifecycle.md#optional-datadog-work-items). It uses
 the existing scan interval and shares the external concurrency limit with check
 observations. It scans enrolled closed/deferred tasks too. A transient rejection
 with a known non-applied outcome (such as HTTP 429) is retried with bounded
@@ -211,7 +337,7 @@ backoff, respecting a longer Retry-After. Network/command uncertainty is never
 retried blindly. There is no separate service or integration-specific pause CLI.
 
 Before activation, obtain explicit approval for the org, site, project, type,
-status mapping, and a disposable validation task. A default destination enrolls
+status mapping, and any disposable validation task. In legacy v1 mode, a default destination enrolls
 all newly created tasks without an explicit workstream override or opt-out,
 including tasks without a workstream; review that publication scope too.
 

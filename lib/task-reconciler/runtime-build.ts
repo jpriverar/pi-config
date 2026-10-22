@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 export interface RuntimeManifest {
   version: 1;
+  workCatalogVersion?: 1;
   runtimeVersion: string;
   sourceRevision: string;
   sourceDigest: string;
@@ -94,6 +95,8 @@ export function parseRuntimeManifest(value: unknown): RuntimeManifest {
     Array.isArray(m.files)
   )
     throw new Error("invalid runtime manifest fields");
+  if (m.workCatalogVersion !== undefined && m.workCatalogVersion !== 1)
+    throw new Error("unsupported catalog runtime capability");
   const files = m.files as Record<string, unknown>;
   if (
     Object.keys(files).length > 200 ||

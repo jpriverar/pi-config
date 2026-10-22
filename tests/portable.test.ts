@@ -97,8 +97,9 @@ test("package scripts cover the bootstrap release gates", () => {
   );
   assert.equal(
     pkg.scripts["format:check"],
-    "prettier --check package.json tsconfig*.json 'bin/**/*.mjs' 'extensions/**/*.ts' 'lib/**/*.{ts,mjs}' 'tests/**/*.{ts,mjs}' 'scripts/**/*.mjs' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md skills/thermo-nuclear-code-quality-review/SKILL.md 'skills/standup/**/*.md' 'skills/standup/**/*.mjs' 'skills/explaining-technical-work/**/*.md' 'skills/development-workflow/**/*.md' 'skills/writing-rfcs/**/*.md' 'prompts/*.md' 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
+    "prettier --check package.json tsconfig*.json 'bin/**/*.mjs' 'extensions/**/*.ts' 'lib/**/*.{ts,mjs}' 'tests/**/*.{ts,mjs}' 'scripts/**/*.{ts,mjs}' skills/grill-me/SKILL.md skills/thinking-partner/SKILL.md skills/handoff/SKILL.md skills/thermo-nuclear-code-quality-review/SKILL.md 'skills/standup/**/*.md' 'skills/standup/**/*.mjs' 'skills/explaining-technical-work/**/*.md' 'skills/development-workflow/**/*.md' 'skills/writing-rfcs/**/*.md' 'prompts/*.md' 'themes/*.json' README.md THIRD_PARTY_NOTICES.md",
   );
+  assert.equal(pkg.scripts.catalog, "tsx scripts/work-catalog.ts");
   assert.match(pkg.scripts["verify:skills"], /--mode baseline/);
   assert.match(pkg.scripts["verify:skills"], /--mode package/);
   assert.match(pkg.scripts["verify:skills"], /--package "\$PWD"/);
