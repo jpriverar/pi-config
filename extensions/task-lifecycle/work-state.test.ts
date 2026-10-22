@@ -1,3 +1,12 @@
+import {
+  A,
+  B,
+  P,
+  Q,
+  catalogFixture,
+  catalogViewFixture,
+} from "../../lib/work-catalog/test-fixtures.js";
+import type { WorkCatalog, WorkScope } from "../../lib/work-catalog/model.js";
 import { newWorkManagementState } from "../../lib/work-management/model.js";
 import { target as wmTarget } from "../../lib/work-management/test-fixtures.js";
 import assert from "node:assert/strict";
@@ -35,9 +44,19 @@ function rawIssue(issue: BeadsIssue): Record<string, unknown> {
     status: issue.status,
     labels: issue.labels,
     ...(issue.updatedAt === undefined ? {} : { updated_at: issue.updatedAt }),
-    ...(issue.lifecycle === undefined
-      ? {}
-      : { metadata: { piLifecycle: issue.lifecycle } }),
+    metadata: {
+      ...(issue.lifecycle === undefined
+        ? {}
+        : { piLifecycle: issue.lifecycle }),
+      ...(issue.projectReference?.kind === "valid"
+        ? {
+            piProject: {
+              version: 1,
+              projectId: issue.projectReference.projectId,
+            },
+          }
+        : {}),
+    },
     ...(issue.blockingDependencies === undefined
       ? {}
       : {
@@ -52,6 +71,8 @@ function rawIssue(issue: BeadsIssue): Record<string, unknown> {
 
 function createHarness(
   options: {
+    catalog?: WorkCatalog | null;
+    catalogError?: string;
     sessionName?: string;
     branch?: any[];
     entries?: any[];
@@ -182,6 +203,10 @@ function createHarness(
   };
 
   registerTaskWorkState(pi as any, {
+    readCatalog: async () => {
+      if (options.catalogError) throw new Error(options.catalogError);
+      return options.catalog ?? null;
+    },
     health:
       options.health ??
       (async () => ({
@@ -1191,4 +1216,105 @@ test("work management is visible in existing startup and scoped state without a 
   assert.match(hidden.message.content, /WM pending create/);
   assert.match(hidden.message.content, /Actionable/);
   assert.doesNotMatch(hidden.message.content, /private title|private why/);
+});
+
+for (const scope of [
+  { kind: "global" },
+  { kind: "area", areaId: A },
+  { kind: "project", projectId: P },
+] as WorkScope[]) {
+  test(`catalog ${scope.kind} context and notices share stable scope membership`, async () => {
+    const fixture = catalogViewFixture();
+    const h = createHarness({
+      ...fixture,
+      entries: [
+        {
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope },
+        },
+      ],
+      issues: fixture.issues.map((issue) => ({
+        ...issue,
+        lifecycle: lifecycle("actionable", "2026-09-20T12:00:00Z"),
+      })),
+    });
+    const result = await h.handlers.get("before_agent_start")!({}, h.context);
+    assert.match(result.message.content, /zz-api/);
+    if (scope.kind === "global")
+      assert.match(result.message.content, /zz-other[\s\S]*zz-unscoped/);
+    else assert.doesNotMatch(result.message.content, /zz-other|zz-unscoped/);
+    const key =
+      scope.kind === "global"
+        ? "global"
+        : scope.kind === "area"
+          ? `area:${A}`
+          : `project:${P}`;
+    assert.equal(h.cursors.at(-1)!.data.scopeKey, key);
+    assert.deepEqual(
+      [...h.cursors.at(-1)!.data.cursor.knownTaskIds].sort(),
+      scope.kind === "global" ? fixture.readyIds.sort() : ["zz-api"],
+    );
+  });
+}
+test("stale scope queries cannot append reconciliation cursors", async () => {
+  const entries: any[] = [
+    {
+      type: "custom",
+      customType: "jp-project-scope",
+      data: { version: 2, scope: { kind: "area", areaId: A } },
+    },
+  ];
+  const h = createHarness({
+    catalog: catalogFixture(),
+    entries,
+    exec: async () => {
+      entries.push({
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "project", projectId: Q } },
+      });
+      return { code: 0, stdout: "[]", stderr: "" };
+    },
+  });
+  const result = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.match(result.message.content, /Unavailable/);
+  assert.equal(h.cursors.length, 0);
+});
+
+test("startup cards retain registered project labels on metadata-only tasks", async () => {
+  const h = createHarness({
+    catalog: catalogFixture(),
+    entries: [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "area", areaId: A } },
+      },
+    ],
+    issues: [
+      {
+        id: "zz-scope",
+        title: "Metadata membership",
+        status: "open",
+        labels: [],
+        projectReference: { kind: "valid", projectId: P },
+      },
+    ],
+  });
+  await start(h);
+  assert.match(renderCard(h), /\[API\]/);
+  assert.doesNotMatch(renderCard(h), /Unscoped/);
+});
+test("corrupt catalog blocks hidden context instead of broadening scope", async () => {
+  const h = createHarness({
+    catalogError: "Corrupt catalog fixture",
+    issues: [
+      { id: "zz-hidden", title: "Must not appear", status: "open", labels: [] },
+    ],
+  });
+  const result = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.match(result.message.content, /Unavailable: Corrupt catalog/);
+  assert.doesNotMatch(result.message.content, /zz-hidden/);
+  assert.equal(h.cursors.length, 0);
 });

@@ -96,19 +96,25 @@ export function isCatalogAreaHidden(
       .every((project) => isCatalogProjectHidden(project, issues))
   );
 }
+export function hasDestinationMismatch(
+  publication: Publication,
+  issue: CatalogIssue,
+): boolean {
+  const captured = issue.capturedDestination;
+  if (!captured) return false;
+  if (publication.mode === "local") return true;
+  return (["site", "orgUuid", "projectId", "typeId"] as const).some(
+    (key) => captured[key] !== publication.target[key],
+  );
+}
 export function destinationMismatchCount(
   project: ProjectRecord,
   publication: Publication,
   issues: readonly CatalogIssue[],
 ): number {
-  return issuesForProject(project, issues).filter((issue) => {
-    const captured = issue.capturedDestination;
-    if (!captured) return false;
-    if (publication.mode === "local") return true;
-    return (["site", "orgUuid", "projectId", "typeId"] as const).some(
-      (key) => captured[key] !== publication.target[key],
-    );
-  }).length;
+  return issuesForProject(project, issues).filter((issue) =>
+    hasDestinationMismatch(publication, issue),
+  ).length;
 }
 function lockDefaults(): FileOperationLockDependencies {
   return {

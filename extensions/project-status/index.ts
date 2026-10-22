@@ -8,9 +8,15 @@ import {
   classifyReadiness,
   createBeadsClient,
   withBeadsEnvironment,
-  type ClassifiedIssue,
 } from "../../lib/beads.js";
-import { resolveSessionProject } from "../../lib/session-project.js";
+import {
+  resolveSessionSelection,
+  sessionScopeFingerprint,
+  type SessionWorkSelection,
+} from "../../lib/session-project.js";
+import { selectWorkIssues } from "../../lib/work-catalog/membership.js";
+import { createCatalogStore } from "../../lib/work-catalog/store.js";
+import type { WorkCatalog } from "../../lib/work-catalog/model.js";
 import { createPaneReporter, type PaneReporter } from "./herdr-pane.js";
 import {
   createHerdrMetadataSender,
@@ -31,28 +37,14 @@ interface Counts {
 
 type TaskState =
   | Counts
-  | { sessionTask: { id: string; title: string } }
+  | { sessionTask: { id: string; title: string; outsideView?: boolean } }
   | "unavailable";
-
-function primaryWorkstream(issue: ClassifiedIssue): string | undefined {
-  return issue.workstreams[0];
-}
-
-function scopeIssues(
-  issues: ClassifiedIssue[],
-  project?: string,
-): ClassifiedIssue[] {
-  if (!project) return issues;
-  const target = project.toLowerCase();
-  return issues.filter(
-    (issue) => primaryWorkstream(issue)?.toLowerCase() === target,
-  );
-}
 
 export default function projectStatus(
   pi: ExtensionAPI,
   dependencies: {
     metadataSender?: MetadataSender | null;
+    readCatalog?: () => Promise<WorkCatalog | null>;
   } = {},
 ) {
   const metadataSender =
@@ -67,6 +59,8 @@ export default function projectStatus(
       pi.exec(command, [...args], { timeout: 1500 }),
     ),
   );
+  const readCatalog =
+    dependencies.readCatalog ?? (() => createCatalogStore(client).read());
   let currentSessionName: string | undefined;
   let currentTaskState: TaskState = "unavailable";
   let sessionGeneration = 0;
@@ -76,12 +70,12 @@ export default function projectStatus(
   }
 
   async function getCounts(
-    project: string | undefined,
+    selection: SessionWorkSelection,
     sessionId: string,
-    generation: number,
+    current: () => boolean,
   ): Promise<TaskState | undefined> {
     const listed = await client.listIssues();
-    if (!isCurrentSession(generation)) return undefined;
+    if (!current()) return undefined;
     reporter?.updateTask(
       selectTaskAssignment(listed.ok ? listed.value : undefined, sessionId),
     );
@@ -94,24 +88,30 @@ export default function projectStatus(
     );
     if (sessionTasks.length === 1) {
       return {
-        sessionTask: { id: sessionTasks[0].id, title: sessionTasks[0].title },
+        sessionTask: {
+          id: sessionTasks[0].id,
+          title: sessionTasks[0].title,
+          outsideView:
+            selection.kind === "catalog" &&
+            selectWorkIssues(selection, sessionTasks).length === 0,
+        },
       };
     }
 
     const ready = await client.listReadyIssueIds();
-    if (!isCurrentSession(generation)) return undefined;
+    if (!current()) return undefined;
     if (!ready.ok) return "unavailable";
 
     const closed = await client.listIssues(["closed"]);
-    if (!isCurrentSession(generation)) return undefined;
+    if (!current()) return undefined;
     if (!closed.ok) return "unavailable";
-    const active = scopeIssues(
+    const active = selectWorkIssues(
+      selection,
       classifyReadiness(listed.value, ready.value),
-      project,
     );
-    const historical = scopeIssues(
+    const historical = selectWorkIssues(
+      selection,
       classifyReadiness(closed.value, new Set()),
-      project,
     );
 
     return {
@@ -140,7 +140,10 @@ export default function projectStatus(
       leftParts.push(
         theme.fg("warning", taskState.sessionTask.id) +
           theme.fg("dim", " • ") +
-          theme.fg("dim", taskState.sessionTask.title),
+          theme.fg("dim", taskState.sessionTask.title) +
+          (taskState.sessionTask.outsideView
+            ? theme.fg("muted", " (outside current view)")
+            : ""),
       );
     } else {
       const segments: string[] = [];
@@ -189,13 +192,17 @@ export default function projectStatus(
     generation: number,
   ): Promise<void> {
     const sessionName = pi.getSessionName() ?? undefined;
-    const project = resolveSessionProject(ctx.sessionManager).workstream;
-    const taskState = await getCounts(
-      project,
-      ctx.sessionManager.getSessionId(),
-      generation,
-    );
-    if (taskState === undefined || !isCurrentSession(generation)) return;
+    currentSessionName = sessionName;
+    const fingerprint = sessionScopeFingerprint(ctx.sessionManager);
+    const sessionId = ctx.sessionManager.getSessionId();
+    const current = () =>
+      isCurrentSession(generation) &&
+      fingerprint === sessionScopeFingerprint(ctx.sessionManager);
+    const catalog = await readCatalog();
+    if (!current()) return;
+    const selection = resolveSessionSelection(ctx.sessionManager, catalog);
+    const taskState = await getCounts(selection, sessionId, current);
+    if (taskState === undefined || !current()) return;
 
     currentSessionName = sessionName;
     currentTaskState = taskState;
@@ -274,6 +281,7 @@ export default function projectStatus(
     "task_close",
     "task_reopen",
     "task_reconcile",
+    "work_catalog",
   ]);
   pi.on("tool_execution_end", (event, ctx) => {
     if (taskChanges.has(event.toolName)) return refresh(ctx, sessionGeneration);

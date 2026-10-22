@@ -1,4 +1,10 @@
 import {
+  issuesForProject,
+  isCatalogProjectHidden,
+  isCatalogAreaHidden,
+  destinationMismatchCount,
+} from "./service.js";
+import {
   catalogId,
   fields,
   findProject,
@@ -116,4 +122,93 @@ export function scopeKey(value: WorkScope): string {
     : scope.kind === "area"
       ? "area:" + scope.areaId
       : "project:" + scope.projectId;
+}
+
+export function buildWorkView<T extends CatalogIssue>(
+  catalog: WorkCatalog,
+  issues: readonly T[],
+  value: WorkScope,
+) {
+  const scope = validateWorkScope(catalog, value);
+  const memberships = new Map(
+    issues.map((issue) => [issue.id, resolveTaskMembership(catalog, issue)]),
+  );
+  const selected = issues.filter((issue) =>
+    matchesWorkScope(catalog, memberships.get(issue.id)!, scope),
+  );
+  const projects = Object.values(catalog.projects).map((project) => {
+    const area =
+      project.areaId === null ? undefined : catalog.areas[project.areaId];
+    return {
+      project,
+      area,
+      hidden: isCatalogProjectHidden(project, issues),
+      unfinished: issuesForProject(project, issues).filter(
+        (issue) => issue.status !== "closed",
+      ).length,
+      destinationMismatches: area
+        ? destinationMismatchCount(project, area.publication, issues)
+        : 0,
+    };
+  });
+  return {
+    scope,
+    key: scopeKey(scope),
+    label: workScopeLabel(catalog, scope),
+    issues: selected,
+    projects,
+    areas: Object.values(catalog.areas).map((area) => ({
+      area,
+      hidden: isCatalogAreaHidden(catalog, area, issues),
+    })),
+    projectNames: new Map(
+      issues.flatMap((issue) => {
+        const membership = memberships.get(issue.id)!;
+        return membership.kind === "project"
+          ? [[issue.id, catalog.projects[membership.projectId].name] as const]
+          : [];
+      }),
+    ),
+    diagnostics: selected.flatMap((issue) => {
+      const membership = memberships.get(issue.id)!;
+      return membership.kind === "invalid"
+        ? [{ taskId: issue.id, reason: membership.reason }]
+        : [];
+    }),
+  };
+}
+
+export function selectWorkIssues<T extends CatalogIssue>(
+  selection: import("../session-project.js").SessionWorkSelection,
+  issues: readonly T[],
+): T[] {
+  if (selection.kind === "catalog")
+    return buildWorkView(selection.catalog, issues, selection.scope).issues;
+  const project = selection.project?.toLowerCase();
+  return issues.filter(
+    (issue) =>
+      !project ||
+      issue.labels
+        .find((label) => label.startsWith("workstream:"))
+        ?.slice("workstream:".length)
+        .toLowerCase() === project,
+  );
+}
+export function workSelectionLabel(
+  selection: import("../session-project.js").SessionWorkSelection,
+): string | undefined {
+  if (selection.kind === "legacy") return selection.project;
+  return workScopeLabel(selection.catalog, selection.scope);
+}
+
+export function workScopeLabel(
+  catalog: WorkCatalog,
+  scope: WorkScope,
+): string | undefined {
+  validateWorkScope(catalog, scope);
+  return scope.kind === "global"
+    ? undefined
+    : scope.kind === "area"
+      ? `Area: ${catalog.areas[scope.areaId].name}`
+      : catalog.projects[scope.projectId].name;
 }

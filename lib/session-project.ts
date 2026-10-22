@@ -7,6 +7,7 @@ import {
 import {
   decodeWorkScope,
   validateWorkScope,
+  scopeKey,
 } from "./work-catalog/membership.js";
 
 export const SESSION_PROJECT_ENTRY_TYPE = "jp-project-scope";
@@ -183,4 +184,58 @@ export function persistSessionWorkScope(
     version: 2,
     scope: decodeWorkScope(scope),
   });
+}
+
+export function latestSessionScopeEntry(
+  session: Pick<SessionProjectReader, "getEntries">,
+): CustomEntry | undefined {
+  const entries = session.getEntries();
+  for (let index = entries.length - 1; index >= 0; index--) {
+    if (isProjectEntry(entries[index])) return entries[index] as CustomEntry;
+  }
+  return undefined;
+}
+export function sessionScopeFingerprint(session: SessionProjectReader): string {
+  const entry = latestSessionScopeEntry(session);
+  return JSON.stringify(
+    entry ? ["explicit", entry.data] : ["legacy", session.getSessionName()],
+  );
+}
+export type SessionWorkSelection =
+  | { kind: "catalog"; catalog: WorkCatalog; scope: WorkScope; key: string }
+  | { kind: "legacy"; project: string | undefined; key: string | null };
+
+export function resolveSessionSelection(
+  session: SessionProjectReader,
+  catalog: WorkCatalog | null,
+): SessionWorkSelection {
+  if (catalog?.state === "active") {
+    const resolved = resolveSessionWorkScope(session, catalog);
+    if (resolved.kind === "invalid") throw new Error(resolved.reason);
+    return {
+      kind: "catalog",
+      catalog,
+      scope: resolved.scope,
+      key: scopeKey(resolved.scope),
+    };
+  }
+  const entry = latestSessionScopeEntry(session);
+  if (isRecord(entry?.data) && entry.data.version === 2)
+    throw new Error(
+      "Work scope requires an active catalog; do not fall back to the global view",
+    );
+  const project = resolveSessionProject(session).workstream;
+  return { kind: "legacy", project, key: project?.toLowerCase() ?? null };
+}
+
+export function sessionDisplayNameBase(
+  session: SessionProjectIdentity &
+    Pick<SessionProjectReader, "getSessionName">,
+): string | undefined {
+  const name = session.getSessionName();
+  const suffix = generateSessionProjectName(session, "");
+  // A display suffix is cosmetic; it must never determine work scope.
+  return name && suffix && name.endsWith(suffix)
+    ? name.slice(0, -suffix.length)
+    : name;
 }

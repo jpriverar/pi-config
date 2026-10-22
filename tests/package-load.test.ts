@@ -173,6 +173,7 @@ test("imports and registers every manifest extension without collisions", async 
     "task_reopen",
     "task_update",
     "task_wait",
+    "work_catalog",
     "worktree_acquire",
     "worktree_list",
     "worktree_release",
@@ -180,6 +181,8 @@ test("imports and registers every manifest extension without collisions", async 
     "write",
   ]);
   for (const command of [
+    "area",
+    "project",
     "herdr-clone",
     "plan-clear",
     "plan-view",

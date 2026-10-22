@@ -1,3 +1,5 @@
+import { A, P, catalogFixture } from "../../lib/work-catalog/test-fixtures.js";
+import type { WorkScope } from "../../lib/work-catalog/model.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +12,11 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 
-import { resolveSessionProject } from "../../lib/session-project.js";
+import {
+  resolveSessionProject,
+  resolveSessionWorkScope,
+  generateSessionProjectName,
+} from "../../lib/session-project.js";
 import herdrCloneExtension from "./index.js";
 
 type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
@@ -502,3 +508,42 @@ test("blocks another clone while the first pane launch is pending", async (t) =>
   await h.clone();
   assert.equal(h.calls.length, 2);
 });
+
+for (const scope of [
+  { kind: "global" },
+  { kind: "area", areaId: A },
+  { kind: "project", projectId: P },
+] as WorkScope[]) {
+  test(`clones session-wide v2 ${scope.kind} scope even when the selected branch omits it`, async (t) => {
+    const h = harness(t);
+    const leaf = h.sm.getLeafId()!;
+    h.sm.appendCustomEntry("jp-project-scope", { version: 2, scope });
+    const base =
+      scope.kind === "area"
+        ? "Area: Product"
+        : scope.kind === "project"
+          ? "API"
+          : "Investigation";
+    h.sm.appendSessionInfo(generateSessionProjectName(h.sm, base));
+    h.sm.branch(leaf);
+    const original = readFileSync(h.sm.getSessionFile()!, "utf8");
+    await h.clone();
+    const launch = h.calls.at(-1)!;
+    const cloned = SessionManager.open(
+      launch.args[launch.args.indexOf("--session") + 1],
+    );
+    const resolved = resolveSessionWorkScope(cloned, catalogFixture());
+    assert.equal(resolved.kind, "resolved");
+    if (resolved.kind === "resolved") assert.deepEqual(resolved.scope, scope);
+    assert.equal(
+      cloned.getSessionName(),
+      generateSessionProjectName(cloned, base),
+    );
+    assert.equal(readFileSync(h.sm.getSessionFile()!, "utf8"), original);
+    assert.equal(
+      h.calls.length,
+      2,
+      "scope preservation makes no task-store calls",
+    );
+  });
+}

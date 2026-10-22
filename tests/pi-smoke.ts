@@ -1,3 +1,4 @@
+import { A, P, catalogFixture } from "../lib/work-catalog/test-fixtures.js";
 import assert from "node:assert/strict";
 import {
   execFile,
@@ -92,6 +93,7 @@ function createFakeBd(root: string) {
         ready: ["jp-ready"],
         projectRenames: '{"version":1,"aliases":{}}',
         projectArchives: '{"version":1,"archived":[]}',
+        workCatalog: "",
         issues: [
           {
             id: "jp-ready",
@@ -139,6 +141,7 @@ if (command === "list") {
   const fields = {
     "custom.pi-project-renames": "projectRenames",
     "custom.pi-project-archives": "projectArchives",
+    "custom.pi-work-catalog": "workCatalog",
   };
   const field = fields[clean[2]];
   if (clean[1] === "get" && field) {
@@ -650,6 +653,7 @@ async function createContractHarness(
   const documents: string[] = [];
   const notifications: string[] = [];
   const widgets = new Map<string, any>();
+  let sessionName: string | undefined;
   let editorFactory: Function | undefined;
   let footerFactory: Function | undefined;
   const execCalls: string[][] = [];
@@ -709,7 +713,10 @@ async function createContractHarness(
       }
     },
     getSessionName() {
-      return undefined;
+      return sessionName;
+    },
+    setSessionName(name: string) {
+      sessionName = name || undefined;
     },
     getThinkingLevel() {
       return "off";
@@ -814,6 +821,10 @@ async function verifyContractHarness(
   fakeBd: ReturnType<typeof createFakeBd>,
 ) {
   const harness = await createContractHarness(packagePath, cwd, fakeBd);
+  assert.ok(
+    harness.tools.has("work_catalog"),
+    "catalog tool is registered by the task-domain extension",
+  );
 
   const filed = await invokeTool(harness, "task_create", {
     title: "Release fixture",
@@ -984,6 +995,42 @@ async function verifyContractHarness(
   );
   assert.equal(editorLines.at(-1), "");
   assert.deepEqual(harness.footer()?.().render(80), []);
+
+  const catalog = catalogFixture();
+  catalog.areas[A].publication = { mode: "local" };
+  const state = JSON.parse(readFileSync(fakeBd.statePath, "utf8"));
+  state.workCatalog = JSON.stringify(catalog);
+  writeFileSync(fakeBd.statePath, JSON.stringify(state));
+  writeFileSync(
+    join(fakeBd.store, "pi-work-management.json"),
+    JSON.stringify({
+      version: 2,
+      routingMode: "catalog",
+      ddAuthPath: "/bin/true",
+      curlPath: "/usr/bin/curl",
+    }),
+  );
+  const listed = await invokeTool(harness, "work_catalog", {
+    action: "list_projects",
+    limit: 1,
+  });
+  assert.equal(listed.details.items[0].id, P);
+  assert.equal(listed.details.items[0].description, "API consistency.");
+  assert.ok(!JSON.stringify(listed).includes("ddAuthPath"));
+  await invokeTool(harness, "work_catalog", {
+    action: "select",
+    scope: { kind: "project", projectId: P },
+  });
+  const scoped = await invokeTool(harness, "task_create", {
+    title: "Scoped fixture",
+    why: "Verify project inheritance",
+    needs_jp: false,
+  });
+  assert.deepEqual(scoped.details.metadata.piProject, {
+    version: 1,
+    projectId: P,
+  });
+  assert.equal(scoped.details.metadata.piWorkManagement, undefined);
 }
 
 async function main() {
@@ -1055,6 +1102,7 @@ async function main() {
       "task-reconciler",
       "tasks",
       "project",
+      "area",
       "plan-view",
       "spec-view",
       "plan-clear",

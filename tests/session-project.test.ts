@@ -6,6 +6,8 @@ import {
   persistSessionProject,
   resolveSessionProject,
   resolveSessionWorkScope,
+  resolveSessionSelection,
+  sessionScopeFingerprint,
   persistSessionWorkScope,
 } from "../lib/session-project.js";
 
@@ -234,4 +236,31 @@ test("scope selection remains session-wide across conversation navigation", () =
     scope: { kind: "area", areaId: A },
     source: "explicit",
   });
+});
+
+test("v2 scopes cannot silently become global when the catalog is inactive", () => {
+  const manager = session([
+    projectEntry({ version: 2, scope: { kind: "area", areaId: A } }),
+  ]);
+  assert.throws(() => resolveSessionSelection(manager, null), /catalog/i);
+  const prepared = catalogFixture();
+  prepared.state = "prepared";
+  assert.throws(() => resolveSessionSelection(manager, prepared), /catalog/i);
+  const active = resolveSessionSelection(manager, catalogFixture());
+  assert.equal(active.kind, "catalog");
+  assert.equal(active.key, `area:${A}`);
+});
+test("scope fingerprints detect changes even when display names do not change", () => {
+  const before = session(
+    [projectEntry({ version: 2, scope: { kind: "area", areaId: A } })],
+    "manual title",
+  );
+  const after = session(
+    [projectEntry({ version: 2, scope: { kind: "project", projectId: P } })],
+    "manual title",
+  );
+  assert.notEqual(
+    sessionScopeFingerprint(before),
+    sessionScopeFingerprint(after),
+  );
 });

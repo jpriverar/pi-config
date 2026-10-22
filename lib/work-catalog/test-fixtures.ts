@@ -49,3 +49,29 @@ export function catalogFixture(): WorkCatalog {
     },
   };
 }
+
+export function catalogViewFixture(): {
+  catalog: WorkCatalog;
+  issues: import("../beads.js").BeadsIssue[];
+  readyIds: string[];
+} {
+  const catalog = catalogFixture();
+  catalog.projects[Q].areaId = B;
+  const issues: import("../beads.js").BeadsIssue[] = [
+    {
+      id: "zz-api",
+      title: "Selected task",
+      status: "open",
+      labels: [],
+      projectReference: { kind: "valid", projectId: P },
+    },
+    {
+      id: "zz-other",
+      title: "Other area",
+      status: "open",
+      labels: ["workstream:maintenance"],
+    },
+    { id: "zz-unscoped", title: "Legacy unscoped", status: "open", labels: [] },
+  ];
+  return { catalog, issues, readyIds: issues.map((issue) => issue.id) };
+}

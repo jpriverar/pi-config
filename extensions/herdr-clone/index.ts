@@ -9,6 +9,9 @@ import {
   generateSessionProjectName,
   persistSessionProject,
   resolveSessionProject,
+  latestSessionScopeEntry,
+  sessionDisplayNameBase,
+  SESSION_PROJECT_ENTRY_TYPE,
 } from "../../lib/session-project.js";
 
 const USAGE = "Usage: /herdr-clone [vertical|v|horizontal|h]";
@@ -134,15 +137,27 @@ export default function herdrCloneExtension(pi: ExtensionAPI): void {
         if (!sessionFile || !existsSync(sessionFile)) {
           throw new Error(`Could not save a clone of ${sourceFile}`);
         }
-        const project = resolveSessionProject(clone);
-        const nameBase = project.workstream ?? clone.getSessionName();
-        if (nameBase) {
-          // Legacy names double as project scope; pin it before renaming.
-          if (project.source === "legacy-display-name") {
-            persistSessionProject(clone, project.workstream ?? null);
-          }
-          clone.appendSessionInfo(generateSessionProjectName(clone, nameBase));
+        const project = resolveSessionProject(ctx.sessionManager);
+        const sourceScope = latestSessionScopeEntry(ctx.sessionManager);
+        const clonedScope = latestSessionScopeEntry(clone);
+        // Branch extraction can omit the session's latest selection.
+        if (
+          sourceScope &&
+          (!clonedScope ||
+            JSON.stringify(clonedScope.data) !==
+              JSON.stringify(sourceScope.data))
+        ) {
+          clone.appendCustomEntry(
+            SESSION_PROJECT_ENTRY_TYPE,
+            structuredClone(sourceScope.data),
+          );
+        } else if (!sourceScope && project.source === "legacy-display-name") {
+          persistSessionProject(clone, project.workstream ?? null);
         }
+        const nameBase =
+          project.workstream ?? sessionDisplayNameBase(ctx.sessionManager);
+        if (nameBase)
+          clone.appendSessionInfo(generateSessionProjectName(clone, nameBase));
 
         const split = await herdr(
           pi,

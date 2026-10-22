@@ -1,3 +1,5 @@
+import { A, P } from "../../lib/work-catalog/test-fixtures.js";
+import type { WorkScope } from "../../lib/work-catalog/model.js";
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
@@ -16,6 +18,7 @@ type SessionAction =
 type SessionManager = {
   getEntries(): Entry[];
   getSessionId(): string;
+  getSessionName?(): string | undefined;
   appendCustomEntry(customType: string, data?: unknown): string;
   appendSessionInfo(name: string): string;
 };
@@ -38,10 +41,12 @@ function manager(
   entries: Entry[],
   sessionId: string,
   actions: SessionAction[] = [],
+  name?: string,
 ): SessionManager {
   return {
     getEntries: () => entries,
     getSessionId: () => sessionId,
+    getSessionName: () => name,
     appendCustomEntry(customType, data) {
       actions.push({ type: "custom", customType, data });
       return `entry-${actions.length}`;
@@ -56,6 +61,7 @@ function manager(
 function harness(
   entries: Entry[],
   newSessionIds = ["12345678-aaaa-bbbb-cccc-000000000000"],
+  sourceName?: string,
 ) {
   const commands = new Map<string, Command>();
   const newSessionCalls: Array<NewSessionOptions | undefined> = [];
@@ -70,7 +76,7 @@ function harness(
   });
 
   const ctx: CommandContext = {
-    sessionManager: manager(entries, "old-session"),
+    sessionManager: manager(entries, "old-session", [], sourceName),
     async newSession(options) {
       newSessionCalls.push(options);
       if (cancelled) return { cancelled: true };
@@ -210,4 +216,36 @@ describe("/clear", () => {
     assert.equal(typeof h.newSessionCalls[0]?.setup, "function");
     assert.deepEqual(h.sessions, []);
   });
+});
+
+for (const scope of [
+  { kind: "area", areaId: A },
+  { kind: "project", projectId: P },
+] as WorkScope[]) {
+  test(`clear preserves v2 ${scope.kind} selection and refreshes only the display suffix`, async () => {
+    const base = scope.kind === "area" ? "Area: Product" : "API";
+    const data = { version: 2, scope };
+    const h = harness(
+      [{ type: "custom", customType: "jp-project-scope", data }],
+      undefined,
+      `${base}-dsession`,
+    );
+    await h.clear();
+    assert.deepEqual(h.sessions[0], [
+      { type: "custom", customType: "jp-project-scope", data },
+      { type: "session_info", name: `${base}-00000000` },
+    ]);
+  });
+}
+test("clear preserves explicit v2 global without deriving project scope from a display name", async () => {
+  const data = { version: 2, scope: { kind: "global" } };
+  const h = harness(
+    [{ type: "custom", customType: "jp-project-scope", data }],
+    undefined,
+    "Misleading project title",
+  );
+  await h.clear();
+  assert.deepEqual(h.sessions[0], [
+    { type: "custom", customType: "jp-project-scope", data },
+  ]);
 });

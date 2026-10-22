@@ -1,6 +1,8 @@
 import {
   resolveSessionProject,
   resolveSessionWorkScope,
+  persistSessionWorkScope,
+  generateSessionProjectName,
   type SessionProjectReader,
 } from "../../lib/session-project.js";
 import { summarizeWorkManagement } from "../../lib/work-management/model.js";
@@ -8,6 +10,10 @@ import { loadWorkManagementConfig } from "../../lib/work-management/config.js";
 import type { WorkCatalog } from "../../lib/work-catalog/model.js";
 import { resolveCreateProject } from "../../lib/work-catalog/routing.js";
 import { createCatalogStore } from "../../lib/work-catalog/store.js";
+import { createCatalogService } from "../../lib/work-catalog/service.js";
+import { workScopeLabel } from "../../lib/work-catalog/membership.js";
+import { ALL_PROJECT_ISSUE_STATUSES } from "../../lib/project-management.js";
+import { registerWorkCatalogTools } from "./catalog-tools.js";
 import { randomUUID } from "node:crypto";
 import {
   fingerprintCheck,
@@ -161,7 +167,7 @@ export interface TaskLifecycleToolService {
   ): Promise<LifecycleIssue>;
 }
 
-interface ExtensionContext {
+export interface ExtensionContext {
   cwd: string;
   sessionManager: SessionProjectReader & { getSessionId(): string };
   ui?: { notify(message: string, level: "info" | "warning"): void };
@@ -176,7 +182,7 @@ type PendingPoolOperation =
     }
   | Extract<PreparedWorktreeOperation, { mode: "release" }>;
 
-interface ToolDefinition {
+export interface ToolDefinition {
   name: string;
   label: string;
   description: string;
@@ -190,7 +196,8 @@ interface ToolDefinition {
   ): Promise<unknown>;
 }
 
-interface ExtensionApi {
+export interface ExtensionApi {
+  setSessionName?(name: string): void;
   on(
     event: string,
     handler: (event: any, context: ExtensionContext) => unknown,
@@ -1045,7 +1052,7 @@ export function createTaskLifecycleExtension(
       });
     }
 
-    registerTaskWorkState(pi);
+    registerTaskWorkState(pi, { readCatalog: deps.readCatalog });
   };
 }
 
@@ -1257,9 +1264,8 @@ export default function taskLifecycle(
   );
   const storePath = resolveBeadsDir();
   const execBeads = withBeadsEnvironment(pi.exec.bind(pi));
-  const catalog = createCatalogStore(
-    createBeadsClient(execBeads, { env: { BEADS_DIR: storePath } }),
-  );
+  const beads = createBeadsClient(execBeads, { env: { BEADS_DIR: storePath } });
+  const catalog = createCatalogStore(beads);
   const store = createLifecycleStore(execBeads, {
     store: storePath,
     readWorkManagementConfig: () => loadWorkManagementConfig(storePath),
@@ -1323,6 +1329,30 @@ export default function taskLifecycle(
     maxBackoffMs: config.maxBackoffMs,
     pool,
     checkAdapters,
+  });
+  registerWorkCatalogTools(pi, {
+    service: createCatalogService({ client: beads, store: catalog, storePath }),
+    issues: async () => {
+      const result = await beads.listIssues(ALL_PROJECT_ISSUE_STATUSES);
+      if (!result.ok) throw new Error(result.error.message);
+      return result.value;
+    },
+    owner: (context) => ({
+      pid: process.pid,
+      sessionId: context.sessionManager.getSessionId(),
+      host: readHostname(),
+      started: Date.now(),
+    }),
+    select: (scope, current, context) => {
+      persistSessionWorkScope(
+        { appendCustomEntry: (type, data) => pi.appendEntry(type, data) },
+        scope,
+      );
+      const name = workScopeLabel(current, scope);
+      pi.setSessionName?.(
+        name ? generateSessionProjectName(context.sessionManager, name) : "",
+      );
+    },
   });
   createTaskLifecycleExtension({
     service,
