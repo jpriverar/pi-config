@@ -1,9 +1,15 @@
-import { summarizeWorkManagement } from "./work-management/model.js";
+import {
+  summarizeWorkManagement,
+  decodeWorkManagement,
+} from "./work-management/model.js";
+import { decodeProjectReference } from "./work-catalog/membership.js";
 import {
   decodeWorkCatalog,
   encodeWorkCatalog,
   WORK_CATALOG_CONFIG_KEY,
   type WorkCatalog,
+  type ProjectReference,
+  type CatalogIssue,
 } from "./work-catalog/model.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -46,6 +52,8 @@ export interface BeadsIssue {
   lifecycle?: LifecycleMetadataV1 | null;
   lifecycleWarning?: string;
   workManagement?: NonNullable<ReturnType<typeof summarizeWorkManagement>>;
+  projectReference?: ProjectReference;
+  capturedDestination?: CatalogIssue["capturedDestination"];
   blockingDependencyIds?: string[];
   blockingDependencies?: NativeDependency[];
 }
@@ -247,8 +255,19 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
     ) {
       throw new Error(`issue at index ${index} has invalid metadata`);
     }
-    const rawLifecycle = (record.metadata as Record<string, unknown>)
-      .piLifecycle;
+    const metadata = record.metadata as Record<string, unknown>;
+    if (Object.hasOwn(metadata, "piProject"))
+      decoded.projectReference = decodeProjectReference(metadata);
+    try {
+      const wm = decodeWorkManagement(metadata.piWorkManagement);
+      if (wm) {
+        const { site, orgUuid, projectId, typeId } = wm.target;
+        decoded.capturedDestination = { site, orgUuid, projectId, typeId };
+      }
+    } catch {
+      // The existing WM summary retains the invalid-state warning without exposing raw data.
+    }
+    const rawLifecycle = metadata.piLifecycle;
     if (rawLifecycle !== undefined) {
       const lifecycle = decodeLifecycle(rawLifecycle);
       if (lifecycle.ok) decoded.lifecycle = lifecycle.value;

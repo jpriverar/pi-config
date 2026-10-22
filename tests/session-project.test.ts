@@ -5,7 +5,16 @@ import {
   generateSessionProjectName,
   persistSessionProject,
   resolveSessionProject,
+  resolveSessionWorkScope,
+  persistSessionWorkScope,
 } from "../lib/session-project.js";
+
+import {
+  A,
+  P,
+  NEW,
+  catalogFixture,
+} from "../lib/work-catalog/test-fixtures.js";
 
 interface Entry {
   type?: string;
@@ -149,4 +158,80 @@ test("uses short and non-hyphen session IDs without a dangling separator", () =>
     generateSessionProjectName({ getSessionId: () => "---" }, "core"),
     "core",
   );
+});
+
+test("catalog scopes resolve v2 entries, legacy aliases and fresh global sessions", () => {
+  const catalog = catalogFixture();
+  catalog.projects[P].aliases = ["old-api"];
+  for (const scope of [
+    { kind: "global" as const },
+    { kind: "area" as const, areaId: A },
+    { kind: "project" as const, projectId: P },
+  ]) {
+    assert.deepEqual(
+      resolveSessionWorkScope(
+        session([projectEntry({ version: 2, scope })], "wrong name"),
+        catalog,
+      ),
+      { kind: "resolved", scope, source: "explicit" },
+    );
+    const writer = session();
+    persistSessionWorkScope(writer, scope);
+    assert.deepEqual(writer.appended, [
+      { customType: "jp-project-scope", data: { version: 2, scope } },
+    ]);
+  }
+  const legacy = resolveSessionWorkScope(
+    session([projectEntry({ version: 1, workstream: "OLD-API" })]),
+    catalog,
+  );
+  assert.deepEqual(legacy, {
+    kind: "resolved",
+    scope: { kind: "project", projectId: P },
+    source: "explicit",
+  });
+  assert.deepEqual(resolveSessionWorkScope(session(), catalog), {
+    kind: "resolved",
+    scope: { kind: "global" },
+    source: "none",
+  });
+});
+test("catalog scope never falls back from malformed or unknown references", () => {
+  const catalog = catalogFixture();
+  for (const data of [
+    null,
+    { version: 2, scope: { kind: "project", projectId: NEW } },
+    { version: 2, scope: { kind: "area", areaId: NEW } },
+    { version: 2, scope: { kind: "global", extra: true } },
+    { version: 1, workstream: "unknown" },
+  ]) {
+    assert.equal(
+      resolveSessionWorkScope(session([projectEntry(data)], "API"), catalog)
+        .kind,
+      "invalid",
+    );
+  }
+  assert.equal(
+    resolveSessionWorkScope(session([], "API-12345678"), catalog).kind,
+    "invalid",
+  );
+});
+test("scope selection remains session-wide across conversation navigation", () => {
+  const previous = projectEntry({
+    version: 2,
+    scope: { kind: "project", projectId: P },
+  });
+  const selected = projectEntry({
+    version: 2,
+    scope: { kind: "area", areaId: A },
+  });
+  const manager = {
+    ...session([previous, selected]),
+    getBranch: () => [previous],
+  };
+  assert.deepEqual(resolveSessionWorkScope(manager, catalogFixture()), {
+    kind: "resolved",
+    scope: { kind: "area", areaId: A },
+    source: "explicit",
+  });
 });

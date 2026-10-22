@@ -1,3 +1,14 @@
+import {
+  fields,
+  findProject,
+  type WorkCatalog,
+  type WorkScope,
+} from "./work-catalog/model.js";
+import {
+  decodeWorkScope,
+  validateWorkScope,
+} from "./work-catalog/membership.js";
+
 export const SESSION_PROJECT_ENTRY_TYPE = "jp-project-scope";
 
 export interface SessionProjectReader {
@@ -103,4 +114,73 @@ export function generateSessionProjectName(
     .replace(/[^a-z0-9]/g, "");
   const suffix = normalizedId.slice(-8);
   return suffix ? `${workstream}-${suffix}` : workstream;
+}
+
+export type ScopeResolution =
+  | { kind: "resolved"; scope: WorkScope; source: SessionProjectSource }
+  | { kind: "invalid"; reason: string };
+
+export function resolveSessionWorkScope(
+  session: SessionProjectReader,
+  catalog: WorkCatalog,
+): ScopeResolution {
+  const entries = session.getEntries();
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (!isProjectEntry(entry)) continue;
+    if (isRecord(entry.data) && entry.data.version === 2) {
+      try {
+        const data = fields(entry.data, ["version", "scope"]);
+        return {
+          kind: "resolved",
+          scope: validateWorkScope(catalog, data.scope),
+          source: "explicit",
+        };
+      } catch (error) {
+        return {
+          kind: "invalid",
+          reason: error instanceof Error ? error.message : "Invalid work scope",
+        };
+      }
+    }
+    const data = decodeProjectData(entry.data);
+    if (!data)
+      return {
+        kind: "invalid",
+        reason: "Malformed project scope; select /area or /project",
+      };
+    return legacyScope(catalog, data.workstream, "explicit");
+  }
+  const name = session.getSessionName();
+  return name === undefined || name === ""
+    ? { kind: "resolved", scope: { kind: "global" }, source: "none" }
+    : legacyScope(catalog, name, "legacy-display-name");
+}
+function legacyScope(
+  catalog: WorkCatalog,
+  name: string | null,
+  source: SessionProjectSource,
+): ScopeResolution {
+  if (name === null)
+    return { kind: "resolved", scope: { kind: "global" }, source };
+  const project = findProject(catalog, name);
+  return project
+    ? {
+        kind: "resolved",
+        scope: { kind: "project", projectId: project.id },
+        source,
+      }
+    : {
+        kind: "invalid",
+        reason: `Legacy project ${JSON.stringify(name.slice(0, 128))} is not registered; select /project`,
+      };
+}
+export function persistSessionWorkScope(
+  session: SessionProjectWriter,
+  scope: WorkScope,
+): void {
+  session.appendCustomEntry(SESSION_PROJECT_ENTRY_TYPE, {
+    version: 2,
+    scope: decodeWorkScope(scope),
+  });
 }
