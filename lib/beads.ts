@@ -1,4 +1,10 @@
 import { summarizeWorkManagement } from "./work-management/model.js";
+import {
+  decodeWorkCatalog,
+  encodeWorkCatalog,
+  WORK_CATALOG_CONFIG_KEY,
+  type WorkCatalog,
+} from "./work-catalog/model.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -131,6 +137,10 @@ export interface BeadsClient {
   listBlockingDependencies(
     id: string,
   ): Promise<BeadsResult<NativeDependency[]>>;
+
+  getWorkCatalog(): Promise<BeadsResult<WorkCatalog | null>>;
+
+  setWorkCatalog(catalog: WorkCatalog): Promise<BeadsResult<void>>;
 
   getProjectArchiveRegistry(): Promise<BeadsResult<ProjectArchiveRegistry>>;
 
@@ -460,6 +470,47 @@ export function createBeadsClient(
         (value) =>
           decodeBlockingDependencies(value, `issue ${normalizeId(id)}`),
       );
+    },
+    getWorkCatalog() {
+      return readBd(
+        "get work catalog",
+        ["config", "get", WORK_CATALOG_CONFIG_KEY, "--json"],
+        (value) => {
+          if (
+            typeof value !== "object" ||
+            value === null ||
+            Array.isArray(value) ||
+            typeof (value as Record<string, unknown>).value !== "string"
+          ) {
+            throw new Error("invalid work catalog envelope");
+          }
+          return decodeWorkCatalog((value as Record<string, unknown>).value);
+        },
+      );
+    },
+    async setWorkCatalog(catalog) {
+      let encoded: string;
+      try {
+        encoded = encodeWorkCatalog(catalog);
+      } catch {
+        return {
+          ok: false,
+          error: {
+            operation: "set work catalog",
+            store,
+            message: "work catalog is invalid",
+          },
+        };
+      }
+      const result = await execBd("set work catalog", [
+        "config",
+        "set",
+        WORK_CATALOG_CONFIG_KEY,
+        encoded,
+        "--json",
+      ]);
+      if (!result.ok) return result;
+      return { ok: true, value: undefined };
     },
     getProjectArchiveRegistry() {
       return readBd(
