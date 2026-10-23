@@ -26,12 +26,12 @@ flowchart TD
     A["Agree on goal and finish line"] --> B["Build, test and simplify<br/>Open/update draft PR"]
     B --> C["Review, CI and pre-merge QA"]
     C -->|Changes needed| B
-    C -->|Ready| S["Share PR in the approved Slack thread"]
+    C -->|Ready| S["Share PR in the approved thread"]
     S --> H["Human review + authorized merge"]
     H -->|Changes requested| B
     H --> V["Confirm deployment<br/>Validate the actual behavior"]
     V -->|Fix needed| B
-    V -->|Verified| U["Post final Slack update<br/>Complete agreed cleanup"]
+    V -->|Verified| U["Post final update<br/>Complete agreed cleanup"]
     U --> D["Close the task"]
 ```
 
