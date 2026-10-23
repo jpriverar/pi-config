@@ -1,3 +1,4 @@
+import * as runner from "./skill-behavior.js";
 import assert from "node:assert/strict";
 import {
   chmod,
@@ -7,6 +8,7 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -374,4 +376,228 @@ test("RPC abort rejects requests and waiters and confirms descendant exit", asyn
   await assert.rejects(waiter, /scenario timeout/);
   await rpc.stop(new Error("scenario timeout"));
   await eventuallyMissing(childPid);
+});
+
+test("selects a placement scenario independently of its skill and rejects unsafe options", () => {
+  const args = [
+    "--mode",
+    "package",
+    "--package",
+    "/fixture/package",
+    "--output",
+    "/fixture/results",
+  ];
+  const parsed = runner.parseArguments([
+    ...args,
+    "--scenario",
+    "project-selection/current",
+    "--append-policy",
+    "/fixture/policy with spaces.md",
+  ]);
+  assert.equal(parsed.scenario, "project-selection/current");
+  assert.equal(parsed.appendPolicy, "/fixture/policy with spaces.md");
+  assert.deepEqual(runner.selectedScenarioIds(parsed), [
+    "project-selection/current",
+  ]);
+  assert.ok(
+    runner
+      .selectedScenarioIds(runner.parseArguments(args))
+      .includes("development-workflow"),
+  );
+  assert.ok(
+    !runner
+      .selectedScenarioIds(runner.parseArguments(args))
+      .includes("project-selection/current"),
+  );
+  for (const suffix of [
+    ["--scenario", "../escape"],
+    ["--scenario", "/absolute"],
+    ["--scenario", "unknown"],
+    [
+      "--scenario",
+      "project-selection/current",
+      "--scenario",
+      "project-selection/ambiguous",
+    ],
+    ["--append-policy", "relative.md"],
+    ["--append-policy", "/tmp/a\u0000.md"],
+    ["--append-policy", "/tmp/a", "--append-policy", "/tmp/b"],
+  ])
+    assert.throws(() => runner.parseArguments([...args, ...suffix]));
+});
+
+test("two placement cases load one skill with distinct transcript names", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "skill-cases-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "project-selection"));
+  const markdown =
+    "# Case\n\n## Prompt\n\nA fictional proposal.\n\n## Required observations\n\n- `contains:proposal`\n\n## Forbidden observations\n\n- `contains:created`\n";
+  for (const id of ["current", "ambiguous"])
+    await writeFile(join(root, "project-selection", `${id}.md`), markdown);
+  const current = await loadScenario("project-selection/current", root);
+  const ambiguous = await loadScenario("project-selection/ambiguous", root);
+  assert.equal(current.name, "development-workflow");
+  assert.equal(ambiguous.name, current.name);
+  assert.equal(current.id, "project-selection/current");
+  assert.notEqual(
+    runner.scenarioTranscriptName(current),
+    runner.scenarioTranscriptName(ambiguous),
+  );
+  assert.equal(
+    runner.scenarioTranscriptName(current),
+    "project-selection-current.txt",
+  );
+  assert.equal(evaluateScenario(current, "proposal").scenario, current.id);
+  await assert.rejects(loadScenario("../escape", root));
+});
+
+test("policy fixtures are bounded private copies rather than literal fallback prompts", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "skill-policy-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = join(root, "source.md"),
+    fixture = join(root, "fixture");
+  await mkdir(fixture);
+  await writeFile(source, "Fixture-only policy.\n", { mode: 0o600 });
+  const copied = await runner.copyPolicyFile(source, fixture);
+  assert.notEqual(copied, source);
+  assert.equal(await readFile(copied!, "utf8"), "Fixture-only policy.\n");
+  assert.equal((await stat(copied!)).mode & 0o777, 0o600);
+  assert.equal(await runner.copyPolicyFile(undefined, fixture), undefined);
+  await assert.rejects(runner.copyPolicyFile(join(root, "missing"), fixture));
+  await assert.rejects(runner.copyPolicyFile(root, fixture));
+  await assert.rejects(runner.copyPolicyFile("relative.md", fixture));
+  await writeFile(source, "x".repeat(64 * 1024 + 1));
+  await assert.rejects(
+    runner.copyPolicyFile(source, fixture),
+    /size|large|limit|bound/i,
+  );
+});
+
+test("placement RPC flags load only the requested skill and read guard without MCP or mutators", async () => {
+  const options = runner.parseArguments([
+    "--mode",
+    "package",
+    "--package",
+    "/fixture/package",
+    "--output",
+    "/fixture/output",
+    "--scenario",
+    "project-selection/current",
+  ]);
+  const scenario = {
+    id: "project-selection/current",
+    name: "development-workflow" as const,
+    prompt: "",
+    required: [],
+    forbidden: [],
+  };
+  const args = runner.buildRpcArguments(
+    options,
+    scenario,
+    "fixture/model",
+    "/fixture/private-policy.md",
+    "/fixture/guard.ts",
+  );
+  for (const flag of [
+    "--no-session",
+    "--no-context-files",
+    "--no-approve",
+    "--offline",
+    "--no-extensions",
+    "--no-skills",
+    "--no-mcp",
+  ])
+    assert.ok(args.includes(flag), flag);
+  assert.equal(args[args.indexOf("--tools") + 1], "read");
+  assert.equal(
+    args[args.indexOf("--skill") + 1],
+    "/fixture/package/skills/development-workflow",
+  );
+  assert.equal(
+    args[args.indexOf("--append-system-prompt") + 1],
+    "/fixture/private-policy.md",
+  );
+  assert.equal(args[args.indexOf("-e") + 1], "/fixture/guard.ts");
+  assert.ok(!args.includes("/fixture/package"));
+  const legacy = runner.buildRpcArguments(
+    { ...options, scenario: undefined },
+    { ...scenario, id: "development-workflow" },
+    "fixture/model",
+  );
+  assert.equal(legacy[legacy.indexOf("-e") + 1], "/fixture/package");
+  assert.ok(!legacy.includes("--tools"));
+});
+
+test("proposal guard permits fixture and skill reads but blocks escapes and all writes", async (t) => {
+  const { createProposalReadOperations, blockProposalMutation } = await import(
+    "./fixtures/project-selection-guard.js"
+  );
+  const { createReadTool } = await import("@earendil-works/pi-coding-agent");
+  const root = await mkdtemp(join(tmpdir(), "skill-guard-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const allowed = join(root, "allowed"),
+    outside = join(root, "outside.md");
+  await mkdir(allowed);
+  await writeFile(join(allowed, "SKILL.md"), "Fixture skill.");
+  await writeFile(outside, "Not permitted.");
+  await symlink(outside, join(allowed, "escape.md"));
+  await mkdir(join(allowed, "@.."));
+  await writeFile(join(allowed, "@..", "outside.md"), "Literal fixture path.");
+  const reader = createReadTool(allowed, {
+    operations: createProposalReadOperations([allowed]),
+  });
+  const result = await reader.execute("fixture-read", { path: "SKILL.md" });
+  assert.match(JSON.stringify(result), /Fixture skill/);
+  assert.equal(blockProposalMutation({ toolName: "read" }), undefined);
+  for (const path of [
+    outside,
+    "../outside.md",
+    "@../outside.md",
+    "escape.md",
+    "missing.md",
+  ])
+    await assert.rejects(reader.execute("fixture-read", { path }));
+  for (const toolName of [
+    "bash",
+    "write",
+    "task_create",
+    "work_catalog",
+    "mcp__anything",
+  ])
+    assert.equal(blockProposalMutation({ toolName })?.block, true);
+});
+
+test("isolated fixture satisfies the parent-policy launcher without inheriting live policy", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "skill-bootstrap-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const credentials = join(root, "fake-credentials");
+  await mkdir(credentials);
+  await writeFile(join(credentials, "auth.json"), "{}");
+  await writeFile(join(credentials, "models.json"), "{}");
+  const controller = new AbortController();
+  const fixture = await runner.createFixture(
+    root,
+    controller.signal,
+    credentials,
+  );
+  const wrapper = join(root, "launcher.mjs");
+  await writeFile(
+    wrapper,
+    `import fs from 'node:fs';import path from 'node:path';const policy=path.join(process.env.PI_CODING_AGENT_DIR,'PARENT.md');if(!fs.existsSync(policy)||!fs.readFileSync(policy,'utf8').trim())throw new Error('missing parent policy');`,
+  );
+  await runCommand(
+    process.execPath,
+    [wrapper],
+    fixture.cwd,
+    fixture.env,
+    controller.signal,
+  );
+  const policy = await readFile(
+    join(fixture.env.PI_CODING_AGENT_DIR!, "PARENT.md"),
+    "utf8",
+  );
+  assert.match(policy, /isolated fixture/i);
+  assert.match(policy, /--append-system-prompt/);
+  assert.ok(policy.length < 200);
+  assert.equal(fixture.env.PI_SKIP_PARENT_POLICY, undefined);
 });

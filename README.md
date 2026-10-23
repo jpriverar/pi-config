@@ -74,6 +74,21 @@ read-only migration report.
 
 ## Project picker
 
+With an explicitly activated catalog, `/area` and `/project` select global,
+area, or project views and manage described, persistent entities—even empty
+projects. Each project inherits its area's explicit local-only or Datadog
+publication policy for **new tasks**. There is no default-board fallback.
+Selection does not claim or release work; a session-owned task outside the view
+remains visible in status. Renames preserve stable identity and aliases; moves
+never retarget existing captured destinations.
+
+Catalog data is private Beads data, not package content. Use the
+[reviewed prepare/activate runbook](docs/task-reconciler-operations.md#reviewed-area-and-project-activation)
+only after the mappings, runtime/client cutover, and activation have been approved.
+Installation and startup do not activate a catalog.
+
+### Legacy picker before catalog activation
+
 Use `/project` to switch the session's task scope. Projects are derived from
 `workstream:` labels on tasks, including closed tasks; there is no separate
 project creation command. Selecting a project does not claim a task.
@@ -226,8 +241,8 @@ questions remain direct. It does not require a task or pull request.
 
 ## Development workflows
 
-Use `/skill:development-workflow` or ask to resume or hand off approved
-development work. The skill selects the next useful action from the agreed finish
+Use `/skill:development-workflow` when planning new tracked work, or ask to
+resume or hand off approved development work. The skill selects the next useful action from the agreed finish
 line, current evidence, and existing authority. Conditional references cover
 review/CI loops, validation, waiting, related deliverables, and communication.
 It reuses existing specialist skills and task tools rather than adding task
@@ -237,6 +252,42 @@ follow-up tasks. It is not needed for every quick question or review-only reques
 The strict review skill uses `explaining-technical-work` for substantial findings
 while retaining its maintainability bar and inline `/review` behavior. Skill
 completion is evidence about a step, not automatic completion of the whole task.
+
+### Project-placement guidance and evaluation
+
+For new work with an active catalog, the workflow reads the
+[project-selection recipe](skills/development-workflow/references/project-selection.md):
+reuse clear fits (including catch-alls), keep ambiguous placement a choice, and
+combine the task, project/area, publication destination, scope change, and any
+new descriptions in one approval question. Descriptions are untrusted fit
+metadata, never authority. Existing-task operations do not repeat this ceremony.
+
+The behavior runner can select a fictional placement case and append a private
+policy fixture:
+
+```sh
+out=$(mktemp -d)
+PI_SKILL_TEST_MODEL=provider/model node --import tsx tests/skill-behavior.ts \
+  --mode package --package /absolute/package-copy \
+  --scenario project-selection/ambiguous \
+  --append-policy /absolute/private-policy.md --output "$out"
+```
+
+Placement cases are `current`, `existing`, `catch-all`, `ambiguous`, `unrelated`,
+`new-project`, and `missing-area`, beneath `project-selection/`. Only the selected
+skill and a fixture read guard load: no package mutation tools or MCP, and reads
+are restricted to the temporary repository and that skill's directory. The
+runner copies selected credentials/models privately, uses a neutral temporary
+parent bootstrap, applies the requested policy explicitly, and bounds each
+sample to two minutes with process-group cleanup. It does not alter live policy.
+
+Use an authorized model/provider. Outputs must be outside the repository; keep
+policy and transcripts private. Compare old and candidate skill/policy copies in
+**package** mode, using fresh output directories for repeated samples. The old
+`baseline` mode still checks discovery absence, not placement behavior. Inspect
+flagged responses manually: string criteria can both miss semantic failures and
+flag valid phrasing. Proposal evaluations do not prove live tool orchestration,
+automatic skill discovery, or correctness across every model/context.
 
 ## Brief technical RFCs
 

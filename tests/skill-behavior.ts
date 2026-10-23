@@ -1,3 +1,4 @@
+import { readBoundedFile } from "../lib/task-reconciler/runtime-build.js";
 import {
   spawn,
   type ChildProcess,
@@ -20,6 +21,7 @@ import {
   delimiter,
   dirname,
   join,
+  isAbsolute,
   relative,
   resolve,
   sep,
@@ -37,14 +39,42 @@ const skillNames = [
 ] as const;
 type SkillName = (typeof skillNames)[number];
 type Mode = "baseline" | "package";
+const placementNames = [
+  "current",
+  "existing",
+  "catch-all",
+  "ambiguous",
+  "unrelated",
+  "new-project",
+  "missing-area",
+] as const;
+function scenarioSkill(id: string): SkillName {
+  if ((skillNames as readonly string[]).includes(id)) return id as SkillName;
+  if (placementNames.some((name) => id === `project-selection/${name}`))
+    return "development-workflow";
+  throw new Error(`unknown scenario: ${id}`);
+}
+function placementScenario(scenario: Scenario): boolean {
+  return scenario.id.startsWith("project-selection/");
+}
+function policyPath(value: string): string {
+  if (!isAbsolute(value) || /[\u0000-\u001f\u007f]/.test(value))
+    throw new Error(
+      "--append-policy requires an absolute file path without controls",
+    );
+  return value;
+}
 
 interface Options {
   mode: Mode;
   packageArgument?: string;
   output: string;
+  scenario?: string;
+  appendPolicy?: string;
 }
 
 export interface Scenario {
+  id: string;
   name: SkillName;
   prompt: string;
   required: string[];
@@ -57,6 +87,7 @@ export interface CriterionResult {
 }
 
 export interface ScenarioSummary {
+  scenario?: string;
   skill: SkillName;
   discovered: boolean;
   passed: boolean;
@@ -78,10 +109,12 @@ interface RpcCommandEntry {
   source: string;
 }
 
-function parseArguments(argv: string[]): Options {
+export function parseArguments(argv: string[]): Options {
   let mode: Mode | undefined;
   let packageArgument: string | undefined;
   let output: string | undefined;
+  let scenario: string | undefined;
+  let appendPolicy: string | undefined;
 
   for (let index = 0; index < argv.length; index++) {
     const flag = argv[index];
@@ -101,6 +134,17 @@ function parseArguments(argv: string[]): Options {
         throw new Error("--output requires exactly one value");
       output = value;
       index++;
+    } else if (flag === "--scenario") {
+      if (scenario || !value)
+        throw new Error("--scenario requires exactly one known case");
+      scenarioSkill(value);
+      scenario = value;
+      index++;
+    } else if (flag === "--append-policy") {
+      if (appendPolicy || !value)
+        throw new Error("--append-policy requires exactly one path");
+      appendPolicy = policyPath(value);
+      index++;
     } else {
       throw new Error(`unknown argument: ${flag}`);
     }
@@ -112,7 +156,78 @@ function parseArguments(argv: string[]): Options {
     throw new Error("--package is required in package mode");
   if (mode === "baseline" && packageArgument)
     throw new Error("--package is only valid in package mode");
-  return { mode, packageArgument, output };
+  return { mode, packageArgument, output, scenario, appendPolicy };
+}
+
+export function selectedScenarioIds(options: Options): string[] {
+  return options.scenario ? [options.scenario] : [...skillNames];
+}
+export function scenarioTranscriptName(scenario: Scenario): string {
+  scenarioSkill(scenario.id);
+  return `${scenario.id.replaceAll("/", "-")}.txt`;
+}
+export async function copyPolicyFile(
+  source: string | undefined,
+  fixtureRoot: string,
+): Promise<string | undefined> {
+  if (source === undefined) return undefined;
+  const bytes = await readBoundedFile(
+    policyPath(source),
+    undefined,
+    process.getuid?.(),
+    64 * 1024,
+  );
+  const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  const destination = join(fixtureRoot, "policy.md");
+  await writeFile(destination, content, { mode: 0o600, flag: "wx" });
+  return destination;
+}
+export function buildRpcArguments(
+  options: Options,
+  scenario: Scenario,
+  modelSetting: string,
+  policy?: string,
+  guard?: string,
+): string[] {
+  const slash = modelSetting.indexOf("/");
+  if (slash <= 0 || slash === modelSetting.length - 1)
+    throw new Error(
+      "PI_SKILL_TEST_MODEL must contain a provider and model separated by the first slash",
+    );
+  const args = [
+    "--mode",
+    "rpc",
+    "--no-session",
+    "--provider",
+    modelSetting.slice(0, slash),
+    "--model",
+    modelSetting.slice(slash + 1),
+    "--no-context-files",
+    "--no-approve",
+    "--offline",
+  ];
+  if (placementScenario(scenario)) {
+    if (!guard)
+      throw new Error("Placement scenarios require the proposal read guard");
+    args.push(
+      "--no-extensions",
+      "--no-mcp",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--tools",
+      "read",
+      "-e",
+      guard,
+    );
+    if (options.mode === "package")
+      args.push(
+        "--skill",
+        join(resolve(options.packageArgument!), "skills", scenario.name),
+      );
+  } else if (options.mode === "package")
+    args.push("-e", options.packageArgument!);
+  if (policy) args.push("--append-system-prompt", policy);
+  return args;
 }
 
 function section(markdown: string, heading: string): string {
@@ -124,13 +239,11 @@ function section(markdown: string, heading: string): string {
 }
 
 export async function loadScenario(
-  name: SkillName,
+  id: string,
   scenariosDirectory: string,
 ): Promise<Scenario> {
-  const markdown = await readFile(
-    join(scenariosDirectory, `${name}.md`),
-    "utf8",
-  );
+  const name = scenarioSkill(id);
+  const markdown = await readFile(join(scenariosDirectory, `${id}.md`), "utf8");
   const criteria = (heading: string): string[] =>
     section(markdown, heading)
       .split("\n")
@@ -140,7 +253,7 @@ export async function loadScenario(
   const forbidden = criteria("Forbidden observations");
   if (required.length === 0 || forbidden.length === 0)
     throw new Error(`${name} must define required and forbidden observations`);
-  return { name, prompt: section(markdown, "Prompt"), required, forbidden };
+  return { id, name, prompt: section(markdown, "Prompt"), required, forbidden };
 }
 
 function evaluateCriterion(text: string, criterion: string): boolean {
@@ -190,6 +303,7 @@ export function evaluateScenario(
     passed: !evaluateCriterion(text, criterion),
   }));
   return {
+    scenario: scenario.id,
     skill: scenario.name,
     discovered: true,
     passed:
@@ -315,9 +429,11 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw abortError(signal, "scenario aborted");
 }
 
-async function createFixture(
+export async function createFixture(
   root: string,
   signal: AbortSignal,
+  sourceAgentDirectory = process.env.PI_SKILL_TEST_CREDENTIAL_DIR ??
+    join(homedir(), ".pi", "agent"),
 ): Promise<{ cwd: string; env: NodeJS.ProcessEnv }> {
   const cwd = join(root, "repository");
   const agentDirectory = join(root, "pi-agent");
@@ -330,8 +446,11 @@ async function createFixture(
     mkdir(beadsDirectory, { recursive: true }),
   ]);
 
-  const sourceAgentDirectory =
-    process.env.PI_SKILL_TEST_CREDENTIAL_DIR ?? join(homedir(), ".pi", "agent");
+  await writeFile(
+    join(agentDirectory, "PARENT.md"),
+    "# Isolated fixture\n\nAny selected policy is supplied explicitly with --append-system-prompt.\n",
+    { mode: 0o600 },
+  );
   await copyCredentialFiles(sourceAgentDirectory, agentDirectory);
   throwIfAborted(signal);
 
@@ -691,13 +810,13 @@ async function runScenario(
   outputDirectory: string,
 ): Promise<ScenarioSummary> {
   const fixtureRoot = await mkdtemp(
-    join(tmpdir(), `pi-skill-${scenario.name}-`),
+    join(tmpdir(), `pi-skill-${scenario.id.replaceAll("/", "-")}-`),
   );
   const controller = new AbortController();
   const timer = setTimeout(
     () =>
       controller.abort(
-        new Error(`${scenario.name} exceeded ${scenarioTimeoutMs / 1_000}s`),
+        new Error(`${scenario.id} exceeded ${scenarioTimeoutMs / 1_000}s`),
       ),
     scenarioTimeoutMs,
   );
@@ -708,27 +827,30 @@ async function runScenario(
     const modelSetting = process.env.PI_SKILL_TEST_MODEL;
     if (!modelSetting)
       throw new Error("PI_SKILL_TEST_MODEL=<provider>/<model> is required");
-    const slash = modelSetting.indexOf("/");
-    if (slash <= 0 || slash === modelSetting.length - 1) {
-      throw new Error(
-        "PI_SKILL_TEST_MODEL must contain a provider and model separated by the first slash",
-      );
+    const policy = await copyPolicyFile(options.appendPolicy, fixtureRoot);
+    const guard = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "fixtures",
+      "project-selection-guard.ts",
+    );
+    if (placementScenario(scenario)) {
+      const roots = [await realpath(fixture.cwd)];
+      if (options.mode === "package")
+        roots.push(
+          await realpath(
+            join(resolve(options.packageArgument!), "skills", scenario.name),
+          ),
+        );
+      fixture.env.PI_SKILL_TEST_READ_ROOTS = JSON.stringify(roots);
     }
-    const provider = modelSetting.slice(0, slash);
-    const model = modelSetting.slice(slash + 1);
-    const args = [
-      "--mode",
-      "rpc",
-      "--no-session",
-      "--provider",
-      provider,
-      "--model",
-      model,
-      "--no-context-files",
-      "--no-approve",
-      "--offline",
-    ];
-    if (options.mode === "package") args.push("-e", options.packageArgument!);
+    throwIfAborted(controller.signal);
+    const args = buildRpcArguments(
+      options,
+      scenario,
+      modelSetting,
+      policy,
+      guard,
+    );
     rpc = new RpcProcess(args, fixture.cwd, fixture.env, {
       signal: controller.signal,
     });
@@ -745,6 +867,7 @@ async function runScenario(
 
     if (options.mode === "baseline") {
       return {
+        scenario: scenario.id,
         skill: scenario.name,
         discovered,
         passed: !discovered,
@@ -754,6 +877,7 @@ async function runScenario(
     }
     if (!discovered) {
       return {
+        scenario: scenario.id,
         skill: scenario.name,
         discovered: false,
         passed: false,
@@ -774,7 +898,7 @@ async function runScenario(
     return await persistAndEvaluateScenario(
       scenario,
       text,
-      join(outputDirectory, `${scenario.name}.txt`),
+      join(outputDirectory, scenarioTranscriptName(scenario)),
       controller.signal,
     );
   } finally {
@@ -798,8 +922,8 @@ async function main(): Promise<void> {
   const repository = resolve(scriptDirectory, "..");
   const outputDirectory = await prepareOutput(options.output, repository);
   const scenarios = await Promise.all(
-    skillNames.map((name) =>
-      loadScenario(name, join(scriptDirectory, "skill-scenarios")),
+    selectedScenarioIds(options).map((id) =>
+      loadScenario(id, join(scriptDirectory, "skill-scenarios")),
     ),
   );
   const summaries: ScenarioSummary[] = [];
@@ -807,7 +931,7 @@ async function main(): Promise<void> {
     const summary = await runScenario(scenario, options, outputDirectory);
     summaries.push(summary);
     console.log(
-      `${options.mode} ${scenario.name}: ${summary.passed ? "PASS" : "FAIL"}${summary.discovered ? "" : " (not discovered)"}`,
+      `${options.mode} ${scenario.id}: ${summary.passed ? "PASS" : "FAIL"}${summary.discovered ? "" : " (not discovered)"}`,
     );
   }
   await writeFile(
