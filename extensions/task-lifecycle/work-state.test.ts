@@ -335,7 +335,7 @@ test("hidden per-turn state uses explicit scope instead of a manual display name
   );
 });
 
-test("post-compaction state uses explicit scope and remains queued for next turn", async () => {
+test("post-compaction state uses explicit scope without triggering a turn", async () => {
   const harness = createHarness({
     sessionName: "unrelated-display-name",
     entries: [projectEntry({ version: 1, workstream: "alpha" })],
@@ -345,10 +345,7 @@ test("post-compaction state uses explicit scope and remains queued for next turn
   await harness.handlers.get("session_compact")?.({}, harness.context);
 
   assert.equal(harness.sent.length, 1);
-  assert.deepEqual(harness.sent[0].options, {
-    deliverAs: "nextTurn",
-    triggerTurn: false,
-  });
+  assert.deepEqual(harness.sent[0].options, { triggerTurn: false });
   assert.equal(harness.sent[0].message.display, false);
   assert.match(harness.sent[0].message.content, /Work state — alpha/);
   assert.match(harness.sent[0].message.content, /jp-a101/);

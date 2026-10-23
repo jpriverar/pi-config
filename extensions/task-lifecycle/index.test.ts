@@ -316,6 +316,7 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
     [...h.handlers.keys()].sort(),
     [
       "session_shutdown",
+      "agent_before_settle",
       "turn_start",
       "tool_execution_start",
       "tool_execution_end",
@@ -1695,10 +1696,7 @@ test("claim queues owned context independently of the caller retaining its resul
     .get("task_claim")!
     .execute("claim", { taskId: "jp-1" }, null, null, h.context);
   assert.equal(h.sent.length, 1);
-  assert.deepEqual(h.sent[0].options, {
-    deliverAs: "nextTurn",
-    triggerTurn: false,
-  });
+  assert.deepEqual(h.sent[0].options, { triggerTurn: false });
   assert.equal(h.sent[0].message.display, false);
   assert.match(
     h.sent[0].message.content,
@@ -1811,4 +1809,19 @@ test("post-claim context cannot substitute a different owned task", async () => 
     /jp-different|Build and verify/,
   );
   assert.match(h.sent[0].message.content, /changed|unavailable/);
+});
+
+test("factory exposes operator-only review and injectable work-state health", async () => {
+  let healthReads = 0;
+  const h = harness({
+    workStateHealth: async () => {
+      healthReads += 1;
+      throw new Error("Fixture daemon unavailable");
+    },
+  });
+  assert.equal(h.commands.has("mission-check"), true);
+  assert.equal(h.tools.has("mission-check"), false);
+  for (const handler of h.handlers.get("before_agent_start") ?? [])
+    await handler({ messageType: "user" }, h.context);
+  assert.equal(healthReads, 1);
 });

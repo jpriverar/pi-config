@@ -1,3 +1,6 @@
+import { VERSION } from "@earendil-works/pi-coding-agent";
+import { registerCompletionReview } from "./completion-review.js";
+import type { DaemonHealth } from "../../lib/task-reconciler/health.js";
 import {
   resolveSessionProject,
   resolveSessionWorkScope,
@@ -229,6 +232,7 @@ export interface TaskLifecycleExtensionDependencies {
   readCatalog?: () => Promise<WorkCatalog | null>;
   service: TaskLifecycleToolService;
   readTaskContext?: (session: TaskSession) => Promise<TaskContextResult>;
+  workStateHealth?: () => Promise<DaemonHealth>;
   reconciliation?: {
     issue(taskId: string): Promise<LifecycleIssue>;
     request(
@@ -578,7 +582,7 @@ export function createTaskLifecycleExtension(
           if (content !== undefined) {
             pi.sendMessage(
               { customType: "jp-task-claimed", content, display: false },
-              { deliverAs: "nextTurn", triggerTurn: false },
+              { triggerTurn: false },
             );
           }
         } catch {
@@ -1149,7 +1153,14 @@ export function createTaskLifecycleExtension(
       });
     }
 
-    registerTaskWorkState(pi, { readCatalog: deps.readCatalog });
+    registerTaskWorkState(pi, {
+      readCatalog: deps.readCatalog,
+      health: deps.workStateHealth,
+    });
+    registerCompletionReview(pi, {
+      runtimeVersion: VERSION,
+      readContext: readTaskContext,
+    });
   };
 }
 

@@ -754,7 +754,7 @@ export function registerTaskWorkState(
           content: renderModelContext(state),
           display: false,
         },
-        { deliverAs: "nextTurn", triggerTurn: false },
+        { triggerTurn: false },
       );
     } catch {
       // Compaction should proceed even when the task store is unavailable.

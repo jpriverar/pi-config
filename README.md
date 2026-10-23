@@ -62,11 +62,18 @@ included in this package.
 Before model turns, the `task-lifecycle` extension sends scoped task IDs,
 titles, explicit Active/Actionable/Waiting state, dependency authority, and
 compact lifecycle warnings from the Beads store to the configured model as
-hidden context.
-Compaction refreshes the same bounded context for the next turn. The values are
-normalized and explicitly marked as untrusted data rather than instructions,
-but they are still disclosed to the model. Only put task data in the configured
-store that is appropriate to share with that model.
+hidden context. A separate block adds the existing description and current
+`next_step` only for the uniquely owned active task in the selected scope.
+It never chooses a mission by title or borrows another session's task.
+
+The owned-context block is capped at 8000 characters; oversized content is
+omitted with retrieval guidance rather than presenting a partial mission.
+Compaction refreshes context without starting a turn. A successful claim adds
+context after the current tool batch even when a codemode script filters out
+the claim result; this does not preempt other operations already in that batch.
+Context refresh failure does not undo or misreport a successful claim. Values
+are untrusted data, not instructions or approval, but are disclosed to the
+configured model. Only store task data appropriate to share with that model.
 
 See [Task lifecycle](docs/task-lifecycle.md) for tool schemas, Beads mappings,
 artifact and worktree identity, reconciliation behavior, verification, and the
@@ -156,6 +163,29 @@ PI_WAKEUP_SDK=file:///absolute/path/to/pi/dist/index.js \
 
 Those tests use a temporary configuration, fake time, and an in-process provider;
 network requests are rejected and personal credentials are not loaded.
+
+## Optional completion review
+
+On a stable Pi runtime **1.2.0 or newer**, the operator can use
+`/mission-check on|off|status`. Review is **off by default**, parent-only and
+session-local; new, resumed and forked sessions start off. Task text cannot
+enable it. The personal bootstrap above still pins an older runtime and does
+not provide this capability; upgrading that host is a separate operation.
+
+When enabled, a native pre-settlement hook offers one automatic reconsideration
+of the latest user agreement against completed work. The SDK presents the cue
+as user-role context; its text explicitly denies new instruction or approval.
+It refreshes available
+owned task context, but missing or contradictory records do not disable the
+conversation-based check. Its own continuation, metadata edits and toggling
+off/on cannot replenish that submitted run's budget. It does not wake an idle
+agent, launch a worker, infer permission or verify mission completion.
+
+Abort/error outcomes and terminal or failed tools suppress the review. This is
+conservative: even a recovered tool error can skip it. Queued input takes
+precedence. The first apparent final answer may already be visible; this is not
+a pre-send filter. Pi 1.2.0 may retain a cue in history if cancellation occurs
+during the context lookup, but cancellation prevents the next model call.
 
 ## Project picker
 
