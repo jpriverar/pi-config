@@ -1,3 +1,4 @@
+import { A, catalogFixture } from "../work-catalog/test-fixtures.js";
 import assert from "node:assert/strict";
 import { access, readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
@@ -8,86 +9,92 @@ import { loadDaemonConfig } from "./config.js";
 import { createDaemonRuntime } from "./runtime.js";
 import { configFixture, waitingTask } from "./test-fixtures.js";
 
-test("the standalone runtime recovers a marked comment with GETs and no replay", async (t) => {
-  const { caseUrl, newWorkManagementState } = await import(
-    "../work-management/model.js"
-  );
-  const { createActionableLifecycle } = await import(
-    "../task-lifecycle/model.js"
-  );
-  const { target } = await import("../work-management/test-fixtures.js");
-  const f = await configFixture(t);
-  const data = join(f.root, "issues.json");
-  const bd = join(f.root, "fixture-bd.mjs");
-  const auth = join(f.root, "fixture-http.mjs");
-  const calls = join(f.root, "http-calls.jsonl");
-  const state = newWorkManagementState(target, "task", "why");
-  state.remote = {
-    id: "case-1",
-    url: caseUrl(target.site, "case-1"),
-  };
-  state.lastSentStatus = "Open";
-  state.inFlight = { kind: "comment", commentId: "c1" };
-  const comment = {
-    id: "c1",
-    issue_id: "jp-sync",
-    text: "progress\n\n[pi-task-log:v1]",
-    created_at: "2026-10-07T12:00:00Z",
-  };
-  await writeFile(
-    data,
-    JSON.stringify([
-      {
-        id: "jp-sync",
-        title: "task",
-        status: "open",
-        metadata: {
-          piLifecycle: createActionableLifecycle(new Date().toISOString()),
-          piWorkManagement: state,
+for (const configVersion of [1, 2]) {
+  test(`runtime v${configVersion} config recovers captured bindings with GETs and no replay`, async (t) => {
+    const { caseUrl, newWorkManagementState } = await import(
+      "../work-management/model.js"
+    );
+    const { createActionableLifecycle } = await import(
+      "../task-lifecycle/model.js"
+    );
+    const { target } = await import("../work-management/test-fixtures.js");
+    const f = await configFixture(t);
+    const data = join(f.root, "issues.json");
+    const bd = join(f.root, "fixture-bd.mjs");
+    const auth = join(f.root, "fixture-http.mjs");
+    const calls = join(f.root, "http-calls.jsonl");
+    const prepared = catalogFixture();
+    prepared.state = "prepared";
+    prepared.areas[A].publication = { mode: "local" };
+    const state = newWorkManagementState(target, "task", "why");
+    state.remote = {
+      id: "case-1",
+      url: caseUrl(target.site, "case-1"),
+    };
+    state.lastSentStatus = "Open";
+    state.inFlight = { kind: "comment", commentId: "c1" };
+    const comment = {
+      id: "c1",
+      issue_id: "jp-sync",
+      text: "progress\n\n[pi-task-log:v1]",
+      created_at: "2026-10-07T12:00:00Z",
+    };
+    await writeFile(
+      data,
+      JSON.stringify([
+        {
+          id: "jp-sync",
+          title: "task",
+          status: "open",
+          labels: ["workstream:api"],
+          metadata: {
+            piLifecycle: createActionableLifecycle(new Date().toISOString()),
+            piWorkManagement: state,
+          },
+          dependencies: [],
         },
-        dependencies: [],
-      },
-    ]),
-  );
-  await writeFile(
-    bd,
-    `#!${process.execPath}
+      ]),
+    );
+    await writeFile(
+      bd,
+      `#!${process.execPath}
 import {readFileSync,writeFileSync} from 'node:fs';
 const args=process.argv.slice(2), path=${JSON.stringify(data)}, rows=JSON.parse(readFileSync(path,'utf8'));
-if(args[0]==='list'||args[0]==='show') console.log(JSON.stringify(rows));
+if(args[0]==='config') console.log(JSON.stringify({key:'custom.pi-work-catalog',schema_version:1,value:${JSON.stringify(JSON.stringify(prepared))}}));
+else if(args[0]==='list'||args[0]==='show') console.log(JSON.stringify(rows));
 else if(args[0]==='comments') console.log(JSON.stringify([${JSON.stringify(comment)}]));
 else if(args[0]==='update'){rows[0].metadata=JSON.parse(args[args.indexOf('--metadata')+1]);writeFileSync(path,JSON.stringify(rows));console.log(JSON.stringify(rows[0]));}
 else process.exit(9);
 `,
-    { mode: 0o755 },
-  );
-  const remoteCase = {
-    data: {
-      id: "case-1",
-      type: "case",
-      attributes: { type_id: target.typeId, status_name: "Open" },
-      relationships: {
-        project: { data: { id: target.projectId, type: "project" } },
-      },
-    },
-  };
-  const timeline = {
-    data: [
-      {
-        id: "cell-1",
-        type: "timeline_cell",
-        attributes: {
-          type: "COMMENT",
-          cell_content: {
-            message: `progress\n\n2026-10-07T12:00:00Z\n\nPi sync: v1/${target.orgUuid}/${target.projectId}/jp-sync/comment/c1`,
-          },
+      { mode: 0o755 },
+    );
+    const remoteCase = {
+      data: {
+        id: "case-1",
+        type: "case",
+        attributes: { type_id: target.typeId, status_name: "Open" },
+        relationships: {
+          project: { data: { id: target.projectId, type: "project" } },
         },
       },
-    ],
-  };
-  await writeFile(
-    auth,
-    `#!${process.execPath}
+    };
+    const timeline = {
+      data: [
+        {
+          id: "cell-1",
+          type: "timeline_cell",
+          attributes: {
+            type: "COMMENT",
+            cell_content: {
+              message: `progress\n\n2026-10-07T12:00:00Z\n\nPi sync: v1/${target.orgUuid}/${target.projectId}/jp-sync/comment/c1`,
+            },
+          },
+        },
+      ],
+    };
+    await writeFile(
+      auth,
+      `#!${process.execPath}
 import {appendFileSync} from 'node:fs';
 const args=process.argv.slice(2);
 if(args.includes('--output')) process.stdout.write('DD_API_KEY=test_api\\nDD_APP_KEY=test_app\\n');
@@ -99,58 +106,66 @@ else {
   process.stdout.write(JSON.stringify(body)+'\\n200\\n');
 }
 `,
-    { mode: 0o755 },
-  );
-  f.raw.executables = {
-    node: process.execPath,
-    bd,
-    git: process.execPath,
-    gh: process.execPath,
-  };
-  f.raw.limits = { commandTimeoutMs: 5000, observationTimeoutMs: 10_000 };
-  await f.save();
-  const config = await loadDaemonConfig(f.configPath);
-  await writeFile(
-    join(config.store, "pi-work-management.json"),
-    JSON.stringify({
-      version: 1,
-      ddAuthPath: auth,
-      curlPath: auth,
-      workstreams: {},
-    }),
-  );
-  const runtime = await createDaemonRuntime(config, {
-    pid: process.pid,
-    host: hostname(),
-    sessionId: "recovery-test",
-    started: Date.now(),
-  });
-  t.after(() => runtime.stop());
-  runtime.start();
-  const deadline = Date.now() + 10_000;
-  while (true) {
-    const saved = JSON.parse(await readFile(data, "utf8"))[0].metadata
-      .piWorkManagement;
-    assert.equal(
-      saved.failure,
-      null,
-      "runtime must have a working observation adapter",
+      { mode: 0o755 },
     );
-    if (saved.inFlight === null) {
-      assert.deepEqual(saved.deliveredCommentIds, ["c1"]);
-      break;
+    f.raw.executables = {
+      node: process.execPath,
+      bd,
+      git: process.execPath,
+      gh: process.execPath,
+    };
+    f.raw.limits = { commandTimeoutMs: 5000, observationTimeoutMs: 10_000 };
+    await f.save();
+    const config = await loadDaemonConfig(f.configPath);
+    await writeFile(
+      join(config.store, "pi-work-management.json"),
+      JSON.stringify({
+        version: configVersion,
+        ddAuthPath: auth,
+        curlPath: auth,
+        ...(configVersion === 1
+          ? { workstreams: {} }
+          : { routingMode: "catalog" }),
+      }),
+    );
+    const runtime = await createDaemonRuntime(config, {
+      pid: process.pid,
+      host: hostname(),
+      sessionId: "recovery-test",
+      started: Date.now(),
+    });
+    t.after(() => runtime.stop());
+    runtime.start();
+    const deadline = Date.now() + 10_000;
+    while (true) {
+      const saved = JSON.parse(await readFile(data, "utf8"))[0].metadata
+        .piWorkManagement;
+      assert.equal(
+        saved.failure,
+        null,
+        "runtime must have a working observation adapter",
+      );
+      if (saved.inFlight === null) {
+        assert.deepEqual(saved.deliveredCommentIds, ["c1"]);
+        break;
+      }
+      assert.ok(Date.now() < deadline, JSON.stringify(runtime.snapshot()));
+      await delay(10);
     }
-    assert.ok(Date.now() < deadline, JSON.stringify(runtime.snapshot()));
-    await delay(10);
-  }
-  await runtime.stop();
-  const requests = (await readFile(calls, "utf8"))
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  assert.equal(requests.length, 3);
-  assert.ok(requests.every((request) => request.method === "GET"));
-});
+    await runtime.stop();
+    const requests = (await readFile(calls, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.deepEqual(
+      JSON.parse(await readFile(data, "utf8"))[0].metadata.piWorkManagement
+        .target,
+      state.target,
+    );
+    assert.equal(requests.length, 3);
+    assert.ok(requests.every((request) => request.method === "GET"));
+  });
+}
 
 test("composes the standalone runtime without running commands before start", async (t) => {
   const f = await configFixture(t);

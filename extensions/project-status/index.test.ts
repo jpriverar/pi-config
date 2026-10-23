@@ -1,3 +1,12 @@
+import {
+  A,
+  B,
+  P,
+  Q,
+  catalogFixture,
+  catalogViewFixture,
+} from "../../lib/work-catalog/test-fixtures.js";
+import type { WorkCatalog, WorkScope } from "../../lib/work-catalog/model.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
@@ -23,9 +32,17 @@ const rawIssue = (issue: BeadsIssue) => ({
   title: issue.title,
   status: issue.status,
   labels: issue.labels,
-  ...(issue.lifecycle === undefined
-    ? {}
-    : { metadata: { piLifecycle: issue.lifecycle } }),
+  metadata: {
+    ...(issue.lifecycle === undefined ? {} : { piLifecycle: issue.lifecycle }),
+    ...(issue.projectReference?.kind === "valid"
+      ? {
+          piProject: {
+            version: 1,
+            projectId: issue.projectReference.projectId,
+          },
+        }
+      : {}),
+  },
 });
 
 function issue(
@@ -64,6 +81,8 @@ function activeLifecycle(
 
 function createHarness(
   options: {
+    catalog?: WorkCatalog | null;
+    catalogError?: string;
     issues?: BeadsIssue[];
     readyIds?: string[];
     closed?: BeadsIssue[];
@@ -158,6 +177,10 @@ function createHarness(
   };
 
   projectStatus(pi as any, {
+    readCatalog: async () => {
+      if (options.catalogError) throw new Error(options.catalogError);
+      return options.catalog ?? null;
+    },
     metadataSender: options.herdr
       ? async (tokens: PaneTokens) => {
           metadata.push({ ...tokens });
@@ -698,4 +721,87 @@ test("Herdr preserves an idle task label instead of reporting legacy lease expir
   await setImmediate();
   assert.equal(h.metadata.at(-1)!.pi_task, "Task jp-idle");
   await h.handlers.get("session_shutdown")?.({}, h.context);
+});
+
+for (const scope of [
+  { kind: "global" },
+  { kind: "area", areaId: A },
+  { kind: "project", projectId: P },
+] as WorkScope[]) {
+  test(`catalog ${scope.kind} status counts agree with the shared task view`, async () => {
+    const h = createHarness({
+      ...catalogViewFixture(),
+      entries: [
+        {
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope },
+        },
+      ],
+    });
+    await h.handlers.get("session_start")!({}, h.context);
+    assert.match(
+      h.renderHeader(),
+      new RegExp(`${scope.kind === "global" ? 3 : 1} ready`),
+    );
+  });
+}
+test("scope changes during status refresh discard the old projection", async () => {
+  const entries: Entry[] = [
+    {
+      type: "custom",
+      customType: "jp-project-scope",
+      data: { version: 2, scope: { kind: "area", areaId: A } },
+    },
+  ];
+  const h = createHarness({
+    catalog: catalogFixture(),
+    entries,
+    beforeExec: async (n) => {
+      if (n === 1)
+        entries.push({
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope: { kind: "project", projectId: Q } },
+        });
+    },
+    issues: [issue("zz-api", "open", ["workstream:api"])],
+    readyIds: ["zz-api"],
+  });
+  await h.handlers.get("session_start")!({}, h.context);
+  assert.equal(h.renderHeader(), "");
+});
+
+test("corrupt catalog reports unavailable rather than global counts", async () => {
+  const h = createHarness({
+    catalogError: "Corrupt catalog fixture",
+    issues: [issue("zz-hidden")],
+    readyIds: ["zz-hidden"],
+  });
+  await h.handlers.get("session_start")!({}, h.context);
+  assert.match(h.renderHeader(), /tasks unavailable/);
+  assert.doesNotMatch(h.renderHeader(), /1 ready/);
+});
+
+test("catalog view changes keep the session-owned task visible with an outside-view marker", async () => {
+  const fixture = catalogViewFixture();
+  const h = createHarness({
+    catalog: fixture.catalog,
+    entries: [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "area", areaId: A } },
+      },
+    ],
+    issues: [
+      {
+        ...issue("zz-owned", "in_progress", ["workstream:maintenance"]),
+        lifecycle: activeLifecycle("session-1"),
+      },
+    ],
+  });
+  await h.handlers.get("session_start")!({}, h.context);
+  assert.match(h.renderHeader(), /zz-owned/);
+  assert.match(h.renderHeader(), /outside current view/);
 });

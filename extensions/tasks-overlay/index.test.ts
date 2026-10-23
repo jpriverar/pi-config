@@ -1,3 +1,12 @@
+import {
+  A,
+  B,
+  P,
+  Q,
+  catalogFixture,
+  catalogViewFixture,
+} from "../../lib/work-catalog/test-fixtures.js";
+import type { WorkCatalog, WorkScope } from "../../lib/work-catalog/model.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -27,9 +36,17 @@ const rawIssue = (issue: BeadsIssue) => ({
   title: issue.title,
   status: issue.status,
   labels: issue.labels,
-  ...(issue.lifecycle === undefined
-    ? {}
-    : { metadata: { piLifecycle: issue.lifecycle } }),
+  metadata: {
+    ...(issue.lifecycle === undefined ? {} : { piLifecycle: issue.lifecycle }),
+    ...(issue.projectReference?.kind === "valid"
+      ? {
+          piProject: {
+            version: 1,
+            projectId: issue.projectReference.projectId,
+          },
+        }
+      : {}),
+  },
   ...(issue.blockingDependencies === undefined
     ? {}
     : {
@@ -51,6 +68,8 @@ function issue(
 
 function createHarness(
   options: {
+    catalog?: WorkCatalog | null;
+    catalogError?: string;
     issues?: BeadsIssue[];
     readyIds?: string[];
     sessionName?: string | null;
@@ -352,7 +371,17 @@ function createHarness(
     },
   };
 
-  tasksOverlay(pi as any);
+  tasksOverlay(pi as any, {
+    catalog: {
+      read: async () => {
+        if (options.catalogError) throw new Error(options.catalogError);
+        return options.catalog ?? null;
+      },
+      write: async () => {
+        throw new Error("Unexpected catalog write");
+      },
+    },
+  });
   return {
     archives: () => archivesValue,
     appendedEntries,
@@ -1945,3 +1974,72 @@ for (const cancellation of ["action", "rename", "archive"] as const) {
     assert.deepEqual(harness.appendedEntries, []);
   });
 }
+
+for (const scope of [
+  { kind: "global" },
+  { kind: "area", areaId: A },
+  { kind: "project", projectId: P },
+] as WorkScope[]) {
+  test(`catalog ${scope.kind} overlay selects the shared membership set`, async () => {
+    const fixture = catalogViewFixture();
+    const h = createHarness({
+      ...fixture,
+      sessionName: "manual",
+      entries: [
+        {
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope },
+        },
+      ],
+    });
+    await show(h);
+    assert.match(h.render(), /zz-api/);
+    assert.match(h.render(), /API/);
+    if (scope.kind === "global")
+      assert.match(h.render(), /zz-other[\s\S]*zz-unscoped/);
+    else assert.doesNotMatch(h.render(), /zz-other|zz-unscoped/);
+    if (scope.kind === "area") assert.match(h.render(), /Area: Product/);
+  });
+}
+test("active catalog startup does not rewrite scopes through the legacy rename registry", async () => {
+  const h = createHarness({
+    catalog: catalogFixture(),
+    entries: [projectEntry("api")],
+    registryValue: "invalid old registry",
+  });
+  await startSession(h, "resume");
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.appendedEntries.length, 0);
+});
+
+test("native fork preserves the latest session-wide scope over an older branch scope", async () => {
+  const latest: Entry = {
+    type: "custom",
+    customType: "jp-project-scope",
+    data: { version: 2, scope: { kind: "area", areaId: A } },
+  };
+  const h = createHarness({ catalog: catalogFixture(), entries: [latest] });
+  const before = h.handlers.get("session_before_fork");
+  assert.ok(before, "captures session-wide selection before branching");
+  await before({}, h.context);
+  const entries = h.context.sessionManager.getEntries();
+  entries.splice(0, entries.length, {
+    type: "custom",
+    customType: "jp-project-scope",
+    data: { version: 2, scope: { kind: "project", projectId: Q } },
+  });
+  await startSession(h, "fork");
+  assert.deepEqual(h.appendedEntries.at(-1), latest);
+  assert.equal(h.calls.length, 0);
+});
+
+test("corrupt catalog never opens a global task overlay", async () => {
+  const h = createHarness({
+    catalogError: "Corrupt catalog fixture",
+    issues: [issue("zz-hidden")],
+  });
+  await show(h);
+  assert.equal(h.render(), "");
+  assert.ok(h.notifications.some((n) => n.message.includes("Corrupt catalog")));
+});

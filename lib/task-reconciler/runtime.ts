@@ -1,4 +1,6 @@
 import { loadWorkManagementConfig } from "../work-management/config.js";
+import { createBeadsClient, type BeadsExec } from "../beads.js";
+import { createCatalogStore } from "../work-catalog/store.js";
 import { createWorkManagementSync } from "../work-management/sync.js";
 import { prepareDatadogOperation } from "../work-management/datadog.js";
 import { observeDatadogOperation } from "../work-management/recovery.js";
@@ -58,20 +60,22 @@ export async function createDaemonRuntime(
     hostname: owner.host,
     timeoutMs: 5000,
   };
-  const store = createLifecycleStore(
-    async (command, args, options) => {
-      if (command !== "bd") throw new Error("unsupported lifecycle command");
-      return runBoundedCommand(config.executables.bd, args, {
-        ...commandOptions,
-        env: { ...env, ...options?.env },
-      });
-    },
-    {
-      store: config.store,
-      lockDependencies: operationLock,
-      readWorkManagementConfig: () => loadWorkManagementConfig(config.store),
-    },
+  const execBeads: BeadsExec = async (command, args, options) => {
+    if (command !== "bd") throw new Error("unsupported lifecycle command");
+    return runBoundedCommand(config.executables.bd, args, {
+      ...commandOptions,
+      env: { ...env, ...options?.env },
+    });
+  };
+  const catalog = createCatalogStore(
+    createBeadsClient(execBeads, { env: { BEADS_DIR: config.store } }),
   );
+  const store = createLifecycleStore(execBeads, {
+    store: config.store,
+    lockDependencies: operationLock,
+    readWorkManagementConfig: () => loadWorkManagementConfig(config.store),
+    readCatalog: () => catalog.read(),
+  });
   const poolDependencies: WorktreePoolRuntimeDependencies = {
     configPath: config.poolConfigPath,
     home: env.HOME ?? homedir(),

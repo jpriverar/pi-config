@@ -35,6 +35,10 @@ export interface RenderedTaskTable {
   width: number;
 }
 
+export interface TaskTableOptions {
+  showProject?: boolean;
+}
+
 export interface TaskTableCells {
   id: string[];
   state: string[];
@@ -139,6 +143,7 @@ export function taskTableCells(
   issue: ClassifiedIssue,
   theme: Theme,
   now: number = Date.now(),
+  options: TaskTableOptions = {},
 ): TaskTableCells {
   return {
     id: [theme.fg("muted", issue.id)],
@@ -148,7 +153,17 @@ export function taskTableCells(
         theme.bold(stateLabel(issue, now)),
       ),
     ],
-    task: [theme.fg("text", `${issue.title}${issue.needsJp ? " ← you" : ""}`)],
+    task: [
+      theme.fg("text", `${issue.title}${issue.needsJp ? " ← you" : ""}`),
+      ...(options.showProject
+        ? [
+            theme.fg(
+              "dim",
+              `[${normalizeMetadata(issue.workstreams[0] ?? "Unscoped", 128)}]`,
+            ),
+          ]
+        : []),
+    ],
     artifacts: artifactLines(issue, theme),
     blockers: blockerLines(issue, now).map((value) => theme.fg("muted", value)),
   };
@@ -202,9 +217,12 @@ export function renderTaskTable(
   issues: readonly ClassifiedIssue[],
   theme: Theme,
   now: number = Date.now(),
+  options: TaskTableOptions = {},
 ): RenderedTaskTable {
   const sorted = sortTaskTableIssues(issues);
-  const rows = sorted.map((issue) => taskTableCells(issue, theme, now));
+  const rows = sorted.map((issue) =>
+    taskTableCells(issue, theme, now, options),
+  );
   const widths = columnWidths(rows);
   const lines = [
     row(

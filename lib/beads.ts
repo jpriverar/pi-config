@@ -1,4 +1,16 @@
-import { summarizeWorkManagement } from "./work-management/model.js";
+import {
+  summarizeWorkManagement,
+  decodeWorkManagement,
+} from "./work-management/model.js";
+import { decodeProjectReference } from "./work-catalog/membership.js";
+import {
+  decodeWorkCatalog,
+  encodeWorkCatalog,
+  WORK_CATALOG_CONFIG_KEY,
+  type WorkCatalog,
+  type ProjectReference,
+  type CatalogIssue,
+} from "./work-catalog/model.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -40,6 +52,8 @@ export interface BeadsIssue {
   lifecycle?: LifecycleMetadataV1 | null;
   lifecycleWarning?: string;
   workManagement?: NonNullable<ReturnType<typeof summarizeWorkManagement>>;
+  projectReference?: ProjectReference;
+  capturedDestination?: CatalogIssue["capturedDestination"];
   blockingDependencyIds?: string[];
   blockingDependencies?: NativeDependency[];
 }
@@ -131,6 +145,10 @@ export interface BeadsClient {
   listBlockingDependencies(
     id: string,
   ): Promise<BeadsResult<NativeDependency[]>>;
+
+  getWorkCatalog(): Promise<BeadsResult<WorkCatalog | null>>;
+
+  setWorkCatalog(catalog: WorkCatalog): Promise<BeadsResult<void>>;
 
   getProjectArchiveRegistry(): Promise<BeadsResult<ProjectArchiveRegistry>>;
 
@@ -237,8 +255,19 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
     ) {
       throw new Error(`issue at index ${index} has invalid metadata`);
     }
-    const rawLifecycle = (record.metadata as Record<string, unknown>)
-      .piLifecycle;
+    const metadata = record.metadata as Record<string, unknown>;
+    if (Object.hasOwn(metadata, "piProject"))
+      decoded.projectReference = decodeProjectReference(metadata);
+    try {
+      const wm = decodeWorkManagement(metadata.piWorkManagement);
+      if (wm) {
+        const { site, orgUuid, projectId, typeId } = wm.target;
+        decoded.capturedDestination = { site, orgUuid, projectId, typeId };
+      }
+    } catch {
+      // The existing WM summary retains the invalid-state warning without exposing raw data.
+    }
+    const rawLifecycle = metadata.piLifecycle;
     if (rawLifecycle !== undefined) {
       const lifecycle = decodeLifecycle(rawLifecycle);
       if (lifecycle.ok) decoded.lifecycle = lifecycle.value;
@@ -460,6 +489,47 @@ export function createBeadsClient(
         (value) =>
           decodeBlockingDependencies(value, `issue ${normalizeId(id)}`),
       );
+    },
+    getWorkCatalog() {
+      return readBd(
+        "get work catalog",
+        ["config", "get", WORK_CATALOG_CONFIG_KEY, "--json"],
+        (value) => {
+          if (
+            typeof value !== "object" ||
+            value === null ||
+            Array.isArray(value) ||
+            typeof (value as Record<string, unknown>).value !== "string"
+          ) {
+            throw new Error("invalid work catalog envelope");
+          }
+          return decodeWorkCatalog((value as Record<string, unknown>).value);
+        },
+      );
+    },
+    async setWorkCatalog(catalog) {
+      let encoded: string;
+      try {
+        encoded = encodeWorkCatalog(catalog);
+      } catch {
+        return {
+          ok: false,
+          error: {
+            operation: "set work catalog",
+            store,
+            message: "work catalog is invalid",
+          },
+        };
+      }
+      const result = await execBd("set work catalog", [
+        "config",
+        "set",
+        WORK_CATALOG_CONFIG_KEY,
+        encoded,
+        "--json",
+      ]);
+      if (!result.ok) return result;
+      return { ok: true, value: undefined };
     },
     getProjectArchiveRegistry() {
       return readBd(

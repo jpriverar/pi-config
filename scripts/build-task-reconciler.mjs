@@ -112,7 +112,7 @@ export async function buildReconciler({ packageRoot = ownRoot } = {}) {
       ),
     ).version;
     const sourceHash = createHash("sha256").update(
-      `${sourceRevision}\n${compilerVersion}\n`,
+      `${sourceRevision}\n${compilerVersion}\ncatalog:1\n`,
     );
     for (const name of names)
       sourceHash
@@ -134,6 +134,7 @@ export async function buildReconciler({ packageRoot = ownRoot } = {}) {
     /** @type {import('../lib/task-reconciler/runtime-build.js').RuntimeManifest} */
     const manifest = {
       version: 1,
+      workCatalogVersion: 1,
       runtimeVersion,
       sourceRevision,
       sourceDigest,

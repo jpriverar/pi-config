@@ -155,6 +155,8 @@ export interface CreateTaskInput {
   title: string;
   why: string;
   workstream?: string;
+  projectId?: string;
+  scope?: import("../work-catalog/model.js").WorkScope;
   needsJp: boolean;
 }
 

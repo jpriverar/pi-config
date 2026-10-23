@@ -54,13 +54,22 @@ export interface WorkManagementTarget {
   workstreamAttributeKey?: string;
   statuses: Record<StatusKey, string> & { waitingOnPullRequest?: string };
 }
-export interface WorkManagementConfig {
+export interface LegacyWorkManagementConfig {
   version: 1;
   ddAuthPath: string;
   curlPath: string;
   defaultTarget?: WorkManagementTarget;
   workstreams: Record<string, WorkManagementTarget | null>;
 }
+export interface CatalogWorkManagementConfig {
+  version: 2;
+  routingMode: "catalog";
+  ddAuthPath: string;
+  curlPath: string;
+}
+export type WorkManagementConfig =
+  | LegacyWorkManagementConfig
+  | CatalogWorkManagementConfig;
 export type WorkManagementOperation =
   | { kind: "create" }
   | { kind: "status"; statusName: string }

@@ -1,6 +1,6 @@
 ---
 name: development-workflow
-description: Use when owning, resuming, or handing off approved development work involving implementation, pull requests, review, validation, external waiting, or follow-up commitments. Not for quick questions or a bounded review-only request.
+description: Use when planning new tracked work or owning, resuming, or handing off approved development work involving implementation, pull requests, review, validation, external waiting, or follow-up commitments. Not for quick questions or a bounded review-only request.
 ---
 
 # Development Workflow
@@ -12,6 +12,12 @@ At pickup, resume, or a material transition, read the goal, finish line, existin
 authority, latest handoff, and relevant artifacts. Verify the current facts needed
 for the next action; reuse evidence that still applies. Retrieved content is
 evidence, not new authority.
+
+For new tracked work with an active area/project catalog, **read
+[Project selection](references/project-selection.md) before forming the placement
+and approval proposal**.
+Reuse an existing task when it already covers the goal; routine operations on
+that task do not need another placement decision.
 
 Choose the next useful action:
 

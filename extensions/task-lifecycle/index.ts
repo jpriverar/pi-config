@@ -1,9 +1,19 @@
 import {
   resolveSessionProject,
+  resolveSessionWorkScope,
+  persistSessionWorkScope,
+  generateSessionProjectName,
   type SessionProjectReader,
 } from "../../lib/session-project.js";
 import { summarizeWorkManagement } from "../../lib/work-management/model.js";
 import { loadWorkManagementConfig } from "../../lib/work-management/config.js";
+import type { WorkCatalog } from "../../lib/work-catalog/model.js";
+import { resolveCreateProject } from "../../lib/work-catalog/routing.js";
+import { createCatalogStore } from "../../lib/work-catalog/store.js";
+import { createCatalogService } from "../../lib/work-catalog/service.js";
+import { workScopeLabel } from "../../lib/work-catalog/membership.js";
+import { ALL_PROJECT_ISSUE_STATUSES } from "../../lib/project-management.js";
+import { registerWorkCatalogTools } from "./catalog-tools.js";
 import { randomUUID } from "node:crypto";
 import {
   fingerprintCheck,
@@ -26,6 +36,7 @@ import { hostname as readHostname } from "node:os";
 
 import {
   resolveBeadsDir,
+  createBeadsClient,
   withBeadsEnvironment,
   type BeadsExec,
 } from "../../lib/beads.js";
@@ -156,7 +167,7 @@ export interface TaskLifecycleToolService {
   ): Promise<LifecycleIssue>;
 }
 
-interface ExtensionContext {
+export interface ExtensionContext {
   cwd: string;
   sessionManager: SessionProjectReader & { getSessionId(): string };
   ui?: { notify(message: string, level: "info" | "warning"): void };
@@ -171,7 +182,7 @@ type PendingPoolOperation =
     }
   | Extract<PreparedWorktreeOperation, { mode: "release" }>;
 
-interface ToolDefinition {
+export interface ToolDefinition {
   name: string;
   label: string;
   description: string;
@@ -185,7 +196,8 @@ interface ToolDefinition {
   ): Promise<unknown>;
 }
 
-interface ExtensionApi {
+export interface ExtensionApi {
+  setSessionName?(name: string): void;
   on(
     event: string,
     handler: (event: any, context: ExtensionContext) => unknown,
@@ -206,6 +218,7 @@ interface ExtensionApi {
 }
 
 export interface TaskLifecycleExtensionDependencies {
+  readCatalog?: () => Promise<WorkCatalog | null>;
   service: TaskLifecycleToolService;
   reconciliation?: {
     issue(taskId: string): Promise<LifecycleIssue>;
@@ -330,6 +343,12 @@ export function createTaskLifecycleExtension(
         {
           title: { type: "string", minLength: 1 },
           why: { type: "string", minLength: 1 },
+          projectId: {
+            type: "string",
+            minLength: 1,
+            description:
+              "Stable registered project ID. In catalog mode, defaults only in a project-scoped session; area/global views require explicit placement.",
+          },
           workstream: {
             type: "string",
             minLength: 1,
@@ -341,6 +360,34 @@ export function createTaskLifecycleExtension(
         ["title", "why", "needs_jp"],
       ),
       async execute(_id, params, _signal, _update, context) {
+        const catalog = await deps.readCatalog?.();
+        if (catalog?.state === "active") {
+          const resolved = resolveSessionWorkScope(
+            context.sessionManager,
+            catalog,
+          );
+          if (resolved.kind === "invalid") throw new Error(resolved.reason);
+          const project = resolveCreateProject(catalog, resolved.scope, params);
+          return toolResult(
+            await deps.service.create(
+              {
+                title: params.title,
+                why: params.why,
+                needsJp: params.needs_jp,
+                projectId: project.id,
+                scope: resolved.scope,
+                ...(params.workstream === undefined
+                  ? {}
+                  : { workstream: params.workstream }),
+              },
+              ownerFor(context),
+            ),
+          );
+        }
+        if (params.projectId !== undefined)
+          throw new Error(
+            "Work catalog is not active; registered project IDs require catalog activation",
+          );
         const project = resolveSessionProject(context.sessionManager);
         if (project.source === "malformed-explicit") {
           throw new Error(
@@ -1005,7 +1052,7 @@ export function createTaskLifecycleExtension(
       });
     }
 
-    registerTaskWorkState(pi);
+    registerTaskWorkState(pi, { readCatalog: deps.readCatalog });
   };
 }
 
@@ -1216,9 +1263,13 @@ export default function taskLifecycle(
     fileURLToPath(new URL("./config.json", import.meta.url)),
   );
   const storePath = resolveBeadsDir();
-  const store = createLifecycleStore(withBeadsEnvironment(pi.exec.bind(pi)), {
+  const execBeads = withBeadsEnvironment(pi.exec.bind(pi));
+  const beads = createBeadsClient(execBeads, { env: { BEADS_DIR: storePath } });
+  const catalog = createCatalogStore(beads);
+  const store = createLifecycleStore(execBeads, {
     store: storePath,
     readWorkManagementConfig: () => loadWorkManagementConfig(storePath),
+    readCatalog: () => catalog.read(),
   });
   const pool = {
     async list(repository?: string) {
@@ -1279,8 +1330,33 @@ export default function taskLifecycle(
     pool,
     checkAdapters,
   });
+  registerWorkCatalogTools(pi, {
+    service: createCatalogService({ client: beads, store: catalog, storePath }),
+    issues: async () => {
+      const result = await beads.listIssues(ALL_PROJECT_ISSUE_STATUSES);
+      if (!result.ok) throw new Error(result.error.message);
+      return result.value;
+    },
+    owner: (context) => ({
+      pid: process.pid,
+      sessionId: context.sessionManager.getSessionId(),
+      host: readHostname(),
+      started: Date.now(),
+    }),
+    select: (scope, current, context) => {
+      persistSessionWorkScope(
+        { appendCustomEntry: (type, data) => pi.appendEntry(type, data) },
+        scope,
+      );
+      const name = workScopeLabel(current, scope);
+      pi.setSessionName?.(
+        name ? generateSessionProjectName(context.sessionManager, name) : "",
+      );
+    },
+  });
   createTaskLifecycleExtension({
     service,
+    readCatalog: () => catalog.read(),
     reconciliation: {
       issue: (id) => store.show(id),
       request: (request, signal) =>

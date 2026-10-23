@@ -1070,3 +1070,187 @@ test("enrollment uses the same normalized workstream shown by task displays", as
     WM_TARGET,
   );
 });
+
+async function catalogStoreFixture(t: {
+  after(fn: () => Promise<void>): void;
+}) {
+  const { catalogFixture } = await import("../work-catalog/test-fixtures.js");
+  const path = await mkdtemp(join(tmpdir(), "catalog-create-test-"));
+  t.after(() => rm(path, { recursive: true, force: true }));
+  const catalog = catalogFixture();
+  const config = {
+    version: 2 as const,
+    routingMode: "catalog" as const,
+    ddAuthPath: "/bin/dd-auth",
+    curlPath: "/bin/curl",
+  };
+  let raw = rawIssue();
+  raw.dependencies = [];
+  const calls: string[][] = [];
+  const exec: BeadsExec = async (_command, args) => {
+    calls.push([...args]);
+    if (args[0] === "create" || args[0] === "update") {
+      const index = args.indexOf("--metadata");
+      if (index >= 0) raw.metadata = JSON.parse(args[index + 1]);
+      const status = args.indexOf("-s");
+      if (status >= 0) raw.status = args[status + 1];
+      const labels = args.indexOf("-l");
+      if (labels >= 0) raw.labels = args[labels + 1].split(",");
+      return result(raw);
+    }
+    assert.equal(args[0], "show");
+    return result(raw);
+  };
+  const settings = {
+    ...options(path),
+    readCatalog: async () => catalog,
+    readWorkManagementConfig: () => config,
+  };
+  return {
+    catalog,
+    config,
+    calls,
+    settings,
+    exec,
+    raw,
+    store: createLifecycleStore(exec, settings),
+  };
+}
+
+test("catalog task creation atomically records project, compatibility label and area target", async (t) => {
+  const { A, P } = await import("../work-catalog/test-fixtures.js");
+  const f = await catalogStoreFixture(t);
+  const created = await f.store.create(
+    {
+      title: "task",
+      why: "goal",
+      projectId: P,
+      scope: { kind: "area", areaId: A },
+      needsJp: false,
+    },
+    lifecycle(),
+    OWNER,
+  );
+  assert.deepEqual(created.metadata.piProject, { version: 1, projectId: P });
+  assert.deepEqual(f.raw.labels, ["workstream:api"]);
+  const wm = created.metadata.piWorkManagement as WorkManagementState;
+  const area = f.catalog.areas[A];
+  assert.equal(area.publication.mode, "datadog");
+  if (area.publication.mode !== "datadog") return;
+  assert.deepEqual(wm.target, area.publication.target);
+  assert.equal(f.calls.filter((c) => c[0] === "create").length, 1);
+});
+test("catalog routing rejects missing project and stale area membership before create", async (t) => {
+  const { A, B, P } = await import("../work-catalog/test-fixtures.js");
+  const f = await catalogStoreFixture(t);
+  await assert.rejects(
+    f.store.create(
+      {
+        title: "task",
+        why: "goal",
+        scope: { kind: "area", areaId: A },
+        needsJp: false,
+      },
+      lifecycle(),
+      OWNER,
+    ),
+  );
+  const request = {
+    title: "task",
+    why: "goal",
+    projectId: P,
+    scope: { kind: "area" as const, areaId: A },
+    needsJp: false,
+  };
+  f.catalog.projects[P].areaId = B;
+  await assert.rejects(
+    f.store.create(request, lifecycle(), OWNER),
+    /area|scope/i,
+  );
+  assert.equal(f.calls.filter((c) => c[0] === "create").length, 0);
+});
+test("partial activation and config/catalog mismatch cannot use legacy fallback", async (t) => {
+  const { P } = await import("../work-catalog/test-fixtures.js");
+  const f = await catalogStoreFixture(t);
+  const legacy = {
+    version: 1 as const,
+    ddAuthPath: "/bin/dd-auth",
+    curlPath: "/bin/curl",
+    workstreams: {},
+  };
+  for (const settings of [
+    { ...f.settings, readCatalog: async () => null },
+    {
+      ...f.settings,
+      readCatalog: async () => ({ ...f.catalog, state: "prepared" as const }),
+    },
+    { ...f.settings, readWorkManagementConfig: () => legacy },
+    { ...f.settings, readWorkManagementConfig: () => null },
+  ]) {
+    const store = createLifecycleStore(f.exec, settings);
+    await assert.rejects(
+      store.create(
+        { title: "task", why: "goal", projectId: P, needsJp: false },
+        lifecycle(),
+        OWNER,
+      ),
+      /catalog|configuration/i,
+    );
+  }
+  assert.equal(f.calls.filter((c) => c[0] === "create").length, 0);
+});
+test("managed workstream labels cannot change via generic label updates", async (t) => {
+  const { P } = await import("../work-catalog/test-fixtures.js");
+  const f = await catalogStoreFixture(t);
+  await f.store.create(
+    { title: "task", why: "goal", projectId: P, needsJp: false },
+    lifecycle(),
+    OWNER,
+  );
+  await assert.rejects(
+    f.store.updateLabels(
+      "jp-1",
+      { addLabels: ["workstream:elsewhere"], removeLabels: [] },
+      OWNER,
+    ),
+    /project|workstream/i,
+  );
+  assert.equal(f.calls.filter((c) => c[0] === "update").length, 0);
+});
+test("local-only project creates no WM binding and later area edits cannot enroll it", async (t) => {
+  const { B, P } = await import("../work-catalog/test-fixtures.js");
+  const f = await catalogStoreFixture(t);
+  f.catalog.projects[P].areaId = B;
+  const created = await f.store.create(
+    { title: "task", why: "goal", projectId: P, needsJp: false },
+    lifecycle(),
+    OWNER,
+  );
+  assert.deepEqual(created.metadata.piProject, { version: 1, projectId: P });
+  assert.equal(Object.hasOwn(created.metadata, "piWorkManagement"), false);
+});
+test("lifecycle and WM mutations preserve project identity and captured targets", async (t) => {
+  const { B, P } = await import("../work-catalog/test-fixtures.js");
+  const f = await catalogStoreFixture(t);
+  const created = await f.store.create(
+    { title: "task", why: "goal", projectId: P, needsJp: false },
+    lifecycle(),
+    OWNER,
+  );
+  const wm = structuredClone(
+    created.metadata.piWorkManagement,
+  ) as WorkManagementState;
+  f.catalog.projects[P].areaId = B;
+  const mutated = await f.store.mutate("jp-1", OWNER, () => claimedMutation());
+  assert.deepEqual(mutated.metadata.piProject, { version: 1, projectId: P });
+  assert.deepEqual(mutated.metadata.piWorkManagement, wm);
+  const synced = await f.store.mutateWorkManagement("jp-1", OWNER, () => ({
+    ...wm,
+    lastSentStatus: "Open",
+  }));
+  assert.deepEqual(synced.metadata.piProject, { version: 1, projectId: P });
+  assert.deepEqual(
+    (synced.metadata.piWorkManagement as WorkManagementState).target,
+    wm.target,
+  );
+});

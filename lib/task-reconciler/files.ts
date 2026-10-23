@@ -1,6 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
-import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
+import {
+  link,
+  lstat,
+  mkdir,
+  open,
+  realpath,
+  rename,
+  unlink,
+} from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import type { DaemonConfig } from "./config.js";
 
@@ -66,7 +74,7 @@ async function privateDirectory(path: string, create: boolean): Promise<void> {
 export async function verifyPrivateSocket(path: string): Promise<void> {
   verifyPrivate(path, await lstat(path), "socket");
 }
-async function verifyParents(base: string): Promise<void> {
+export async function verifyParents(base: string): Promise<void> {
   for (let parent = dirname(base); ; parent = dirname(parent)) {
     const info = await lstat(parent);
     if (
@@ -192,9 +200,13 @@ export async function readPrivateJson(path: string): Promise<unknown> {
 export async function writePrivateJson(
   path: string,
   value: unknown,
+  options: { maxBytes?: number; exclusive?: boolean } = {},
 ): Promise<void> {
+  const limit = options.maxBytes ?? MAX_PRIVATE_BYTES;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1024 * 1024)
+    throw new Error("Invalid private-file budget");
   const text = JSON.stringify(value);
-  if (Buffer.byteLength(text) > MAX_PRIVATE_BYTES)
+  if (Buffer.byteLength(text) > limit)
     throw new RuntimeBoundaryError(
       "file_too_large",
       `private JSON exceeds limit: ${JSON.stringify(path)}`,
@@ -216,7 +228,10 @@ export async function writePrivateJson(
   }
   await handle.close();
   try {
-    await rename(temporary, path);
+    if (options.exclusive) {
+      await link(temporary, path);
+      await unlink(temporary);
+    } else await rename(temporary, path);
   } catch (error) {
     await unlink(temporary).catch(() => undefined);
     throw error;
