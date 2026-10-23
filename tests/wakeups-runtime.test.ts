@@ -22,6 +22,7 @@ async function start(
   hold = false,
   review?: { enabled: boolean; beforeRead?(): Promise<void> },
   mode = "json",
+  alarm: { at?: string; rearmOnWake?: boolean } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "wakeup-sdk-"));
   let session: any;
@@ -107,13 +108,15 @@ async function start(
           yield { type: "error", reason: "aborted", error: message };
           return;
         }
-        if (current === 1 || current === 4) {
+        if (current === 1 || current === (alarm.rearmOnWake ? 3 : 4)) {
           const toolCall = {
             type: "toolCall",
             id: `schedule-${current}`,
             name: "schedule_wakeup",
             arguments: {
-              delaySeconds: 60,
+              ...(current === 1 && alarm.at !== undefined
+                ? { at: alarm.at }
+                : { delaySeconds: 60 }),
               reason: "Fixture pending",
               prompt: "Check operation fixture-123",
             },
@@ -470,3 +473,45 @@ test(
     assert.deepEqual(h.errors, []);
   },
 );
+
+for (const mode of ["relative", "absolute"] as const) {
+  test(
+    `supported SDK delivers a late ${mode} alarm once but rejects automatic rearming`,
+    { skip },
+    async (t) => {
+      const h = await start(t, false, undefined, "json", {
+        ...(mode === "absolute" ? { at: "2026-02-02T00:00:00Z" } : {}),
+        rearmOnWake: true,
+      });
+      await h.session.prompt("Wait for the approved fixture operation.");
+      assertArmed(h.session);
+      await wake(t, h.session, 3 * 86_400_000);
+      assert.equal(h.requests(), 4);
+      const toolResults = h.session.messages.filter(
+        (message: any) => message.role === "toolResult",
+      );
+      assert.equal(toolResults.length, 2);
+      assert.equal(toolResults[1].isError, true);
+      assert.match(JSON.stringify(toolResults[1].content), /cutoff|expired/i);
+      const continuations = h.session.messages.filter(
+        (message: any) =>
+          message.role === "custom" &&
+          message.customType === "scheduled-wakeup",
+      );
+      assert.equal(continuations.length, 1);
+      assert.equal(
+        continuations[0].details.dueAt,
+        mode === "absolute" ? Date.UTC(2026, 1, 2) : Date.UTC(2026, 1, 1, 0, 1),
+      );
+      assert.equal(
+        h.session.messages.filter((message: any) => message.role === "user")
+          .length,
+        1,
+      );
+      t.mock.timers.tick(86_400_000);
+      await setImmediate();
+      assert.equal(h.requests(), 4);
+      assert.deepEqual(h.errors, []);
+    },
+  );
+}

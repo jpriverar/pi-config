@@ -9,8 +9,8 @@ const request: WakeupRequest = {
   prompt: "Check operation run-123 and report its current state",
 };
 
-function setup(t: TestContext) {
-  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: START });
+function setup(t: TestContext, now = START) {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now });
   const sent: string[] = [];
   const notices: string[] = [];
   let ready = true;
@@ -75,17 +75,24 @@ test("pending input or compaction defers a due check", (t) => {
   assert.equal(h.sent.length, 1);
 });
 
-test("busy time cannot extend the deadline", (t) => {
+test("an overdue relative alarm survives its cutoff and delivers once without renewing it", (t) => {
   const h = setup(t);
-  h.wakeups.schedule({ ...request, timeoutSeconds: 120 });
+  const first = h.wakeups.schedule({ ...request, timeoutSeconds: 120 });
   h.ready(false);
-  h.tick(120_000);
-  assert.equal(h.wakeups.inspect().status, "expired");
+  h.tick(2 * 86_400_000);
+  const late = h.wakeups.inspect();
+  assert.equal(late.status, "scheduled");
+  assert.equal(late.pending?.id, first.pending!.id);
+  assert.equal(late.deadline, first.deadline);
+  assert.equal(h.notices.length, 0);
+  h.wakeups.userInput();
+  assert.equal(h.wakeups.inspect().deadline, first.deadline);
   h.ready(true);
+  h.tick(5_000);
+  assert.deepEqual(h.sent, [first.pending!.id]);
+  assert.throws(() => h.wakeups.schedule(request), /expired|cutoff|user/i);
   h.tick(60_000);
-  assert.deepEqual(h.sent, []);
-  assert.equal(h.notices.length, 1);
-  assert.throws(() => h.wakeups.schedule(request), /expired|user/i);
+  assert.equal(h.sent.length, 1);
 });
 
 test("rescheduling never renews the original budget", (t) => {
@@ -103,7 +110,7 @@ test("rescheduling never renews the original budget", (t) => {
   });
   assert.equal(second.deadline, first.deadline);
   h.tick(60_000);
-  assert.throws(() => h.wakeups.schedule(request), /deadline/i);
+  assert.throws(() => h.wakeups.schedule(request), /cutoff/i);
   assert.equal(h.sent.length, 2);
 });
 
@@ -213,3 +220,201 @@ test("invalid requests do not start or alter a wait budget", (t) => {
   }
   assert.deepEqual(h.wakeups.inspect(), { status: "ready" });
 });
+
+const DAY = 86_400_000;
+const absolute = (at: string, timeoutSeconds?: number) => ({
+  at,
+  prompt: request.prompt,
+  reason: request.reason,
+  ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+});
+
+test("an absolute alarm can target one week ahead with its cutoff anchored to that target", (t) => {
+  const h = setup(t);
+  const first = h.wakeups.schedule(absolute("2026-02-08T00:00:00Z"));
+  assert.equal(first.pending?.dueAt, START + 7 * DAY);
+  assert.equal(first.deadline, START + 7 * DAY + 3_600_000);
+  h.tick(7 * DAY - 1);
+  assert.deepEqual(h.sent, []);
+  h.tick(1);
+  assert.deepEqual(h.sent, [first.pending!.id]);
+});
+
+test("an absolute alarm delayed by two days remains deliverable after its follow-up cutoff", (t) => {
+  const h = setup(t);
+  const first = h.wakeups.schedule(absolute("2026-02-02T00:00:00Z"));
+  h.ready(false);
+  h.tick(3 * DAY);
+  assert.equal(h.wakeups.inspect().pending?.id, first.pending!.id);
+  assert.equal(h.notices.length, 0);
+  h.ready(true);
+  h.tick(5_000);
+  assert.deepEqual(h.sent, [first.pending!.id]);
+  assert.throws(() => h.wakeups.schedule(request), /expired|cutoff|user/i);
+  h.wakeups.runSettled(false);
+  h.wakeups.userInput();
+  const next = h.wakeups.schedule(absolute("2026-02-05T00:00:00Z"));
+  assert.equal(next.deadline, START + 4 * DAY + 3_600_000);
+});
+
+for (const mode of ["relative", "absolute"] as const) {
+  test(`${mode} catches up after a wall-clock jump without waiting its original timer interval`, (t) => {
+    const h = setup(t);
+    let wall = START;
+    t.mock.method(Date, "now", () => wall);
+    const first = h.wakeups.schedule(
+      mode === "relative"
+        ? { ...request, delaySeconds: 3600, timeoutSeconds: 7200 }
+        : absolute("2026-02-04T00:00:00Z"),
+    );
+    wall = START + 5 * DAY;
+    h.tick(60_000);
+    assert.deepEqual(h.sent, [first.pending!.id]);
+    assert.throws(() => h.wakeups.schedule(request), /expired|cutoff|user/i);
+  });
+
+  test(`${mode} does not fire early after the wall clock moves backward`, (t) => {
+    const h = setup(t);
+    let wall = START;
+    t.mock.method(Date, "now", () => wall);
+    const first = h.wakeups.schedule(
+      mode === "relative" ? request : absolute("2026-02-01T00:01:00Z"),
+    );
+    wall = START - 3_600_000;
+    h.tick(60_000);
+    assert.deepEqual(h.sent, []);
+    wall = START + 60_000;
+    h.tick(60_000);
+    assert.deepEqual(h.sent, [first.pending!.id]);
+  });
+}
+
+test("mixing absolute and relative follow-ups never renews the first cutoff", (t) => {
+  const h = setup(t);
+  const first = h.wakeups.schedule(absolute("2026-02-02T00:00:00Z", 180));
+  h.tick(DAY);
+  assert.throws(
+    () => h.wakeups.schedule({ ...request, timeoutSeconds: 3600 }),
+    /timeout|cutoff|deadline/i,
+  );
+  const second = h.wakeups.schedule(request);
+  assert.equal(second.deadline, first.deadline);
+  h.tick(60_000);
+  const third = h.wakeups.schedule(absolute("2026-02-02T00:02:00Z"));
+  assert.equal(third.deadline, first.deadline);
+  h.tick(60_000);
+  assert.throws(() => h.wakeups.schedule(request), /deadline|cutoff/i);
+  assert.equal(h.sent.length, 3);
+});
+
+test("absolute follow-ups cannot escape a relative wait's original cutoff", (t) => {
+  const h = setup(t);
+  const first = h.wakeups.schedule({ ...request, timeoutSeconds: 180 });
+  h.tick(60_000);
+  assert.throws(
+    () => h.wakeups.schedule(absolute("2026-02-02T00:00:00Z")),
+    /deadline|cutoff/i,
+  );
+  const next = h.wakeups.schedule(absolute("2026-02-01T00:02:00Z"));
+  assert.equal(next.deadline, first.deadline);
+});
+
+test("timestamps normalize explicit offsets and millisecond precision", (t) => {
+  const h = setup(t);
+  const first = h.wakeups.schedule(absolute("2026-02-01T02:01:00.125+02:00"));
+  assert.equal(first.pending?.dueAt, START + 60_125);
+  h.tick(60_124);
+  assert.deepEqual(h.sent, []);
+  h.tick(1);
+  assert.deepEqual(h.sent, [first.pending!.id]);
+});
+
+test("invalid or ambiguous calendar timestamps do not create an alarm", (t) => {
+  const h = setup(t, Date.UTC(2026, 1, 27));
+  for (const at of [
+    "2026-02-28T09:00:00",
+    "2026-02-28",
+    "tomorrow at 9",
+    "",
+    "2026-02-29T09:00:00Z",
+    "2026-02-30T09:00:00+01:00",
+    "2026-02-27T24:00:00Z",
+    "2026-02-28T09:60:00Z",
+    "2026-02-28T09:00:60Z",
+    "2026-02-28T09:00:00+24:00",
+    "2026-02-28T09:00:00+00:60",
+    "2026-02-28T09:00:00.1234Z",
+    " 2026-02-28T09:00:00Z",
+    "2026-02-28T09:00:00Z\n",
+  ]) {
+    assert.throws(() => h.wakeups.schedule(absolute(at)), /at|timestamp/i, at);
+  }
+  assert.deepEqual(h.wakeups.inspect(), { status: "ready" });
+});
+
+test("valid leap days are accepted", (t) => {
+  const h = setup(t, Date.UTC(2028, 1, 27));
+  const first = h.wakeups.schedule(absolute("2028-02-29T00:00:00Z"));
+  assert.equal(first.pending?.dueAt, Date.UTC(2028, 1, 29));
+});
+
+test("absolute targets obey the one-minute and one-week boundaries", (t) => {
+  const h = setup(t);
+  for (const at of [
+    "2026-01-31T23:59:00Z",
+    "2026-02-01T00:00:59.999Z",
+    "2026-02-08T00:00:00.001Z",
+  ]) {
+    assert.throws(() => h.wakeups.schedule(absolute(at)), /at|future|week/i);
+  }
+  assert.equal(
+    h.wakeups.schedule(absolute("2026-02-01T00:01:00Z")).pending?.dueAt,
+    START + 60_000,
+  );
+});
+
+test("exactly one timing input is required and invalid combinations leave state untouched", (t) => {
+  const h = setup(t);
+  assert.throws(
+    () => h.wakeups.schedule({ ...request, at: "2026-02-02T00:00:00Z" }),
+    /exactly one|both|at/i,
+  );
+  assert.throws(
+    () =>
+      h.wakeups.schedule({ prompt: request.prompt, reason: request.reason }),
+    /exactly one|delaySeconds|at/i,
+  );
+  assert.deepEqual(h.wakeups.inspect(), { status: "ready" });
+});
+
+test("cancellation still removes an overdue absolute alarm", (t) => {
+  const h = setup(t);
+  const first = h.wakeups.schedule(absolute("2026-02-02T00:00:00Z"));
+  h.ready(false);
+  h.tick(3 * DAY);
+  h.wakeups.cancel(first.pending!.id);
+  h.ready(true);
+  h.tick(60_000);
+  assert.deepEqual(h.sent, []);
+  assert.equal(h.wakeups.inspect().status, "cancelled");
+});
+
+for (const blocked of [false, true]) {
+  test(`clock rollback cannot reopen a cutoff observed while ${blocked ? "pending" : "delivering"}`, (t) => {
+    const h = setup(t);
+    let wall = START;
+    t.mock.method(Date, "now", () => wall);
+    const first = h.wakeups.schedule({ ...request, timeoutSeconds: 180 });
+    h.ready(!blocked);
+    wall = START + DAY;
+    h.tick(60_000);
+    wall = START + 60_000;
+    h.ready(true);
+    h.tick(5_000);
+    assert.deepEqual(h.sent, [first.pending!.id]);
+    assert.throws(() => h.wakeups.schedule(request), /cutoff|expired|user/i);
+    h.wakeups.runSettled(false);
+    h.wakeups.userInput();
+    assert.equal(h.wakeups.schedule(request).deadline, START + 3_660_000);
+  });
+}

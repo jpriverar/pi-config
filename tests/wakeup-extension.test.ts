@@ -273,19 +273,67 @@ for (const event of [
   });
 }
 
-test("cancellation and expiry close the notice and clear the live label", async (t) => {
+test("cancellation closes the notice and clears the live label", async (t) => {
   const h = await harness(t);
   const first = await h.arm();
   await h.call("cancel_wakeup", { id: first.pending!.id });
   assert.equal(h.labels.at(-1), null);
   assert.match(JSON.stringify(h.entries.at(-1)), /cancelled/i);
-  await h.emit("input", { source: "interactive" });
-  await h.arm();
-  h.queue(true);
   h.tick(3_600_000);
-  assert.equal(h.labels.at(-1), null);
-  assert.match(JSON.stringify(h.entries.at(-1)), /expired/i);
   assert.equal(h.messages.length, 0);
+});
+
+test("an overdue check waits behind queued input without an expiry notice", async (t) => {
+  const h = await harness(t);
+  const first = await h.arm();
+  h.queue(true);
+  await h.emit("before_agent_start");
+  h.tick(3 * 86_400_000);
+  assert.equal(h.labels.at(-1), null);
+  assert.equal((await h.call("list_wakeups")).pending?.id, first.pending!.id);
+  assert.equal(h.entries.length, 1);
+  assert.equal(h.messages.length, 0);
+  h.queue(false);
+  await h.emit("agent_settled", { aborted: false });
+  assert.match(String(h.labels.at(-1)), /overdue/i);
+  h.tick(0);
+  assert.equal(h.messages.length, 1);
+  assert.equal(h.entries.length, 1);
+  assert.equal(h.labels.at(-1), null);
+  assert.match(String(h.messages[0].content), /2026-02-01T00:01:00.000Z/);
+  await assert.rejects(h.arm(), /cutoff|expired|user/i);
+});
+
+test("absolute alarms share listing and cancellation and display a multi-day footer", async (t) => {
+  const h = await harness(t);
+  const first = await h.call("schedule_wakeup", {
+    at: "2026-02-08T00:00:00Z",
+    reason: "Check next week",
+    prompt: "Inspect fixture-123",
+  });
+  assert.equal(first.pending?.dueAt, Date.UTC(2026, 1, 8));
+  assert.match(h.footer()!, /Feb/);
+  assert.equal((await h.call("list_wakeups")).pending?.id, first.pending!.id);
+  await assert.rejects(h.arm(), /already pending/i);
+  await h.call("cancel_wakeup", { id: first.pending!.id });
+  h.tick(7 * 86_400_000);
+  assert.equal(h.messages.length, 0);
+});
+
+test("invalid timing combinations are rejected without arming the adapter", async (t) => {
+  const h = await harness(t);
+  for (const timing of [{}, { delaySeconds: 60, at: "2026-02-02T00:00:00Z" }]) {
+    await assert.rejects(
+      h.call("schedule_wakeup", {
+        ...timing,
+        prompt: "Check fixture-123",
+        reason: "Fixture",
+      }),
+      /exactly one/i,
+    );
+  }
+  assert.equal((await h.call("list_wakeups")).status, "ready");
+  assert.equal(h.entries.length, 0);
 });
 
 test("abort never announces a wait while cancelling it", async (t) => {
