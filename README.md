@@ -63,8 +63,10 @@ Before model turns, the `task-lifecycle` extension sends scoped task IDs,
 titles, explicit Active/Actionable/Waiting state, dependency authority, and
 compact lifecycle warnings from the Beads store to the configured model as
 hidden context. A separate block adds the existing description and current
-`next_step` only for the uniquely owned active task in the selected scope.
-It never chooses a mission by title or borrows another session's task.
+`next_step` only for the uniquely owned active task. With an active catalog,
+selection changes the view, not ownership: outside-view owned context remains
+available with a warning. Without an active catalog, legacy project matching
+applies. It never chooses a mission by title or borrows another session's task.
 
 The owned-context block is capped at 8000 characters; oversized content is
 omitted with retrieval guidance rather than presenting a partial mission.
@@ -87,7 +89,7 @@ On **Pi 1.2 or newer within 1.x**, this package exposes three tools:
 - `list_wakeups`: inspect the pending check and retained wait deadline.
 - `cancel_wakeup`: cancel an exact pending ID and stop automatic rearming.
 
-The bootstrap's older pinned runtime remains unchanged. On older, prerelease,
+The personal bootstrap and development SDK use Pi 1.2.0. On older, prerelease,
 or unknown runtimes, the extension reports that wakeups are disabled rather
 than scheduling without reliable abort information. No slash commands or
 recurring-loop scheduler are added.
@@ -152,9 +154,9 @@ with `pi remove <old-preview-source>` before `/reload`; do not load two packages
 that register the same tool names. This package is already the permanent source
 when installed through the personal bootstrap.
 
-Tests cover the controller, tool adapter, and version guard. The real-SDK tests
-skip on the repository's older pinned SDK. To exercise them against a supported
-installed SDK without changing dependency pins:
+Tests cover the controller, tool adapter, version guard, and completion-review
+interaction. The real-SDK tests run against the repository's supported SDK.
+To exercise a different supported installed SDK without changing dependency pins:
 
 ```sh
 PI_WAKEUP_SDK=file:///absolute/path/to/pi/dist/index.js \
@@ -179,7 +181,9 @@ as user-role context; its text explicitly denies new instruction or approval.
 It refreshes available
 owned task context, but missing or contradictory records do not disable the
 conversation-based check. Its own continuation, metadata edits and toggling
-off/on cannot replenish that submitted run's budget. It does not wake an idle
+off/on cannot replenish that submitted run's budget. Scheduled wakeups remain
+custom continuations, not fresh user input, and do not replenish review either.
+It does not wake an idle
 agent, launch a worker, infer permission or verify mission completion.
 
 Abort/error outcomes and terminal or failed tools suppress the review. This is

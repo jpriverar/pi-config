@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { test, type TestContext } from "node:test";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerCompletionReview } from "../extensions/task-lifecycle/completion-review.js";
 
 const sdk = await import(
   process.env.PI_WAKEUP_SDK ?? "@earendil-works/pi-coding-agent"
@@ -15,7 +17,12 @@ const skip =
     ? "Requires a Pi 1.2+ SDK; set PI_WAKEUP_SDK to its module URL"
     : false;
 
-async function start(t: TestContext, hold = false, mode = "json") {
+async function start(
+  t: TestContext,
+  hold = false,
+  review?: { enabled: boolean; beforeRead?(): Promise<void> },
+  mode = "json",
+) {
   const dir = await mkdtemp(join(tmpdir(), "wakeup-sdk-"));
   let session: any;
   t.after(async () => {
@@ -40,6 +47,8 @@ async function start(t: TestContext, hold = false, mode = "json") {
     refreshOnCreate: false,
   });
   let requests = 0;
+  let contextReads = 0;
+  const messageTypes: string[] = [];
   let held!: () => void;
   const holding = new Promise<void>((resolve) => {
     held = resolve;
@@ -146,6 +155,28 @@ async function start(t: TestContext, hold = false, mode = "json") {
     additionalExtensionPaths: [
       fileURLToPath(new URL("../extensions/wakeups/index.ts", import.meta.url)),
     ],
+    extensionFactories:
+      review === undefined
+        ? []
+        : [
+            (pi: ExtensionAPI) => {
+              registerCompletionReview(pi, {
+                runtimeVersion: sdk.VERSION,
+                isChild: () => false,
+                readContext: async () => {
+                  contextReads++;
+                  await review.beforeRead?.();
+                  return {
+                    kind: "none",
+                    reason: "Isolated wakeup integration fixture",
+                  };
+                },
+              });
+              pi.on("before_agent_start", (event) => {
+                messageTypes.push(event.messageType);
+              });
+            },
+          ],
   });
   await resourceLoader.reload();
   assert.deepEqual(resourceLoader.getExtensions().errors, []);
@@ -169,7 +200,15 @@ async function start(t: TestContext, hold = false, mode = "json") {
     apis: ["Date", "setTimeout"],
     now: Date.UTC(2026, 1, 1),
   });
-  return { session, errors, holding, requests: () => requests };
+  if (review?.enabled) await session.prompt("/mission-check on");
+  return {
+    session,
+    errors,
+    holding,
+    requests: () => requests,
+    contextReads: () => contextReads,
+    messageTypes,
+  };
 }
 
 function assertArmed(session: any) {
@@ -258,7 +297,7 @@ test(
   "TUI waiting notices are durable display entries, not model messages or extra turns",
   { skip },
   async (t) => {
-    const h = await start(t, false, "tui");
+    const h = await start(t, false, undefined, "tui");
     await h.session.prompt("Wait for the fixture operation, then check it.");
     assertArmed(h.session);
     const entries = h.session.sessionManager
@@ -279,6 +318,124 @@ test(
     t.mock.timers.tick(60_000);
     await setImmediate();
     assert.equal(h.requests(), 2);
+    assert.deepEqual(h.errors, []);
+  },
+);
+
+function reviewCount(session: any): number {
+  return session.messages.filter(
+    (message: any) =>
+      message.role === "custom" &&
+      message.customType === "jp-completion-review",
+  ).length;
+}
+
+async function wake(t: TestContext, session: any, milliseconds = 60_000) {
+  const settled = new Promise<void>((resolve) => {
+    const off = session.subscribe((event: { type: string }) => {
+      if (event.type === "agent_settled") {
+        off();
+        resolve();
+      }
+    });
+  });
+  t.mock.timers.tick(milliseconds);
+  await settled;
+}
+
+for (const enabled of [false, true]) {
+  test(
+    `completion review budget is not replenished by native wakeups (enabled=${enabled})`,
+    { skip },
+    async (t) => {
+      const h = await start(t, false, { enabled });
+      await h.session.prompt("Wait for the fixture operation, then check it.");
+      assertArmed(h.session);
+      assert.equal(h.requests(), enabled ? 3 : 2);
+      assert.equal(reviewCount(h.session), enabled ? 1 : 0);
+      await wake(t, h.session);
+      assert.equal(h.requests(), enabled ? 5 : 3);
+      assert.equal(reviewCount(h.session), enabled ? 1 : 0);
+      assert.equal(h.contextReads(), enabled ? 1 : 0);
+      await h.session.prompt("Continue the same approved bounded check.");
+      assert.equal(h.requests(), enabled ? 7 : 5);
+      assert.equal(reviewCount(h.session), enabled ? 2 : 0);
+      await wake(t, h.session);
+      assert.equal(h.requests(), enabled ? 8 : 6);
+      assert.equal(reviewCount(h.session), enabled ? 2 : 0);
+      assert.equal(h.contextReads(), enabled ? 2 : 0);
+      assert.deepEqual(h.messageTypes, ["user", "custom", "user", "custom"]);
+      assert.deepEqual(h.errors, []);
+    },
+  );
+}
+
+test(
+  "completion review preserves native wakeup abort cancellation",
+  { skip },
+  async (t) => {
+    const h = await start(t, true, { enabled: true });
+    const running = h.session.prompt("Wait for the fixture operation.");
+    await h.holding;
+    assertArmed(h.session);
+    t.mock.timers.tick(60_000);
+    await h.session.abort();
+    await running;
+    t.mock.timers.tick(60_000);
+    await setImmediate();
+    assert.equal(h.requests(), 2);
+    assert.equal(reviewCount(h.session), 0);
+    assert.equal(h.contextReads(), 0);
+    assert.equal(
+      h.session.messages.filter(
+        (message: any) =>
+          message.role === "custom" &&
+          message.customType === "scheduled-wakeup",
+      ).length,
+      0,
+    );
+    assert.deepEqual(h.errors, []);
+  },
+);
+
+test(
+  "a due wakeup waits for completion review to settle",
+  { skip },
+  async (t) => {
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const h = await start(t, false, {
+      enabled: true,
+      beforeRead: async () => {
+        entered();
+        await blocked;
+      },
+    });
+    const running = h.session.prompt("Wait for the fixture operation.");
+    await started;
+    try {
+      t.mock.timers.tick(60_000);
+      await setImmediate();
+      assert.equal(h.requests(), 2);
+      assert.deepEqual(h.messageTypes, ["user"]);
+      assert.equal(reviewCount(h.session), 0);
+    } finally {
+      release();
+    }
+    await running;
+    assert.equal(h.requests(), 3);
+    assert.equal(reviewCount(h.session), 1);
+    await wake(t, h.session, 0);
+    assert.equal(h.requests(), 5);
+    assert.equal(reviewCount(h.session), 1);
+    assert.equal(h.contextReads(), 1);
+    assert.deepEqual(h.messageTypes, ["user", "custom"]);
     assert.deepEqual(h.errors, []);
   },
 );

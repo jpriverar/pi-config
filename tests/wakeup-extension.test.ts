@@ -4,6 +4,7 @@ import { test, type TestContext } from "node:test";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { registerWakeupTools } from "../extensions/wakeups/index.js";
@@ -46,6 +47,11 @@ async function harness(t: TestContext, version = "1.2.0") {
       },
     },
   } as unknown as ExtensionContext;
+  const toolContext: ExtensionToolContext = {
+    ...ctx,
+    tools: [],
+    executeTool: async () => assert.fail("Unexpected nested tool execution"),
+  };
   const pi = {
     events,
     registerEntryRenderer() {},
@@ -90,7 +96,7 @@ async function harness(t: TestContext, version = "1.2.0") {
       params,
       signal,
       undefined,
-      ctx,
+      toolContext,
     );
     return result.details as WakeupState;
   }
