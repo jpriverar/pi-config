@@ -47,11 +47,6 @@ async function harness(t: TestContext, version = "1.2.0") {
       },
     },
   } as unknown as ExtensionContext;
-  const toolContext: ExtensionToolContext = {
-    ...ctx,
-    tools: [],
-    executeTool: async () => assert.fail("Unexpected nested tool execution"),
-  };
   const pi = {
     events,
     registerEntryRenderer() {},
@@ -91,6 +86,11 @@ async function harness(t: TestContext, version = "1.2.0") {
   ): Promise<WakeupState> {
     const tool = tools.get(name);
     assert.ok(tool, `Missing tool ${name}`);
+    const toolContext: ExtensionToolContext = {
+      ...ctx,
+      tools: [],
+      executeTool: async () => assert.fail("Unexpected nested tool execution"),
+    };
     const result = await tool.execute(
       "fixture-call",
       params,

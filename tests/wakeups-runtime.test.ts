@@ -343,6 +343,37 @@ async function wake(t: TestContext, session: any, milliseconds = 60_000) {
   await settled;
 }
 
+test(
+  "TUI waiting notices do not add model turns or replenish completion review",
+  { skip },
+  async (t) => {
+    const h = await start(t, false, { enabled: true }, "tui");
+    await h.session.prompt("Wait for the fixture operation, then check it.");
+    assertArmed(h.session);
+    assert.equal(h.requests(), 3);
+    assert.equal(reviewCount(h.session), 1);
+    assert.ok(
+      h.session.sessionManager
+        .getBranch()
+        .some(
+          (entry: any) =>
+            entry.type === "custom" && entry.customType === "wakeup-wait",
+        ),
+    );
+    await wake(t, h.session);
+    assert.equal(h.requests(), 5);
+    assert.equal(reviewCount(h.session), 1);
+    assert.equal(h.contextReads(), 1);
+    assert.deepEqual(h.messageTypes, ["user", "custom"]);
+    assert.ok(
+      h.session.messages.every(
+        (message: any) => message.customType !== "wakeup-wait",
+      ),
+    );
+    assert.deepEqual(h.errors, []);
+  },
+);
+
 for (const enabled of [false, true]) {
   test(
     `completion review budget is not replenished by native wakeups (enabled=${enabled})`,
