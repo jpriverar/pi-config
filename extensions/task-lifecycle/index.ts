@@ -35,6 +35,7 @@ import { loadLifecycleConfig } from "../../lib/task-lifecycle/config.js";
 import { hostname as readHostname } from "node:os";
 
 import {
+  createBeadsClient,
   resolveBeadsDir,
   createBeadsClient,
   withBeadsEnvironment,
@@ -46,6 +47,12 @@ import type {
 } from "../worktree-pool/pool.js";
 import { loadWorktreePoolRuntime } from "../worktree-pool/runtime.js";
 import { registerTaskWorkState, type TaskWorkStateApi } from "./work-state.js";
+import {
+  readOwnedTaskContext,
+  renderTaskContext,
+  type TaskContextResult,
+  type TaskSession,
+} from "./task-context.js";
 import { createDeterministicGitArtifactClassifier } from "./git-artifact-command.js";
 import { registerGitArtifactHooks } from "./git-artifact-hooks.js";
 import { createGitArtifactObserver } from "./git-artifact-observer.js";
@@ -221,6 +228,7 @@ export interface ExtensionApi {
 export interface TaskLifecycleExtensionDependencies {
   readCatalog?: () => Promise<WorkCatalog | null>;
   service: TaskLifecycleToolService;
+  readTaskContext?: (session: TaskSession) => Promise<TaskContextResult>;
   reconciliation?: {
     issue(taskId: string): Promise<LifecycleIssue>;
     request(
@@ -334,6 +342,24 @@ export function createTaskLifecycleExtension(
       params.operationId ?? id;
     const block = (reason: string) => ({ block: true, reason });
     const pendingPoolOperations = new Map<string, PendingPoolOperation>();
+    const contextClient = createBeadsClient(
+      withBeadsEnvironment((command, args) =>
+        pi.exec(command, [...args], { timeout: 5000 }),
+      ),
+    );
+    const readTaskContext =
+      deps.readTaskContext ??
+      ((session: TaskSession) => readOwnedTaskContext(contextClient, session));
+    let contextGeneration = 0;
+    let activeSessionId: string | undefined;
+    pi.on("session_start", (_event, context) => {
+      contextGeneration += 1;
+      activeSessionId = context.sessionManager.getSessionId();
+    });
+    pi.on("session_shutdown", () => {
+      contextGeneration += 1;
+      activeSessionId = undefined;
+    });
 
     pi.registerTool({
       name: "task_create",
@@ -503,14 +529,65 @@ export function createTaskLifecycleExtension(
         { taskId: taskIdProperty, operationId: operationIdProperty },
         ["taskId"],
       ),
-      async execute(id, params, _signal, _update, context) {
-        return toolResult(
-          await deps.service.claim(
-            params.taskId,
-            ownerFor(context),
-            operationFor(id, params),
-          ),
+      async execute(id, params, signal, _update, context) {
+        const owner = ownerFor(context);
+        activeSessionId ??= owner.sessionId;
+        const generation = contextGeneration;
+        const project = resolveSessionProject(context.sessionManager);
+        const current = () => {
+          const nextProject = resolveSessionProject(context.sessionManager);
+          return (
+            !(isRecord(signal) && signal.aborted === true) &&
+            generation === contextGeneration &&
+            activeSessionId === owner.sessionId &&
+            context.sessionManager.getSessionId() === owner.sessionId &&
+            nextProject.source === project.source &&
+            nextProject.workstream === project.workstream
+          );
+        };
+        const claimed = await deps.service.claim(
+          params.taskId,
+          owner,
+          operationFor(id, params),
         );
+        const result = toolResult(claimed);
+        if (!current()) return result;
+        let taskContext: TaskContextResult;
+        try {
+          taskContext = await readTaskContext(context.sessionManager);
+        } catch {
+          taskContext = {
+            kind: "unavailable",
+            reason: "Claim succeeded, but task context lookup is unavailable.",
+          };
+        }
+        if (!current()) return result;
+        if (
+          taskContext.kind === "none" ||
+          (taskContext.kind === "available" &&
+            taskContext.value.taskId !== claimed.id)
+        ) {
+          taskContext = {
+            kind: "unavailable",
+            reason:
+              "Owned task context changed or is unavailable after claim; no mission was selected.",
+          };
+        }
+        try {
+          const content = renderTaskContext(taskContext);
+          if (content !== undefined) {
+            pi.sendMessage(
+              { customType: "jp-task-claimed", content, display: false },
+              { deliverAs: "nextTurn", triggerTurn: false },
+            );
+          }
+        } catch {
+          result.content.push({
+            type: "text",
+            text: "Claim succeeded, but owned task context could not be queued. Revalidate against the latest agreement before continuing.",
+          });
+        }
+        return result;
       },
     });
 

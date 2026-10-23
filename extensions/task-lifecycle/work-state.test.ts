@@ -43,18 +43,15 @@ function rawIssue(issue: BeadsIssue): Record<string, unknown> {
     title: issue.title,
     status: issue.status,
     labels: issue.labels,
+    ...(issue.description === undefined
+      ? {}
+      : { description: issue.description }),
     ...(issue.updatedAt === undefined ? {} : { updated_at: issue.updatedAt }),
     metadata: {
-      ...(issue.lifecycle === undefined
-        ? {}
-        : { piLifecycle: issue.lifecycle }),
+      ...(issue.lifecycle === undefined ? {} : { piLifecycle: issue.lifecycle }),
+      ...(issue.nextStep === undefined ? {} : { next_step: issue.nextStep }),
       ...(issue.projectReference?.kind === "valid"
-        ? {
-            piProject: {
-              version: 1,
-              projectId: issue.projectReference.projectId,
-            },
-          }
+        ? { piProject: { version: 1, projectId: issue.projectReference.projectId } }
         : {}),
     },
     ...(issue.blockingDependencies === undefined
@@ -74,6 +71,7 @@ function createHarness(
     catalog?: WorkCatalog | null;
     catalogError?: string;
     sessionName?: string;
+    sessionId?: string;
     branch?: any[];
     entries?: any[];
     issues?: BeadsIssue[];
@@ -191,6 +189,9 @@ function createHarness(
   };
   const context = {
     sessionManager: {
+      ...(options.sessionId === undefined
+        ? {}
+        : { getSessionId: () => options.sessionId! }),
       getBranch: () => branch,
       getEntries: () => options.entries ?? branch,
       getSessionName: () => options.sessionName,
@@ -344,7 +345,10 @@ test("post-compaction state uses explicit scope and remains queued for next turn
   await harness.handlers.get("session_compact")?.({}, harness.context);
 
   assert.equal(harness.sent.length, 1);
-  assert.deepEqual(harness.sent[0].options, { deliverAs: "nextTurn" });
+  assert.deepEqual(harness.sent[0].options, {
+    deliverAs: "nextTurn",
+    triggerTurn: false,
+  });
   assert.equal(harness.sent[0].message.display, false);
   assert.match(harness.sent[0].message.content, /Work state — alpha/);
   assert.match(harness.sent[0].message.content, /jp-a101/);
@@ -1381,4 +1385,80 @@ test("a project moved during catalog refresh leaves the area view and cursor on 
   assert.ok(
     !h.notifications.some((note) => note.message.includes("completed")),
   );
+});
+
+test("injects only the owned mission and does not persist foreign task content", async () => {
+  const owned: BeadsIssue = {
+    id: "jp-owned",
+    title: "Owned task",
+    status: "in_progress",
+    labels: ["workstream:core"],
+    description: "OWNED FULL MISSION",
+    nextStep: "OWNED NEXT ACTION",
+    lifecycle: lifecycle("active", "2026-09-16T10:00:00.000Z"),
+  };
+  const foreign = structuredClone(owned);
+  foreign.id = "jp-foreign";
+  foreign.description = "FOREIGN PRIVATE MISSION";
+  foreign.nextStep = "FOREIGN NEXT ACTION";
+  foreign.lifecycle!.execution!.sessionId = "another-session";
+  const h = createHarness({
+    issues: [foreign, owned],
+    sessionId: "session-1",
+    sessionName: "core",
+  });
+  const hidden = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.match(hidden.message.content, /OWNED FULL MISSION/);
+  assert.match(hidden.message.content, /OWNED NEXT ACTION/);
+  assert.doesNotMatch(
+    hidden.message.content,
+    /FOREIGN PRIVATE MISSION|FOREIGN NEXT ACTION/,
+  );
+  await h.handlers.get("session_compact")!({}, h.context);
+  assert.match(h.sent[0].message.content, /OWNED FULL MISSION/);
+  assert.equal(h.sent[0].options.triggerTurn, false);
+  await start(h);
+  assert.doesNotMatch(
+    JSON.stringify(h.appended),
+    /FOREIGN PRIVATE MISSION|FOREIGN NEXT ACTION/,
+  );
+});
+
+test("project filtering cannot hide ambiguous session ownership", async () => {
+  const make = (id: string, project: string): BeadsIssue => ({
+    id,
+    title: "Task",
+    status: "in_progress",
+    labels: [`workstream:${project}`],
+    description: `PRIVATE MISSION ${id}`,
+    lifecycle: lifecycle("active", "2026-09-16T10:00:00.000Z"),
+  });
+  const h = createHarness({
+    issues: [make("jp-first", "first"), make("jp-second", "second")],
+    sessionName: "first",
+    sessionId: "session-1",
+  });
+  const hidden = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.doesNotMatch(hidden.message.content, /PRIVATE MISSION/);
+  assert.match(hidden.message.content, /Multiple active tasks/);
+});
+
+test("startup snapshots retain only the bounded owned-context representation", async () => {
+  const h = createHarness({
+    sessionId: "session-1",
+    issues: [
+      {
+        id: "jp-large",
+        title: "Task",
+        status: "in_progress",
+        labels: [],
+        description: "DO NOT RETAIN PREFIX " + "x".repeat(10000),
+        lifecycle: lifecycle("active", "2026-09-16T10:00:00.000Z"),
+      },
+    ],
+  });
+  await start(h);
+  const serialized = JSON.stringify(h.appended);
+  assert.doesNotMatch(serialized, /DO NOT RETAIN PREFIX/);
+  assert.match(serialized, /omitted/);
 });

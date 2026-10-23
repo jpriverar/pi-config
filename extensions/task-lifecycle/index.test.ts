@@ -7,6 +7,7 @@ import type {
   LifecycleIssue,
   LockOwner,
 } from "../../lib/task-lifecycle/types.js";
+import type { TaskContextResult } from "./task-context.js";
 import {
   createTaskLifecycleExtension,
   type TaskLifecycleToolService,
@@ -85,6 +86,7 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
   const entryRenderers = new Map<string, Function>();
   const commands = new Map<string, any>();
   const calls: Array<{ name: string; args: unknown[] }> = [];
+  const sent: Array<{ message: any; options: any }> = [];
   const execCalls: Array<{
     executable: string;
     args: readonly string[];
@@ -230,7 +232,9 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
       commands.set(name, command);
     },
     appendEntry() {},
-    sendMessage() {},
+    sendMessage(message: any, options: any) {
+      sent.push({ message, options });
+    },
     registerEntryRenderer(type: string, renderer: Function) {
       entryRenderers.set(type, renderer);
     },
@@ -268,6 +272,8 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
   })(pi as any);
   return {
     service,
+    pi,
+    sent,
     calls,
     execCalls,
     guardState,
@@ -280,7 +286,7 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
       sessionManager: {
         getSessionId: () => "session-1",
         getBranch: () => [{ type: "message" }],
-        getEntries: () => [],
+        getEntries: (): unknown[] => [],
         getSessionName: () => undefined,
       },
       ui: { notify() {} },
@@ -307,8 +313,9 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
     ],
   );
   assert.deepEqual(
-    [...h.handlers.keys()],
+    [...h.handlers.keys()].sort(),
     [
+      "session_shutdown",
       "turn_start",
       "tool_execution_start",
       "tool_execution_end",
@@ -317,7 +324,7 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
       "tool_result",
       "session_start",
       "session_compact",
-    ],
+    ].sort(),
   );
   assert.equal(h.entryRenderers.has("jp-work-startup"), true);
   for (const tool of h.tools.values()) {
@@ -1668,4 +1675,140 @@ test("catalog task tool refuses ambiguous area placement before calling service"
     /project/i,
   );
   assert.equal(h.calls.filter((c) => c.name === "create").length, 0);
+});
+
+function claimedContext(taskId = "jp-1"): TaskContextResult {
+  return {
+    kind: "available",
+    value: {
+      taskId,
+      description: "Build and verify the agreed outcome",
+      nextStep: "Verify abc123 in staging",
+      warnings: [],
+    },
+  };
+}
+
+test("claim queues owned context independently of the caller retaining its result", async () => {
+  const h = harness({ readTaskContext: async () => claimedContext() });
+  await h.tools
+    .get("task_claim")!
+    .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  assert.equal(h.sent.length, 1);
+  assert.deepEqual(h.sent[0].options, {
+    deliverAs: "nextTurn",
+    triggerTurn: false,
+  });
+  assert.equal(h.sent[0].message.display, false);
+  assert.match(
+    h.sent[0].message.content,
+    /Build and verify the agreed outcome/,
+  );
+});
+
+test("context lookup failure does not turn a successful claim into a failed claim", async () => {
+  const h = harness({
+    readTaskContext: async () => {
+      throw new Error("private failure detail");
+    },
+  });
+  const result = await h.tools
+    .get("task_claim")!
+    .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  assert.match(result.content[0].text, /jp-1: active/);
+  assert.equal(result.isError, undefined);
+  assert.equal(h.sent.length, 1);
+  assert.match(h.sent[0].message.content, /unavailable/);
+  assert.doesNotMatch(JSON.stringify(h.sent), /private failure detail/);
+});
+
+test("context enqueue failure leaves a visible successful-claim diagnostic", async () => {
+  const h = harness({ readTaskContext: async () => claimedContext() });
+  h.pi.sendMessage = () => {
+    throw new Error("queue unavailable");
+  };
+  const result = await h.tools
+    .get("task_claim")!
+    .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  assert.match(result.content[0].text, /jp-1: active/);
+  assert.equal(result.isError, undefined);
+  assert.match(
+    JSON.stringify(result.content),
+    /context.*unavailable|context.*could not/i,
+  );
+});
+
+for (const interruption of [
+  "abort",
+  "session",
+  "project",
+  "away-and-back",
+  "shutdown",
+] as const) {
+  test(`claim context is not delivered after ${interruption} during lookup`, async () => {
+    let entered!: () => void;
+    let resolve!: (value: TaskContextResult) => void;
+    const started = new Promise<void>((done) => {
+      entered = done;
+    });
+    const lookup = new Promise<TaskContextResult>((done) => {
+      resolve = done;
+    });
+    const h = harness({
+      readTaskContext: () => {
+        entered();
+        return lookup;
+      },
+    });
+    const controller = new AbortController();
+    const pending = h.tools
+      .get("task_claim")!
+      .execute("claim", { taskId: "jp-1" }, controller.signal, null, h.context);
+    await started;
+    if (interruption === "abort") controller.abort();
+    else if (interruption === "shutdown") {
+      for (const handler of h.handlers.get("session_shutdown") ?? [])
+        await handler({}, h.context);
+    } else if (interruption === "project") {
+      h.context.sessionManager.getEntries = () => [
+        {
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 1, workstream: "different" },
+        },
+      ];
+    } else {
+      const changed = {
+        ...h.context,
+        sessionManager: {
+          ...h.context.sessionManager,
+          getSessionId: () => "different-session",
+        },
+      };
+      for (const handler of h.handlers.get("session_start") ?? [])
+        await handler({ reason: "resume" }, changed);
+      if (interruption === "away-and-back") {
+        for (const handler of h.handlers.get("session_start") ?? [])
+          await handler({ reason: "resume" }, h.context);
+      }
+    }
+    resolve(claimedContext());
+    await pending;
+    assert.equal(h.sent.length, 0);
+  });
+}
+
+test("post-claim context cannot substitute a different owned task", async () => {
+  const h = harness({
+    readTaskContext: async () => claimedContext("jp-different"),
+  });
+  await h.tools
+    .get("task_claim")!
+    .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  assert.equal(h.sent.length, 1);
+  assert.doesNotMatch(
+    h.sent[0].message.content,
+    /jp-different|Build and verify/,
+  );
+  assert.match(h.sent[0].message.content, /changed|unavailable/);
 });

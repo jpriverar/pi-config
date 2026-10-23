@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { normalizeTaskUpdate } from "./service.js";
+import { readNextStep } from "./next-step.js";
 
 function update(nextStep: unknown) {
   return normalizeTaskUpdate({
@@ -66,5 +67,24 @@ for (const description of ["", " ", "Goal\nFinish", 42]) {
         }),
       /description/,
     );
+  });
+}
+
+test("reads missing, cleared and valid metadata without changing it", () => {
+  assert.deepEqual(readNextStep({}), { value: null });
+  assert.deepEqual(readNextStep({ next_step: null }), { value: null });
+  const metadata = { next_step: "  Verify the outcome  " };
+  assert.deepEqual(readNextStep(metadata), { value: "Verify the outcome" });
+  assert.equal(metadata.next_step, "  Verify the outcome  ");
+  assert.deepEqual(readNextStep(Object.create({ next_step: "inherited" })), {
+    value: null,
+  });
+});
+
+for (const value of [42, {}, [], "", "\ncheck", "x".repeat(2001)]) {
+  test(`reports invalid stored next_step of type ${typeof value}`, () => {
+    const result = readNextStep({ next_step: value });
+    assert.equal(result.value, null);
+    assert.match(result.warning ?? "", /next_step/);
   });
 }

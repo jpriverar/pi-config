@@ -19,3 +19,19 @@ export function normalizeNextStep(value: unknown): string | null {
   if (normalized.length === 0) throw new Error("next_step must not be blank");
   return normalized;
 }
+
+export function readNextStep(metadata: Record<string, unknown>): {
+  value: string | null;
+  warning?: string;
+} {
+  if (
+    !Object.hasOwn(metadata, NEXT_STEP_KEY) ||
+    metadata[NEXT_STEP_KEY] == null
+  )
+    return { value: null };
+  try {
+    return { value: normalizeNextStep(metadata[NEXT_STEP_KEY]) };
+  } catch (error) {
+    return { value: null, warning: (error as Error).message };
+  }
+}
