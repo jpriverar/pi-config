@@ -30,6 +30,23 @@ import {
 const testsDirectory = dirname(fileURLToPath(import.meta.url));
 const scenariosDirectory = join(testsDirectory, "skill-scenarios");
 
+test("correctness review can be selected independently of structural review", async () => {
+  const options = runner.parseArguments([
+    "--mode",
+    "package",
+    "--package",
+    "/fixture/package",
+    "--output",
+    "/fixture/output",
+    "--scenario",
+    "correctness-review",
+  ]);
+  assert.deepEqual(runner.selectedScenarioIds(options), ["correctness-review"]);
+  const scenario = await loadScenario("correctness-review", scenariosDirectory);
+  assert.equal(scenario.name, "correctness-review");
+  assert.ok(scenario.prompt.length > 0);
+});
+
 async function eventuallyMissing(pid: number): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt++) {
     try {

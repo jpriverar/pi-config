@@ -53,8 +53,9 @@ authorization.
 
 Load the reference for the current boundary:
 
-- [Delivery](references/delivery.md): self-review, draft PRs, independent review,
-  CI/QA, fixes, ready-PR sharing and authorized merge.
+- [Delivery](references/delivery.md): bounded simplification, draft PRs,
+  correctness-first and explicit structural review, CI/QA, fixes, ready-PR sharing
+  and authorized merge.
 - [Verification](references/verification.md): candidate-bound proof,
   post-deployment behavior, gaps and exceptions.
 - [Handoff and communication](references/handoff-and-communication.md):

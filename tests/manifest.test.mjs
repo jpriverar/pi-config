@@ -25,6 +25,7 @@ const expectedSkills = [
   "./skills/grill-me",
   "./skills/thinking-partner",
   "./skills/handoff",
+  "./skills/correctness-review",
   "./skills/thermo-nuclear-code-quality-review",
   "./skills/standup",
   "./skills/explaining-technical-work",
@@ -32,7 +33,7 @@ const expectedSkills = [
   "./skills/writing-rfcs",
 ];
 
-const expectedPrompts = ["./prompts/review.md"];
+const expectedPrompts = ["./prompts/review.md", "./prompts/review-quality.md"];
 
 const expectedThemes = [
   "./themes/modus-vivendi-tinted.json",
