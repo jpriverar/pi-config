@@ -3,7 +3,6 @@ import {
   B,
   P,
   Q,
-  catalogFixture,
   catalogViewFixture,
 } from "../../lib/work-catalog/test-fixtures.js";
 import type { WorkCatalog, WorkScope } from "../../lib/work-catalog/model.js";
@@ -361,9 +360,10 @@ test("explicit scope drives counts while the generated name stays visible", asyn
 
   await start(harness);
 
-  assert.match(harness.renderHeader(), /pi-setup-580c8e67/);
-  assert.match(harness.renderHeader(), /1 in-progress/);
-  assert.match(harness.renderHeader(), /1 closed/);
+  assert.equal(
+    harness.renderHeader().trimEnd(),
+    "pi-setup-580c8e67 │ 1 in-progress • 1 closed",
+  );
   assert.doesNotMatch(harness.renderHeader(), /blocked|ready|waiting/);
 });
 
@@ -727,14 +727,32 @@ test("Herdr preserves an idle task label instead of reporting legacy lease expir
   await h.handlers.get("session_shutdown")?.({}, h.context);
 });
 
-for (const scope of [
-  { kind: "global" },
-  { kind: "area", areaId: A },
-  { kind: "project", projectId: P },
-] as WorkScope[]) {
-  test(`catalog ${scope.kind} status counts agree with the shared task view`, async () => {
+for (const { scope, name, expected } of [
+  {
+    scope: { kind: "global" },
+    name: "api-580c8e67",
+    expected: "api-580c8e67 • All areas │ 3 ready",
+  },
+  {
+    scope: { kind: "area", areaId: B },
+    name: "api-580c8e67",
+    expected: "api-580c8e67 • Tooling │ 1 ready",
+  },
+  {
+    scope: { kind: "project", projectId: P },
+    name: "api-580c8e67",
+    expected: "api-580c8e67 • Product │ 1 ready",
+  },
+  {
+    scope: { kind: "global" },
+    name: "",
+    expected: "All areas │ 3 ready",
+  },
+] satisfies { scope: WorkScope; name: string; expected: string }[]) {
+  test(`catalog ${scope.kind} header preserves name ${JSON.stringify(name)} and shows its area with scoped counts`, async () => {
     const h = createHarness({
       ...catalogViewFixture(),
+      sessionName: name,
       entries: [
         {
           type: "custom",
@@ -743,13 +761,89 @@ for (const scope of [
         },
       ],
     });
-    await h.handlers.get("session_start")!({}, h.context);
-    assert.match(
-      h.renderHeader(),
-      new RegExp(`${scope.kind === "global" ? 3 : 1} ready`),
+    await start(h);
+    assert.equal(h.renderHeader().trimEnd(), expected);
+    assert.equal(h.calls.length, 3, "the area needs no additional task query");
+  });
+}
+
+test("unclassified projects do not display an invented area", async () => {
+  const fixture = catalogViewFixture();
+  fixture.catalog.projects[P].areaId = null;
+  const h = createHarness({
+    ...fixture,
+    sessionName: "api-580c8e67",
+    entries: [projectEntry("api")],
+  });
+  await start(h);
+  assert.equal(
+    h.renderHeader().trimEnd(),
+    "api-580c8e67 • Unclassified │ 1 ready",
+  );
+});
+
+for (const failure of ["catalog", "scope"] as const) {
+  test(`${failure} failure removes the previously displayed area`, async () => {
+    const options = {
+      ...catalogViewFixture(),
+      catalogError: undefined as string | undefined,
+      sessionName: "api-580c8e67",
+      entries: [projectEntry("api")],
+    };
+    const h = createHarness(options);
+    await start(h);
+    assert.equal(
+      h.renderHeader().trimEnd(),
+      "api-580c8e67 • Product │ 1 ready",
+    );
+    if (failure === "catalog") options.catalogError = "Catalog unavailable";
+    else options.entries.push(projectEntry("missing-project"));
+    await h.handlers.get("session_info_changed")!({}, h.context);
+    assert.equal(
+      h.renderHeader().trimEnd(),
+      "api-580c8e67 │ tasks unavailable",
     );
   });
 }
+
+test("a project's changed area appears on the next refresh without renaming the session", async () => {
+  const fixture = catalogViewFixture();
+  const h = createHarness({
+    ...fixture,
+    sessionName: "custom-580c8e67",
+    entries: [projectEntry("api")],
+  });
+  await start(h);
+  assert.equal(
+    h.renderHeader().trimEnd(),
+    "custom-580c8e67 • Product │ 1 ready",
+  );
+  fixture.catalog.projects[P].areaId = B;
+  fixture.catalog.revision += 1;
+  await h.handlers.get("turn_end")!({}, h.context);
+  assert.equal(
+    h.renderHeader().trimEnd(),
+    "custom-580c8e67 • Tooling │ 1 ready",
+  );
+});
+
+test("area headers retain Unicode and fit narrow terminal widths", async () => {
+  const fixture = catalogViewFixture();
+  fixture.catalog.areas[A].name = "開発🧰";
+  const h = createHarness({
+    ...fixture,
+    sessionName: "session-580c8e67",
+    entries: [projectEntry("api")],
+  });
+  await start(h);
+  assert.equal(
+    h.renderHeader().trimEnd(),
+    "session-580c8e67 • 開発🧰 │ 1 ready",
+  );
+  for (const width of [0, 1, 12, 24, 60]) {
+    assert.ok(visibleWidth(h.renderHeader(width)) <= width);
+  }
+});
 test("scope changes during status refresh discard the old projection", async () => {
   const entries: Entry[] = [
     {
@@ -759,7 +853,7 @@ test("scope changes during status refresh discard the old projection", async () 
     },
   ];
   const h = createHarness({
-    catalog: catalogFixture(),
+    catalog: catalogViewFixture().catalog,
     entries,
     beforeExec: async (n) => {
       if (n === 1)
@@ -774,6 +868,8 @@ test("scope changes during status refresh discard the old projection", async () 
   });
   await h.handlers.get("session_start")!({}, h.context);
   assert.equal(h.renderHeader(), "");
+  await h.handlers.get("session_info_changed")!({}, h.context);
+  assert.equal(h.renderHeader().trimEnd(), "pi-setup • Tooling");
 });
 
 test("corrupt catalog reports unavailable rather than global counts", async () => {
@@ -806,8 +902,10 @@ test("catalog view changes keep the session-owned task visible with an outside-v
     ],
   });
   await h.handlers.get("session_start")!({}, h.context);
-  assert.match(h.renderHeader(), /zz-owned/);
-  assert.match(h.renderHeader(), /outside current view/);
+  assert.equal(
+    h.renderHeader().trimEnd(),
+    "pi-setup • Product │ zz-owned • Task zz-owned (outside current view)",
+  );
 });
 
 test("waiting events publish and clear an independent sidebar label", async () => {

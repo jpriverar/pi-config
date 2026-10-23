@@ -40,6 +40,17 @@ type TaskState =
   | { sessionTask: { id: string; title: string; outsideView?: boolean } }
   | "unavailable";
 
+function selectedAreaName(selection: SessionWorkSelection): string | undefined {
+  if (selection.kind !== "catalog") return undefined;
+  const { catalog, scope } = selection;
+  if (scope.kind === "global") return "All areas";
+  const areaId =
+    scope.kind === "area"
+      ? scope.areaId
+      : catalog.projects[scope.projectId].areaId;
+  return areaId === null ? "Unclassified" : catalog.areas[areaId].name;
+}
+
 export default function projectStatus(
   pi: ExtensionAPI,
   dependencies: {
@@ -129,10 +140,14 @@ export default function projectStatus(
     ctx: ExtensionContext,
     project: string | undefined,
     taskState: TaskState,
+    area: string | undefined,
   ): void {
     const theme = ctx.ui.theme;
     const leftParts: string[] = [];
-    if (project) leftParts.push(theme.fg("accent", project));
+    const identity: string[] = [];
+    if (project) identity.push(theme.fg("accent", project));
+    if (area) identity.push(theme.fg("muted", area));
+    if (identity.length) leftParts.push(identity.join(theme.fg("dim", " • ")));
 
     if (taskState === "unavailable") {
       leftParts.push(theme.fg("muted", "tasks unavailable"));
@@ -206,7 +221,12 @@ export default function projectStatus(
 
     currentSessionName = sessionName;
     currentTaskState = taskState;
-    renderStatus(ctx, currentSessionName, currentTaskState);
+    renderStatus(
+      ctx,
+      currentSessionName,
+      currentTaskState,
+      selectedAreaName(selection),
+    );
   }
 
   function refresh(ctx: ExtensionContext, generation: number): Promise<void> {
@@ -227,7 +247,12 @@ export default function projectStatus(
               label: "Task unavailable",
             });
             currentTaskState = "unavailable";
-            renderStatus(next.ctx, currentSessionName, currentTaskState);
+            renderStatus(
+              next.ctx,
+              currentSessionName,
+              currentTaskState,
+              undefined,
+            );
           }
         }
       })().finally(() => {
