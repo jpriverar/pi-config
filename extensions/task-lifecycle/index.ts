@@ -3,6 +3,7 @@ import { registerCompletionReview } from "./completion-review.js";
 import type { DaemonHealth } from "../../lib/task-reconciler/health.js";
 import {
   resolveSessionProject,
+  sessionScopeFingerprint,
   resolveSessionWorkScope,
   persistSessionWorkScope,
   generateSessionProjectName,
@@ -40,7 +41,6 @@ import { hostname as readHostname } from "node:os";
 import {
   createBeadsClient,
   resolveBeadsDir,
-  createBeadsClient,
   withBeadsEnvironment,
   type BeadsExec,
 } from "../../lib/beads.js";
@@ -351,9 +351,11 @@ export function createTaskLifecycleExtension(
         pi.exec(command, [...args], { timeout: 5000 }),
       ),
     );
+    const readCatalog = deps.readCatalog ?? (async () => null);
     const readTaskContext =
       deps.readTaskContext ??
-      ((session: TaskSession) => readOwnedTaskContext(contextClient, session));
+      (async (session: TaskSession) =>
+        readOwnedTaskContext(contextClient, session, await readCatalog()));
     let contextGeneration = 0;
     let activeSessionId: string | undefined;
     pi.on("session_start", (_event, context) => {
@@ -391,7 +393,7 @@ export function createTaskLifecycleExtension(
         ["title", "why", "needs_jp"],
       ),
       async execute(_id, params, _signal, _update, context) {
-        const catalog = await deps.readCatalog?.();
+        const catalog = await readCatalog();
         if (catalog?.state === "active") {
           const resolved = resolveSessionWorkScope(
             context.sessionManager,
@@ -537,16 +539,14 @@ export function createTaskLifecycleExtension(
         const owner = ownerFor(context);
         activeSessionId ??= owner.sessionId;
         const generation = contextGeneration;
-        const project = resolveSessionProject(context.sessionManager);
+        const scope = sessionScopeFingerprint(context.sessionManager);
         const current = () => {
-          const nextProject = resolveSessionProject(context.sessionManager);
           return (
             !(isRecord(signal) && signal.aborted === true) &&
             generation === contextGeneration &&
             activeSessionId === owner.sessionId &&
             context.sessionManager.getSessionId() === owner.sessionId &&
-            nextProject.source === project.source &&
-            nextProject.workstream === project.workstream
+            sessionScopeFingerprint(context.sessionManager) === scope
           );
         };
         const claimed = await deps.service.claim(
@@ -1154,7 +1154,7 @@ export function createTaskLifecycleExtension(
     }
 
     registerTaskWorkState(pi, {
-      readCatalog: deps.readCatalog,
+      readCatalog,
       health: deps.workStateHealth,
     });
     registerCompletionReview(pi, {

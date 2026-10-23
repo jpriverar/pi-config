@@ -1268,10 +1268,11 @@ test("managed workstream labels cannot change via generic label updates", async 
     OWNER,
   );
   await assert.rejects(
-    f.store.updateLabels(
+    f.store.updateTask(
       "jp-1",
       { addLabels: ["workstream:elsewhere"], removeLabels: [] },
       OWNER,
+      () => {},
     ),
     /project|workstream/i,
   );
@@ -1301,9 +1302,27 @@ test("lifecycle and WM mutations preserve project identity and captured targets"
     created.metadata.piWorkManagement,
   ) as WorkManagementState;
   f.catalog.projects[P].areaId = B;
-  const mutated = await f.store.mutate("jp-1", OWNER, () => claimedMutation());
+  const claimed = claimedMutation();
+  claimed.lifecycle.execution!.sessionId = OWNER.sessionId;
+  const mutated = await f.store.mutate("jp-1", OWNER, () => claimed);
   assert.deepEqual(mutated.metadata.piProject, { version: 1, projectId: P });
   assert.deepEqual(mutated.metadata.piWorkManagement, wm);
+  const updated = await f.store.updateTask(
+    "jp-1",
+    {
+      addLabels: [],
+      removeLabels: [],
+      nextStep: "Verify the current candidate",
+    },
+    OWNER,
+    (issue) => {
+      assert.equal(issue.lifecycle?.phase, "active");
+      assert.equal(issue.lifecycle?.execution?.sessionId, OWNER.sessionId);
+    },
+  );
+  assert.equal(updated.metadata.next_step, "Verify the current candidate");
+  assert.deepEqual(updated.metadata.piProject, { version: 1, projectId: P });
+  assert.deepEqual(updated.metadata.piWorkManagement, wm);
   const synced = await f.store.mutateWorkManagement("jp-1", OWNER, () => ({
     ...wm,
     lastSentStatus: "Open",

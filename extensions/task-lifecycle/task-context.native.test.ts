@@ -19,12 +19,19 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { createBeadsClient, type BeadsExec } from "../../lib/beads.js";
+import type { BeadsExec } from "../../lib/beads.js";
+import type { WorkScope } from "../../lib/work-catalog/model.js";
+import {
+  A,
+  B,
+  P,
+  Q,
+  catalogFixture,
+} from "../../lib/work-catalog/test-fixtures.js";
 import { createLifecycleStore } from "../../lib/task-lifecycle/beads-store.js";
 import { TaskLifecycleService } from "../../lib/task-lifecycle/service.js";
 import type { LifecycleMetadataV1 } from "../../lib/task-lifecycle/types.js";
 import { createTaskLifecycleExtension } from "./index.js";
-import { readOwnedTaskContext } from "./task-context.js";
 
 const previousFetch = globalThis.fetch;
 let networkAttempts = 0;
@@ -53,6 +60,7 @@ async function fixture(
     foreign?: boolean;
     race?: boolean;
     nextStep?: string;
+    scope?: WorkScope;
   } = {},
 ) {
   const cwd = await mkdtemp(join(tmpdir(), "pi-native-task-context-"));
@@ -60,6 +68,11 @@ async function fixture(
   const oldBeads = process.env.BEADS_DIR;
   process.env.BEADS_DIR = storePath;
   const manager = SessionManager.inMemory(cwd);
+  if (options.scope)
+    manager.appendCustomEntry("jp-project-scope", {
+      version: 2,
+      scope: options.scope,
+    });
   const lifecycle: LifecycleMetadataV1 = {
     version: 1,
     phase: options.claim ? "actionable" : "active",
@@ -89,8 +102,9 @@ async function fixture(
     title: "Fixture task",
     description: "Build, validate and report the owned fixture outcome",
     status: options.claim ? "open" : "in_progress",
-    labels: ["workstream:fixture"],
+    labels: options.scope ? [] : ["workstream:fixture"],
     metadata: {
+      ...(options.scope ? { piProject: { version: 1, projectId: P } } : {}),
       piLifecycle: lifecycle,
       next_step: "Original action",
       unrelated: { preserved: true },
@@ -134,7 +148,6 @@ async function fixture(
     uuid: () => "fixture-operation",
     executionTimeoutMs: 60_000,
   });
-  const client = createBeadsClient(exec, { env: { BEADS_DIR: storePath } });
   const requests: Message[][] = [];
   const errors: unknown[] = [];
   let session: AgentSession | undefined;
@@ -164,7 +177,7 @@ async function fixture(
           activityWriteIntervalMs: 300_000,
           sessionReconcileLimit: 10,
           sessionPrCheckLimit: 5,
-          readTaskContext: (session) => readOwnedTaskContext(client, session),
+          readCatalog: async () => (options.scope ? catalogFixture() : null),
           workStateHealth: async () => ({
             state: "unavailable",
             reason: "Fixture daemon is absent",
@@ -266,7 +279,22 @@ async function fixture(
     });
     await session.prompt("/mission-check on");
     await session.prompt("Perform the bounded fixture action.");
-    return { record: structuredClone(record), calls, requests, events, errors };
+    const contexts = manager
+      .getBranch()
+      .flatMap((entry) =>
+        entry.type === "custom_message" &&
+        ["jp-mission-context", "jp-task-claimed"].includes(entry.customType)
+          ? [{ customType: entry.customType, content: entry.content }]
+          : [],
+      );
+    return {
+      record: structuredClone(record),
+      calls,
+      requests,
+      events,
+      errors,
+      contexts,
+    };
   } finally {
     session?.dispose();
     if (oldBeads === undefined) delete process.env.BEADS_DIR;
@@ -275,12 +303,26 @@ async function fixture(
   }
 }
 
+function contextPayload(
+  result: Awaited<ReturnType<typeof fixture>>,
+  kind = "jp-mission-context",
+) {
+  const entry = result.contexts.find((item) => item.customType === kind);
+  assert.ok(entry, `Missing native ${kind} entry`);
+  const match =
+    /<untrusted-task-context>\n([\s\S]+)\n<\/untrusted-task-context>/.exec(
+      String(entry.content),
+    );
+  assert.ok(match);
+  return JSON.parse(match[1]);
+}
+
 test("native codemode updates owned metadata and the stop reader sees it", async () => {
   const r = await fixture();
   assert.deepEqual(r.errors, []);
   assert.equal(r.record.metadata.next_step, "Validate the current candidate");
   assert.equal(r.requests.length, 3);
-  assert.match(JSON.stringify(r.requests[2]), /Validate the current candidate/);
+  assert.equal(contextPayload(r).next_step, "Validate the current candidate");
   assert.deepEqual(r.record.metadata.unrelated, { preserved: true });
 });
 
@@ -329,3 +371,61 @@ for (const size of [2000, 2001]) {
     );
   });
 }
+
+for (const [name, scope, outside] of [
+  ["global", { kind: "global" }, false],
+  ["area", { kind: "area", areaId: A }, false],
+  ["project", { kind: "project", projectId: P }, false],
+  ["other-area", { kind: "area", areaId: B }, true],
+  ["other-project", { kind: "project", projectId: Q }, true],
+] as const) {
+  test(`native catalog ${name} review reads the updated owned mission through the default factory`, async () => {
+    const r = await fixture({ scope });
+    assert.deepEqual(r.errors, []);
+    assert.equal(r.requests.length, 3);
+    const payload = contextPayload(r);
+    assert.equal(payload.task_id, "jp-fixture");
+    assert.equal(
+      payload.description,
+      "Build, validate and report the owned fixture outcome",
+    );
+    assert.equal(payload.next_step, "Validate the current candidate");
+    const reviewed = JSON.stringify(payload);
+    assert.deepEqual(r.record.metadata.piProject, { version: 1, projectId: P });
+    assert.deepEqual(r.record.metadata.unrelated, { preserved: true });
+    if (outside) assert.match(reviewed, /outside the selected view/);
+    else assert.doesNotMatch(reviewed, /outside the selected view/);
+  });
+}
+
+test("native catalog claim outside the view delivers context after the same batch", async () => {
+  const r = await fixture({
+    claim: true,
+    scope: { kind: "project", projectId: Q },
+  });
+  assert.deepEqual(r.errors, []);
+  assert.match(
+    JSON.stringify(r.requests[1]),
+    /Build, validate and report the owned fixture outcome/,
+  );
+  assert.match(
+    JSON.stringify(contextPayload(r, "jp-task-claimed")),
+    /outside the selected view/,
+  );
+  assert.ok(
+    r.events.indexOf("marker-executed") < r.events.indexOf("provider-2"),
+  );
+});
+
+test("native catalog view never supplies a foreign session's mission", async () => {
+  const r = await fixture({
+    foreign: true,
+    scope: { kind: "project", projectId: P },
+  });
+  assert.equal(r.record.metadata.next_step, "Original action");
+  assert.equal(r.calls.filter((call) => call[0] === "update").length, 0);
+  assert.doesNotMatch(
+    JSON.stringify(r.requests),
+    /Build, validate and report the owned fixture outcome/,
+  );
+});

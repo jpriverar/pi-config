@@ -32,9 +32,15 @@ task IDs are not stored as artifacts or duplicated in lifecycle metadata.
 The presentation layer reads the same normalized Beads data. Fresh empty
 sessions get a durable visible task table. Every model turn receives a bounded,
 scoped hidden summary marked as untrusted data. A separate bounded block adds
-the full description and `metadata.next_step` of the uniquely owned active task
-when its project matches. Overview snapshots exclude these fields for other
-tasks. Compaction refreshes context without starting a turn. Store failures are
+the full description and `metadata.next_step` of the uniquely owned active task.
+With an active catalog, a global/area/project selection changes the view, not
+ownership: an owned task outside that view retains its mission context with an
+outside-view warning. Invalid task membership is diagnosed, never guessed.
+Without an active catalog, legacy project matching still applies; version-2
+scope without its required catalog is unavailable rather than global.
+Ambiguous ownership across projects supplies no mission. Overview snapshots
+exclude these fields for other tasks. Compaction refreshes context without
+starting a turn. Store failures are
 redacted and never interrupt compaction. Missing records or a null next step
 never establish that a mission is complete.
 

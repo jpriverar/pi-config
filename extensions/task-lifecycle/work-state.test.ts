@@ -48,10 +48,17 @@ function rawIssue(issue: BeadsIssue): Record<string, unknown> {
       : { description: issue.description }),
     ...(issue.updatedAt === undefined ? {} : { updated_at: issue.updatedAt }),
     metadata: {
-      ...(issue.lifecycle === undefined ? {} : { piLifecycle: issue.lifecycle }),
+      ...(issue.lifecycle === undefined
+        ? {}
+        : { piLifecycle: issue.lifecycle }),
       ...(issue.nextStep === undefined ? {} : { next_step: issue.nextStep }),
       ...(issue.projectReference?.kind === "valid"
-        ? { piProject: { version: 1, projectId: issue.projectReference.projectId } }
+        ? {
+            piProject: {
+              version: 1,
+              projectId: issue.projectReference.projectId,
+            },
+          }
         : {}),
     },
     ...(issue.blockingDependencies === undefined
@@ -1458,4 +1465,52 @@ test("startup snapshots retain only the bounded owned-context representation", a
   const serialized = JSON.stringify(h.appended);
   assert.doesNotMatch(serialized, /DO NOT RETAIN PREFIX/);
   assert.match(serialized, /omitted/);
+});
+
+test("catalog snapshots and compaction retain owned mission outside the view without foreign text", async () => {
+  const catalog = catalogFixture();
+  catalog.projects[Q].areaId = B;
+  const owned: BeadsIssue = {
+    id: "jp-owned",
+    title: "Owned",
+    status: "in_progress",
+    labels: [],
+    projectReference: { kind: "valid", projectId: P },
+    description: "CATALOG OWNED MISSION",
+    nextStep: "OWNED CURRENT ACTION",
+    lifecycle: lifecycle("active", "2026-09-16T10:00:00.000Z"),
+  };
+  const foreign = structuredClone(owned);
+  foreign.id = "jp-foreign";
+  foreign.projectReference = { kind: "valid", projectId: Q };
+  foreign.description = "FOREIGN CATALOG MISSION";
+  foreign.nextStep = "FOREIGN CATALOG NEXT STEP";
+  foreign.lifecycle!.execution!.sessionId = "someone-else";
+  const h = createHarness({
+    catalog,
+    sessionId: "session-1",
+    issues: [foreign, owned],
+    entries: [
+      {
+        type: "custom",
+        customType: SESSION_PROJECT_ENTRY_TYPE,
+        data: { version: 2, scope: { kind: "area", areaId: B } },
+      },
+    ],
+  });
+  const hidden = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.match(hidden.message.content, /CATALOG OWNED MISSION/);
+  assert.match(hidden.message.content, /outside.*view/i);
+  assert.doesNotMatch(
+    hidden.message.content,
+    /FOREIGN CATALOG (MISSION|NEXT STEP)/,
+  );
+  await h.handlers.get("session_compact")!({}, h.context);
+  assert.match(h.sent[0].message.content, /CATALOG OWNED MISSION/);
+  assert.deepEqual(h.sent[0].options, { triggerTurn: false });
+  await start(h);
+  assert.doesNotMatch(
+    JSON.stringify(h.appended),
+    /FOREIGN CATALOG (MISSION|NEXT STEP)/,
+  );
 });

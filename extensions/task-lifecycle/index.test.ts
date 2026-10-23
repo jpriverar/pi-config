@@ -1825,3 +1825,36 @@ test("factory exposes operator-only review and injectable work-state health", as
     await handler({ messageType: "user" }, h.context);
   assert.equal(healthReads, 1);
 });
+
+test("claim context is suppressed when a catalog view changes during lookup", async () => {
+  let entered!: () => void;
+  let resolve!: (value: TaskContextResult) => void;
+  const started = new Promise<void>((done) => {
+    entered = done;
+  });
+  const pendingContext = new Promise<TaskContextResult>((done) => {
+    resolve = done;
+  });
+  const h = harness({
+    readTaskContext: () => {
+      entered();
+      return pendingContext;
+    },
+  });
+  let scope: unknown = { kind: "global" };
+  h.context.sessionManager.getEntries = () => [
+    {
+      type: "custom",
+      customType: "jp-project-scope",
+      data: { version: 2, scope },
+    },
+  ];
+  const pending = h.tools
+    .get("task_claim")!
+    .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  await started;
+  scope = { kind: "area", areaId: "11111111-1111-4111-8111-111111111111" };
+  resolve(claimedContext());
+  await pending;
+  assert.equal(h.sent.length, 0);
+});

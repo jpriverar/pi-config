@@ -244,3 +244,145 @@ test("failed lookup returns an unavailable diagnostic, not success or an invente
   assert.match(text, /latest user agreement/);
   assert.doesNotMatch(text, /private detail/);
 });
+
+function catalogSession(scope: unknown): TaskSession {
+  return {
+    ...session(),
+    getEntries: () => [
+      {
+        type: "custom",
+        customType: SESSION_PROJECT_ENTRY_TYPE,
+        data: { version: 2, scope },
+      },
+    ],
+  };
+}
+
+for (const view of [
+  "global",
+  "area",
+  "project",
+  "other-area",
+  "other-project",
+] as const) {
+  test(`catalog ${view} view retains only the uniquely owned mission`, async () => {
+    const { A, B, P, Q, catalogFixture } = await import(
+      "../../lib/work-catalog/test-fixtures.js"
+    );
+    const catalog = catalogFixture();
+    const scope =
+      view === "global"
+        ? { kind: "global" }
+        : view.includes("area")
+          ? { kind: "area", areaId: view === "area" ? A : B }
+          : { kind: "project", projectId: view === "project" ? P : Q };
+    const owned = {
+      ...issue(),
+      labels: [],
+      projectReference: { kind: "valid" as const, projectId: P },
+    };
+    const foreign = {
+      ...issue("jp-foreign", "another-session"),
+      labels: [],
+      projectReference: { kind: "valid" as const, projectId: Q },
+      description: "FOREIGN MISSION",
+    };
+    const result = selectOwnedTaskContext(
+      [foreign, owned],
+      catalogSession(scope),
+      catalog,
+    );
+    assert.equal(result.kind, "available");
+    if (result.kind !== "available") return;
+    assert.equal(result.value.taskId, owned.id);
+    assert.equal(result.value.description, owned.description);
+    assert.doesNotMatch(renderTaskContext(result)!, /FOREIGN MISSION/);
+    if (view.startsWith("other"))
+      assert.match(result.value.warnings.join(" "), /outside.*view/i);
+    else assert.deepEqual(result.value.warnings, []);
+  });
+}
+
+test("catalog view filtering cannot hide multiple owned active tasks", async () => {
+  const { P, Q, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  const rows = [P, Q].map((projectId, i) => ({
+    ...issue(`jp-${i}`),
+    labels: [],
+    projectReference: { kind: "valid" as const, projectId },
+  }));
+  assert.equal(
+    selectOwnedTaskContext(
+      rows,
+      catalogSession({ kind: "project", projectId: P }),
+      catalogFixture(),
+    ).kind,
+    "ambiguous",
+  );
+});
+
+test("catalog context resolves registered aliases but never guesses display suffixes", async () => {
+  const { P, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  const catalog = catalogFixture();
+  catalog.projects[P].aliases.push("legacy-api");
+  const owned = {
+    ...issue(),
+    labels: [],
+    projectReference: { kind: "valid" as const, projectId: P },
+  };
+  assert.equal(
+    selectOwnedTaskContext([owned], session("legacy-api"), catalog).kind,
+    "available",
+  );
+  assert.equal(
+    selectOwnedTaskContext([owned], session("API-12345678"), catalog).kind,
+    "unavailable",
+  );
+});
+
+test("version-two context requires a valid active catalog and scope", async () => {
+  const { catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  const catalog = catalogFixture();
+  for (const invalid of [
+    { kind: "project", projectId: "unknown" },
+    { kind: "global", unexpected: true },
+    null,
+  ]) {
+    assert.equal(
+      selectOwnedTaskContext([issue()], catalogSession(invalid), catalog).kind,
+      "unavailable",
+    );
+  }
+  const global = catalogSession({ kind: "global" });
+  assert.equal(selectOwnedTaskContext([issue()], global).kind, "unavailable");
+  assert.equal(
+    selectOwnedTaskContext([issue()], global, { ...catalog, state: "prepared" })
+      .kind,
+    "unavailable",
+  );
+});
+
+test("invalid task membership is diagnosed without replacing its verified owner", async () => {
+  const { P, Q, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  const owned = {
+    ...issue(),
+    labels: ["workstream:maintenance"],
+    projectReference: { kind: "valid" as const, projectId: P },
+  };
+  const result = selectOwnedTaskContext(
+    [owned],
+    catalogSession({ kind: "project", projectId: Q }),
+    catalogFixture(),
+  );
+  assert.equal(result.kind, "available");
+  if (result.kind !== "available") return;
+  assert.equal(result.value.taskId, owned.id);
+  assert.match(result.value.warnings.join(" "), /membership.*invalid/i);
+});

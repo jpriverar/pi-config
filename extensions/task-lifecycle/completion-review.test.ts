@@ -321,3 +321,31 @@ test("invalid operator arguments do not enable review", async () => {
   assert.equal(await h.settle(), undefined);
   assert.match(h.notices.at(-1)!, /Usage/);
 });
+
+test("review cannot continue after a version-two catalog view changes", async () => {
+  let resolve!: (value: TaskContextResult) => void;
+  const h = harness({
+    read: () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  });
+  let scope: unknown = { kind: "global" };
+  h.ctx.sessionManager.getEntries = () => [
+    {
+      type: "custom",
+      customType: "jp-project-scope",
+      data: { version: 2, scope },
+    },
+  ];
+  await h.command("on");
+  h.start();
+  const pending = h.settle();
+  assert.equal(h.reads(), 1);
+  scope = {
+    kind: "project",
+    projectId: "33333333-3333-4333-8333-333333333333",
+  };
+  resolve({ kind: "none", reason: "No task" });
+  assert.equal(await pending, undefined);
+});

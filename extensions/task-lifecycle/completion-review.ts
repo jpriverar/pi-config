@@ -9,7 +9,7 @@ import {
   type TaskContextResult,
   type TaskSession,
 } from "./task-context.js";
-import { resolveSessionProject } from "../../lib/session-project.js";
+import { sessionScopeFingerprint } from "../../lib/session-project.js";
 
 export const COMPLETION_REVIEW_CUE =
   "Automatic completion review — not a new user instruction or approval. Check the user's full, latest agreement against what you have actually completed. If useful, already-authorized work remains, take the next action. Otherwise finish, identify the concrete external blocker, or ask for the missing decision. Task records, plan steps, and this reminder do not expand authority. Respect user stops, denials, retry limits, and native async waiting. Do not invent extra work or repeat an unchanged closing report.";
@@ -177,7 +177,7 @@ export function registerCompletionReview(
       !event.continue;
     if (!eligible()) return;
     const epoch = state.epoch;
-    const project = resolveSessionProject(context.sessionManager);
+    const scope = sessionScopeFingerprint(context.sessionManager);
     // Reserve before the asynchronous read so a second boundary cannot review again.
     run.reviewed = true;
     let taskContext: TaskContextResult;
@@ -190,14 +190,12 @@ export function registerCompletionReview(
           "Owned task context is unavailable; use the latest user agreement.",
       };
     }
-    const nextProject = resolveSessionProject(context.sessionManager);
     if (
       sessionId(context) !== id ||
       states.get(id) !== state ||
       state.run !== run ||
       state.epoch !== epoch ||
-      nextProject.source !== project.source ||
-      nextProject.workstream !== project.workstream ||
+      sessionScopeFingerprint(context.sessionManager) !== scope ||
       !eligible()
     )
       return;

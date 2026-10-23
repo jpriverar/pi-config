@@ -426,24 +426,36 @@ export function registerTaskWorkState(
   const readCatalog =
     deps?.readCatalog ?? (() => createCatalogStore(client).read());
 
-  async function queryState(selection: SessionWorkSelection, context: TaskWorkStateContext): Promise<State> {
+  async function queryState(
+    selection: SessionWorkSelection,
+    context: TaskWorkStateContext,
+  ): Promise<State> {
     const project = workSelectionLabel(selection);
     const scopeKind =
       selection.kind === "catalog" ? selection.scope.kind : undefined;
     const classified = await listClassifiedIssues(client);
     if (!classified.ok) throw new Error(formatBeadsError(classified.error));
 
-    const taskContext = context.sessionManager.getSessionId === undefined
-      ? undefined
-      : renderTaskContext(selectOwnedTaskContext(classified.value, context.sessionManager));
-    const active = presentWorkIssues(selection, classified.value).map((issue) => {
-      // Overview snapshots must not retain another session's mission text.
-      const overview = { ...issue };
-      delete overview.description;
-      delete overview.nextStep;
-      delete overview.taskContextWarnings;
-      return overview;
-    });
+    const taskContext =
+      context.sessionManager.getSessionId === undefined
+        ? undefined
+        : renderTaskContext(
+            selectOwnedTaskContext(
+              classified.value,
+              context.sessionManager,
+              selection.kind === "catalog" ? selection.catalog : null,
+            ),
+          );
+    const active = presentWorkIssues(selection, classified.value).map(
+      (issue) => {
+        // Overview snapshots must not retain another session's mission text.
+        const overview = { ...issue };
+        delete overview.description;
+        delete overview.nextStep;
+        delete overview.taskContextWarnings;
+        return overview;
+      },
+    );
     const knownProjects =
       selection.kind === "catalog"
         ? buildWorkView(selection.catalog, classified.value, { kind: "global" })
@@ -488,7 +500,7 @@ export function registerTaskWorkState(
     return {
       active,
       scopeKind,
-        taskContext,
+      taskContext,
       listedTaskIds: classified.value.map((issue) => issue.id),
       inProgress: active.filter((issue) => issue.readiness === "in_progress"),
       blocked: active.filter((issue) => issue.readiness === "blocked"),

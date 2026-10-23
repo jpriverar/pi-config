@@ -1,8 +1,15 @@
 import type { BeadsClient, BeadsIssue } from "../../lib/beads.js";
 import {
   resolveSessionProject,
+  resolveSessionSelection,
   type SessionProjectReader,
+  type SessionWorkSelection,
 } from "../../lib/session-project.js";
+import type { WorkCatalog } from "../../lib/work-catalog/model.js";
+import {
+  matchesWorkScope,
+  resolveTaskMembership,
+} from "../../lib/work-catalog/membership.js";
 
 export type TaskSession = SessionProjectReader & { getSessionId?(): string };
 export interface OwnedTaskContext {
@@ -22,6 +29,7 @@ const CONTEXT_HEADER =
 export function selectOwnedTaskContext(
   issues: readonly BeadsIssue[],
   session: TaskSession,
+  catalog: WorkCatalog | null = null,
 ): TaskContextResult {
   const sessionId = session.getSessionId?.();
   if (typeof sessionId !== "string" || sessionId.length === 0) {
@@ -30,11 +38,18 @@ export function selectOwnedTaskContext(
       reason: "Session identity is unavailable; no task was selected.",
     };
   }
-  const project = resolveSessionProject(session);
-  if (project.source === "malformed-explicit") {
+  let selection: SessionWorkSelection;
+  try {
+    selection = resolveSessionSelection(session, catalog);
+    if (
+      selection.kind === "legacy" &&
+      resolveSessionProject(session).source === "malformed-explicit"
+    )
+      throw new Error("Malformed legacy project scope");
+  } catch {
     return {
       kind: "unavailable",
-      reason: "Explicit project scope is malformed; no task was selected.",
+      reason: "Work scope is unavailable or malformed; no task was selected.",
     };
   }
   const owned = issues.filter(
@@ -57,8 +72,9 @@ export function selectOwnedTaskContext(
     .find((label) => label.startsWith("workstream:"))
     ?.slice("workstream:".length);
   if (
-    project.workstream !== undefined &&
-    workstream?.toLowerCase() !== project.workstream.toLowerCase()
+    selection.kind === "legacy" &&
+    selection.project !== undefined &&
+    workstream?.toLowerCase() !== selection.project.toLowerCase()
   ) {
     return {
       kind: "unavailable",
@@ -67,6 +83,17 @@ export function selectOwnedTaskContext(
   }
   const description = issue.description?.trim() ? issue.description : null;
   const warnings = [...(issue.taskContextWarnings ?? [])];
+  if (selection.kind === "catalog") {
+    const membership = resolveTaskMembership(selection.catalog, issue);
+    if (membership.kind === "invalid")
+      warnings.push(
+        "Task project membership is invalid; inspect its metadata.",
+      );
+    if (!matchesWorkScope(selection.catalog, membership, selection.scope))
+      warnings.push(
+        "Owned task is outside the selected view; ownership is unchanged.",
+      );
+  }
   if (description === null)
     warnings.push(
       "Task description is missing; do not infer the mission from next_step.",
@@ -85,6 +112,7 @@ export function selectOwnedTaskContext(
 export async function readOwnedTaskContext(
   client: BeadsClient,
   session: TaskSession,
+  catalog: WorkCatalog | null = null,
 ): Promise<TaskContextResult> {
   try {
     const result = await client.listIssues(["in_progress"]);
@@ -94,7 +122,7 @@ export async function readOwnedTaskContext(
         reason: `${result.error.operation}: ${result.error.message}`,
       };
     }
-    return selectOwnedTaskContext(result.value, session);
+    return selectOwnedTaskContext(result.value, session, catalog);
   } catch {
     return {
       kind: "unavailable",
