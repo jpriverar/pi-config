@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { test, type TestContext } from "node:test";
 import type {
   ExtensionAPI,
@@ -25,12 +26,19 @@ async function harness(t: TestContext, version = "1.2.0") {
     options: unknown;
   }> = [];
   const notices: string[] = [];
+  const entries: Array<{ customType: string; data: unknown }> = [];
+  const events = new EventEmitter();
+  const labels: unknown[] = [];
+  events.on("pi:wakeup-waiting", (label) => labels.push(label));
   let footer: string | undefined;
+  let idle = true;
+  let queued = false;
   const ctx = {
+    mode: "tui",
     hasUI: true,
     cwd: "/fixture",
-    isIdle: () => true,
-    hasPendingMessages: () => false,
+    isIdle: () => idle,
+    hasPendingMessages: () => queued,
     ui: {
       notify: (text: string) => notices.push(text),
       setStatus: (_key: string, value: string | undefined) => {
@@ -39,6 +47,12 @@ async function harness(t: TestContext, version = "1.2.0") {
     },
   } as unknown as ExtensionContext;
   const pi = {
+    events,
+    registerEntryRenderer() {},
+    registerMessageRenderer() {},
+    appendEntry(customType: string, data: unknown) {
+      entries.push({ customType, data });
+    },
     registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
     registerCommand: (name: string) => commands.push(name),
     on(
@@ -59,6 +73,8 @@ async function harness(t: TestContext, version = "1.2.0") {
   } as unknown as ExtensionAPI;
   registerWakeupTools(pi, version);
   async function emit(name: string, fields = {}) {
+    if (name === "before_agent_start" || name === "agent_start") idle = false;
+    if (name === "agent_settled") idle = true;
     for (const handler of handlers.get(name) ?? [])
       await handler({ type: name, ...fields }, ctx);
   }
@@ -85,6 +101,13 @@ async function harness(t: TestContext, version = "1.2.0") {
     commands,
     messages,
     notices,
+    entries,
+    events,
+    labels,
+    ctx,
+    queue: (value: boolean) => {
+      queued = value;
+    },
     emit,
     call,
     footer: () => footer,
@@ -175,4 +198,95 @@ test("an already-aborted tool call cannot schedule work", async (t) => {
     /abort/i,
   );
   assert.deepEqual(await h.call("list_wakeups"), { status: "ready" });
+});
+
+test("waiting notices appear once after settlement, not while work is active", async (t) => {
+  const h = await harness(t);
+  await h.emit("before_agent_start");
+  await h.arm();
+  assert.equal(h.entries.length, 0);
+  assert.ok(h.labels.every((value) => value === null));
+  await h.emit("agent_settled", { aborted: false });
+  assert.equal(h.entries.length, 1);
+  assert.equal(h.entries[0].customType, "wakeup-wait");
+  assert.match(JSON.stringify(h.entries[0].data), /Pending fixture/);
+  assert.match(String(h.labels.at(-1)), /Waiting.*until/);
+  assert.equal(h.messages.length, 0, "UI must not send model messages");
+  await h.emit("agent_settled", { aborted: false });
+  await h.call("list_wakeups");
+  assert.equal(h.entries.length, 1);
+  await h.emit("before_agent_start");
+  assert.equal(h.labels.at(-1), null);
+  await h.emit("agent_settled", { aborted: false });
+  assert.equal(h.entries.length, 1, "same wakeup is not announced twice");
+  h.tick(60_000);
+  assert.equal(h.labels.at(-1), null);
+  assert.equal(h.messages.length, 1);
+});
+
+test("human-input blockers suppress the waiting label without cancelling the timer", async (t) => {
+  const h = await harness(t);
+  await h.arm();
+  assert.match(String(h.labels.at(-1)), /Waiting/);
+  h.events.emit("herdr:blocked", { active: true, label: "Approval" });
+  h.events.emit("herdr:blocked", { active: true, label: "Second approval" });
+  assert.equal(h.labels.at(-1), null);
+  h.events.emit("herdr:blocked", { active: false });
+  assert.equal(h.labels.at(-1), null);
+  h.events.emit("herdr:blocked", { active: false });
+  assert.match(String(h.labels.at(-1)), /Waiting/);
+  assert.equal(h.entries.length, 1);
+  assert.equal((await h.call("list_wakeups")).status, "scheduled");
+});
+
+for (const mode of ["rpc", "json", "print"] as const) {
+  test(`${mode} wakeups do not create UI notices or a waiting label`, async (t) => {
+    const h = await harness(t);
+    Object.assign(h.ctx, { mode });
+    await h.arm();
+    assert.equal(h.entries.length, 0);
+    assert.ok(h.labels.every((value) => value === null));
+    h.tick(60_000);
+    assert.equal(h.messages.length, 1);
+  });
+}
+
+for (const event of [
+  "session_shutdown",
+  "session_tree",
+  "session_start",
+] as const) {
+  test(`${event} clears the waiting label`, async (t) => {
+    const h = await harness(t);
+    await h.arm();
+    assert.match(String(h.labels.at(-1)), /Waiting/);
+    await h.emit(event);
+    assert.equal(h.labels.at(-1), null);
+    h.tick(60_000);
+    assert.equal(h.messages.length, 0);
+  });
+}
+
+test("cancellation and expiry close the notice and clear the live label", async (t) => {
+  const h = await harness(t);
+  const first = await h.arm();
+  await h.call("cancel_wakeup", { id: first.pending!.id });
+  assert.equal(h.labels.at(-1), null);
+  assert.match(JSON.stringify(h.entries.at(-1)), /cancelled/i);
+  await h.emit("input", { source: "interactive" });
+  await h.arm();
+  h.queue(true);
+  h.tick(3_600_000);
+  assert.equal(h.labels.at(-1), null);
+  assert.match(JSON.stringify(h.entries.at(-1)), /expired/i);
+  assert.equal(h.messages.length, 0);
+});
+
+test("abort never announces a wait while cancelling it", async (t) => {
+  const h = await harness(t);
+  await h.emit("before_agent_start");
+  await h.arm();
+  await h.emit("agent_settled", { aborted: true });
+  assert.equal(h.entries.length, 0);
+  assert.equal(h.labels.at(-1), null);
 });

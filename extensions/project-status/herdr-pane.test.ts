@@ -47,6 +47,7 @@ test("initializes current runtime without falsely claiming Unassigned", async ()
   const h = harness();
   await setImmediate();
   assert.deepEqual(h.sent[0].values, {
+    pi_waiting: null,
     pi_model: "model-one",
     pi_task: "Task unavailable",
     pi_task_state: "unavailable",
@@ -104,6 +105,7 @@ test("suppresses unchanged data and serializes bursts to the latest value", asyn
   await setImmediate();
   assert.equal(h.sent.length, 2);
   assert.deepEqual(h.sent[1].values, {
+    pi_waiting: null,
     pi_model: "latest",
     pi_task: "Current task",
     pi_task_state: "assigned",
@@ -154,6 +156,7 @@ test("shutdown clears owned metadata and suppresses later updates", async () => 
   h.runtime("stale", 99);
   await setImmediate();
   assert.deepEqual(h.sent.at(-1)!.values, {
+    pi_waiting: null,
     pi_model: null,
     pi_task: null,
     pi_task_state: null,
@@ -185,6 +188,7 @@ test("stop cancels an in-flight send before clearing only owned keys", async () 
     "pi_task_expires_at",
     "pi_task_id",
     "pi_task_state",
+    "pi_waiting",
   ]);
   assert.ok(h.sent[1].seq > h.sent[0].seq);
   assert.ok(Object.values(h.sent[1].values).every((value) => value === null));

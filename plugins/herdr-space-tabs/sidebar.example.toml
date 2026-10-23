@@ -3,6 +3,7 @@ pi = [
   ["state_icon", "tab", "workspace"],
   ["$pi_task"],
   ["state_text", "agent", "$pi_model"],
+  [{ token = "$pi_waiting", fg = "#d9a35f", dim = false }],
 ]
 
 [ui.sidebar.spaces]

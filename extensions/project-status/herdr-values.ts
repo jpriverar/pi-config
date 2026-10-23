@@ -9,7 +9,8 @@ export type PaneTokens = Record<
   | "pi_task_id"
   | "pi_task_expires_at"
   | "pi_context_warning"
-  | "pi_context_critical",
+  | "pi_context_critical"
+  | "pi_waiting",
   string | null
 >;
 

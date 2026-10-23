@@ -15,7 +15,7 @@ const skip =
     ? "Requires a Pi 1.2+ SDK; set PI_WAKEUP_SDK to its module URL"
     : false;
 
-async function start(t: TestContext, hold = false) {
+async function start(t: TestContext, hold = false, mode = "json") {
   const dir = await mkdtemp(join(tmpdir(), "wakeup-sdk-"));
   let session: any;
   t.after(async () => {
@@ -162,6 +162,7 @@ async function start(t: TestContext, hold = false) {
   }));
   const errors: unknown[] = [];
   await session.bindExtensions({
+    mode,
     onError: (error: unknown) => errors.push(error),
   });
   t.mock.timers.enable({
@@ -249,6 +250,35 @@ test(
       ).length,
       0,
     );
+    assert.deepEqual(h.errors, []);
+  },
+);
+
+test(
+  "TUI waiting notices are durable display entries, not model messages or extra turns",
+  { skip },
+  async (t) => {
+    const h = await start(t, false, "tui");
+    await h.session.prompt("Wait for the fixture operation, then check it.");
+    assertArmed(h.session);
+    const entries = h.session.sessionManager
+      .getBranch()
+      .filter(
+        (entry: any) =>
+          entry.type === "custom" && entry.customType === "wakeup-wait",
+      );
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].data.phase, "waiting");
+    assert.equal(h.requests(), 2);
+    assert.ok(
+      h.session.messages.every(
+        (message: any) => message.customType !== "wakeup-wait",
+      ),
+    );
+    await h.session.reload();
+    t.mock.timers.tick(60_000);
+    await setImmediate();
+    assert.equal(h.requests(), 2);
     assert.deepEqual(h.errors, []);
   },
 );

@@ -14,6 +14,7 @@ const environment = {
   HERDR_BIN_PATH: "/test/herdr",
 };
 const values: PaneTokens = {
+  pi_waiting: null,
   pi_model: "Model $(touch nope)",
   pi_task: "Review auth; stay safe",
   pi_task_state: "assigned",
@@ -86,6 +87,8 @@ test("publishes only owned keys with argv, sequence and finite execution limits"
     "pi_context_warning",
     "--token",
     "pi_context_critical=Context 90%",
+    "--clear-token",
+    "pi_waiting",
   ]);
   assert.equal(calls[0].options.timeout, 1500);
   assert.equal(calls[0].options.maxBuffer, 64 * 1024);
@@ -241,4 +244,27 @@ test("obsolete deadline changes alone do not refresh task counts", async () => {
     true,
   );
   assert.equal(calls.length, 4);
+});
+
+test("waiting labels are sanitized, cleared, and do not refresh task counts", async () => {
+  const calls: string[][] = [];
+  const send = createHerdrMetadataSender(environment, async (_file, args) => {
+    calls.push([...args]);
+    return replyFor(args);
+  })!;
+  const signal = new AbortController().signal;
+  await send(values, 1, signal);
+  calls.length = 0;
+  await send(
+    { ...values, pi_waiting: "Waiting\n\x1b[31m until 15:05 UTC" },
+    2,
+    signal,
+  );
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].includes("pi_waiting=Waiting until 15:05 UTC"));
+  await send({ ...values, pi_waiting: null }, 3, signal);
+  assert.equal(calls.length, 2);
+  const index = calls[1].indexOf("pi_waiting");
+  assert.ok(index > 0);
+  assert.equal(calls[1][index - 1], "--clear-token");
 });
