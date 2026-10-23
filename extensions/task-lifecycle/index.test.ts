@@ -102,8 +102,8 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
       calls.push({ name: "create", args });
       return normalizedIssue("actionable");
     },
-    async updateLabels(...args: any[]) {
-      calls.push({ name: "updateLabels", args });
+    async updateTask(...args: any[]) {
+      calls.push({ name: "updateTask", args });
       return normalizedIssue("actionable");
     },
     async log(...args: any[]) {
@@ -346,6 +346,50 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
   );
 });
 
+test("task_update exposes and forwards task content without inventing omitted fields", async () => {
+  const h = harness();
+  const tool = h.tools.get("task_update")!;
+  await tool.execute(
+    "content",
+    {
+      taskId: "jp-1",
+      description: "Build, validate and report",
+      next_step: null,
+    },
+    null,
+    null,
+    h.context,
+  );
+  assert.deepEqual(h.calls[0], {
+    name: "updateTask",
+    args: [
+      "jp-1",
+      {
+        addLabels: [],
+        removeLabels: [],
+        description: "Build, validate and report",
+        nextStep: null,
+      },
+      { pid: 4242, sessionId: "session-1", host: "host", started: NOW },
+    ],
+  });
+  assert.ok(Object.hasOwn(tool.parameters.properties, "description"));
+  assert.ok(Object.hasOwn(tool.parameters.properties, "next_step"));
+  assert.deepEqual(tool.parameters.required, ["taskId"]);
+
+  await tool.execute(
+    "labels",
+    { taskId: "jp-1", add_labels: ["needs:jp"] },
+    null,
+    null,
+    h.context,
+  );
+  assert.deepEqual(h.calls[1].args[1], {
+    addLabels: ["needs:jp"],
+    removeLabels: [],
+  });
+});
+
 test("wires passive Git observation through argv-only Pi execution", async () => {
   const h = harness();
   h.guardState.activeTasks = [activeIssue("jp-1")];
@@ -452,7 +496,7 @@ test("routes safe task mutations with strict field mappings", async () => {
       ],
     },
     {
-      name: "updateLabels",
+      name: "updateTask",
       args: ["jp-1", { addLabels: ["one"], removeLabels: ["two"] }, owner],
     },
     {

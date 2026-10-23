@@ -17,7 +17,7 @@ import type {
   ReleaseResult,
 } from "../../extensions/worktree-pool/pool.js";
 import {
-  normalizeLabelUpdate,
+  normalizeTaskUpdate,
   TaskLifecycleService,
   type TaskLifecyclePoolPort,
 } from "./service.js";
@@ -29,6 +29,7 @@ import type {
   LifecycleStatus,
   LifecycleStore,
   LockOwner,
+  UpdateTaskInput,
 } from "./types.js";
 
 const NOW_MS = Date.parse("2026-09-17T10:00:00.000Z");
@@ -160,12 +161,19 @@ class FakeStore implements LifecycleStore {
     return this.saved;
   }
 
-  async updateLabels(
+  async updateTask(
     _id: string,
-    input: { addLabels: string[]; removeLabels: string[] },
+    input: UpdateTaskInput,
     _owner: LockOwner,
+    validate: (issue: LifecycleIssue) => void,
   ): Promise<LifecycleIssue> {
+    if (input.description !== undefined || input.nextStep !== undefined)
+      validate(this.saved);
     this.labelUpdates.push(input);
+    if (input.description !== undefined)
+      this.saved.description = input.description;
+    if (input.nextStep !== undefined)
+      this.saved.metadata.next_step = input.nextStep;
     return this.saved;
   }
 
@@ -225,7 +233,15 @@ class FakeStore implements LifecycleStore {
       ...this.saved,
       status: mutation.status,
       lifecycle: mutation.lifecycle,
-      metadata: { ...this.saved.metadata, piLifecycle: mutation.lifecycle },
+      metadata: {
+        ...this.saved.metadata,
+        piLifecycle: mutation.lifecycle,
+        ...(Object.hasOwn(this.saved.metadata, "next_step") &&
+        (this.saved.lifecycle?.phase === "done" ||
+          mutation.lifecycle.phase === "done")
+          ? { next_step: null }
+          : {}),
+      },
     };
     await this.afterMutate?.(this.mutations);
     return this.saved;
@@ -293,7 +309,7 @@ test("creates managed actionable tasks", async () => {
 test("updates labels without adopting legacy lifecycle", async () => {
   const store = new FakeStore(issue(null));
 
-  const saved = await service(store).updateLabels(
+  const saved = await service(store).updateTask(
     "jp-1",
     { addLabels: ["priority:high"], removeLabels: ["priority:low"] },
     session("s1"),
@@ -305,14 +321,32 @@ test("updates labels without adopting legacy lifecycle", async () => {
   ]);
 });
 
+test("content updates require the active task owner", async () => {
+  const store = new FakeStore(activeIssue("jp-1", "s1"));
+
+  await assert.rejects(
+    service(store).updateTask(
+      "jp-1",
+      {
+        addLabels: ["priority:high"],
+        removeLabels: [],
+        nextStep: "Check the deployed candidate",
+      },
+      session("other"),
+    ),
+    /owned by active session s1/,
+  );
+  assert.deepEqual(store.labelUpdates, []);
+});
+
 test("rejects empty and overlapping label updates", () => {
   assert.throws(
-    () => normalizeLabelUpdate({ addLabels: [], removeLabels: [] }),
-    /at least one label change/,
+    () => normalizeTaskUpdate({ addLabels: [], removeLabels: [] }),
+    /at least one change/,
   );
   assert.throws(
     () =>
-      normalizeLabelUpdate({
+      normalizeTaskUpdate({
         addLabels: ["priority"],
         removeLabels: ["priority"],
       }),

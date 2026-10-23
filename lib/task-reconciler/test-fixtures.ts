@@ -173,7 +173,15 @@ export class MemoryLifecycleStore implements LifecycleStore {
           ...current,
           status: mutation.status,
           lifecycle: mutation.lifecycle,
-          metadata: { ...current.metadata, piLifecycle: mutation.lifecycle },
+          metadata: {
+            ...current.metadata,
+            piLifecycle: mutation.lifecycle,
+            ...(Object.hasOwn(current.metadata, "next_step") &&
+            (current.lifecycle?.phase === "done" ||
+              mutation.lifecycle.phase === "done")
+              ? { next_step: null }
+              : {}),
+          },
         };
         this.issues.set(id, structuredClone(saved));
         this.writes += 1;
@@ -188,7 +196,7 @@ export class MemoryLifecycleStore implements LifecycleStore {
   async create(): Promise<never> {
     throw new Error("unexpected task creation");
   }
-  async updateLabels(): Promise<never> {
+  async updateTask(): Promise<never> {
     throw new Error("unexpected label mutation");
   }
   async appendComment(): Promise<never> {

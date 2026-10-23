@@ -29,6 +29,14 @@ export function classifyTaskToolRequirement(
   if (toolName === "task_claim" && taskId !== null) {
     return { kind: "claim-task", taskId };
   }
+  if (
+    toolName === "task_update" &&
+    taskId !== null &&
+    isRecord(input) &&
+    (input.description !== undefined || input.next_step !== undefined)
+  ) {
+    return { kind: "same-task", taskId };
+  }
   if (sameTaskTools.has(toolName) && taskId !== null) {
     return { kind: "same-task", taskId };
   }

@@ -17,6 +17,26 @@ test("classifies task-scoped tool requirements", () => {
     ["task_log", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
     ["task_defer", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
     ["task_update", { taskId: "jp-a" }, { kind: "none" }],
+    [
+      "task_update",
+      { taskId: "jp-a", next_step: "Check the staging result" },
+      { kind: "same-task", taskId: "jp-a" },
+    ],
+    [
+      "task_update",
+      { taskId: "jp-a", next_step: null },
+      { kind: "same-task", taskId: "jp-a" },
+    ],
+    [
+      "task_update",
+      { taskId: "jp-a", description: "Keep validation in scope" },
+      { kind: "same-task", taskId: "jp-a" },
+    ],
+    [
+      "task_update",
+      { taskId: "jp-a", add_labels: ["needs:jp"] },
+      { kind: "none" },
+    ],
     ["task_create", { title: "work" }, { kind: "none" }],
     ["task_close", { taskId: "jp-a" }, { kind: "same-task", taskId: "jp-a" }],
     [

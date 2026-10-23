@@ -20,6 +20,7 @@ import {
   type FileOperationLockDependencies,
 } from "../file-operation-lock.js";
 import { decodeLifecycle } from "./model.js";
+import { NEXT_STEP_KEY, normalizeNextStep } from "./next-step.js";
 import {
   decodeWorkManagement,
   newWorkManagementState,
@@ -37,7 +38,7 @@ import type {
   LockOwner,
   Mutation,
   NativeDependency,
-  UpdateTaskLabelsInput,
+  UpdateTaskInput,
 } from "./types.js";
 
 export interface LifecycleStoreOptions {
@@ -298,12 +299,19 @@ export function createLifecycleStore(
     );
   }
 
-  async function updateLabels(
+  async function updateTask(
     id: string,
-    input: UpdateTaskLabelsInput,
+    input: UpdateTaskInput,
     owner: LockOwner,
+    validate: (issue: LifecycleIssue) => void,
   ): Promise<LifecycleIssue> {
     assertIdentifier(id, "issue id");
+    if (input.description !== undefined)
+      assertNonEmpty(input.description, "task description");
+    const nextStep =
+      input.nextStep === undefined
+        ? undefined
+        : normalizeNextStep(input.nextStep);
     return withFileOperationLock(
       join(store, "pi-task-lifecycle"),
       owner,
@@ -329,6 +337,30 @@ export function createLifecycleStore(
             );
         }
         const args = ["update", id];
+        let current: DecodedIssue | undefined;
+        if (input.description !== undefined || nextStep !== undefined) {
+          current = await readOne(id, `read issue ${id} before update`);
+          validate(current.issue);
+          if (
+            input.addLabels.length === 0 &&
+            input.removeLabels.length === 0 &&
+            (input.description === undefined ||
+              input.description === current.issue.description) &&
+            (nextStep === undefined ||
+              nextStep === (current.rawMetadata[NEXT_STEP_KEY] ?? null))
+          )
+            return current.issue;
+          if (input.description !== undefined)
+            args.push("-d", input.description);
+          if (nextStep !== undefined)
+            args.push(
+              "--metadata",
+              JSON.stringify({
+                ...current.rawMetadata,
+                [NEXT_STEP_KEY]: nextStep,
+              }),
+            );
+        }
         for (const label of input.addLabels) {
           assertNonEmpty(label, "label to add");
           args.push("--add-label", label);
@@ -337,8 +369,17 @@ export function createLifecycleStore(
           assertNonEmpty(label, "label to remove");
           args.push("--remove-label", label);
         }
-        await execute(`update labels ${id}`, [...args, "--json"]);
-        return (await readOne(id, `verify labels ${id}`)).issue;
+        await execute(`update task ${id}`, [...args, "--json"]);
+        const verified = (await readOne(id, `verify update ${id}`)).issue;
+        if (current !== undefined) {
+          verifyTaskContentUpdate(
+            verified,
+            current.issue,
+            { ...input, nextStep },
+            store,
+          );
+        }
+        return verified;
       },
       lockDependencies,
     );
@@ -398,6 +439,11 @@ export function createLifecycleStore(
           current.rawMetadata,
           mutation.lifecycle,
         );
+        const clearNextStep =
+          Object.hasOwn(current.rawMetadata, NEXT_STEP_KEY) &&
+          (mutation.lifecycle.phase === "done" ||
+            current.issue.lifecycle?.phase === "done");
+        if (clearNextStep) mergedMetadata[NEXT_STEP_KEY] = null;
         if (
           mutation.status === current.issue.status &&
           isDeepStrictEqual(mergedMetadata, current.rawMetadata)
@@ -415,6 +461,13 @@ export function createLifecycleStore(
         ]);
         const verified = await readOne(id, `verify mutation ${id}`);
         verifyMutation(verified.issue, mutation, id, store);
+        if (clearNextStep && verified.issue.metadata[NEXT_STEP_KEY] != null) {
+          throw lifecycleStoreError(
+            `verify mutation ${id}`,
+            store,
+            "next_step was not cleared; write may have applied",
+          );
+        }
         return verified.issue;
       },
       lockDependencies,
@@ -551,7 +604,7 @@ export function createLifecycleStore(
     list,
     readyIds,
     create,
-    updateLabels,
+    updateTask,
     appendComment,
     mutate,
     addBlocker,
@@ -612,6 +665,9 @@ function decodeIssue(
     const issue: LifecycleIssue = {
       id: record.id,
       title: record.title,
+      ...(typeof record.description === "string"
+        ? { description: record.description }
+        : {}),
       status: record.status,
       metadata: rawMetadata,
       lifecycle,
@@ -709,6 +765,40 @@ function mergeLifecycleMetadata(
   }
   merged.piLifecycle = lifecycle;
   return merged;
+}
+
+function verifyTaskContentUpdate(
+  actual: LifecycleIssue,
+  previous: LifecycleIssue,
+  expected: UpdateTaskInput,
+  store: string,
+): void {
+  const fail = (field: string): never => {
+    throw lifecycleStoreError(
+      `verify update ${previous.id}`,
+      store,
+      `${field} did not match the requested update; write may have applied`,
+    );
+  };
+  if (
+    expected.description !== undefined &&
+    actual.description !== expected.description
+  )
+    fail("description");
+  if (
+    expected.nextStep !== undefined &&
+    (actual.metadata[NEXT_STEP_KEY] ?? null) !== expected.nextStep
+  )
+    fail(NEXT_STEP_KEY);
+  if (actual.status !== previous.status) fail("status");
+  const actualMetadata = { ...actual.metadata };
+  const priorMetadata = { ...previous.metadata };
+  if (expected.nextStep !== undefined) {
+    delete actualMetadata[NEXT_STEP_KEY];
+    delete priorMetadata[NEXT_STEP_KEY];
+  }
+  if (!isDeepStrictEqual(actualMetadata, priorMetadata))
+    fail("unrelated metadata");
 }
 
 function verifyMutation(

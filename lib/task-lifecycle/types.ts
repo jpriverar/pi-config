@@ -160,9 +160,11 @@ export interface CreateTaskInput {
   needsJp: boolean;
 }
 
-export interface UpdateTaskLabelsInput {
+export interface UpdateTaskInput {
   addLabels: string[];
   removeLabels: string[];
+  description?: string;
+  nextStep?: string | null;
 }
 
 export interface LifecycleMetadataV1 {
@@ -183,6 +185,7 @@ export interface LifecycleMetadataV1 {
 export interface LifecycleIssue {
   id: string;
   title: string;
+  description?: string;
   status: LifecycleStatus;
   metadata: Record<string, unknown>;
   lifecycle: LifecycleMetadataV1 | null;
@@ -199,10 +202,11 @@ export interface LifecycleStore {
     lifecycle: LifecycleMetadataV1,
     owner: LockOwner,
   ): Promise<LifecycleIssue>;
-  updateLabels(
+  updateTask(
     id: string,
-    input: UpdateTaskLabelsInput,
+    input: UpdateTaskInput,
     owner: LockOwner,
+    validate: (issue: LifecycleIssue) => void,
   ): Promise<LifecycleIssue>;
   appendComment(
     id: string,
