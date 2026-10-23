@@ -4,6 +4,7 @@ import { test, type TestContext } from "node:test";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { registerWakeupTools } from "../extensions/wakeups/index.js";
@@ -85,12 +86,17 @@ async function harness(t: TestContext, version = "1.2.0") {
   ): Promise<WakeupState> {
     const tool = tools.get(name);
     assert.ok(tool, `Missing tool ${name}`);
+    const toolContext: ExtensionToolContext = {
+      ...ctx,
+      tools: [],
+      executeTool: async () => assert.fail("Unexpected nested tool execution"),
+    };
     const result = await tool.execute(
       "fixture-call",
       params,
       signal,
       undefined,
-      ctx,
+      toolContext,
     );
     return result.details as WakeupState;
   }

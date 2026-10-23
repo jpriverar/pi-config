@@ -79,6 +79,55 @@ test("resolves the Beads store from BEADS_DIR before the home fallback", () => {
   );
 });
 
+test("reads the full description and current next step without a journal parser", async () => {
+  const fake = fakeExec(
+    success([
+      issue({
+        description: "Build the feature\nFinish by validating its behavior",
+        metadata: { next_step: "  Check staging abc123  " },
+      }),
+    ]),
+  );
+  const client = createBeadsClient(fake.exec, { env: { BEADS_DIR: store } });
+  const result = await client.listIssues();
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(
+    result.value[0].description,
+    "Build the feature\nFinish by validating its behavior",
+  );
+  assert.equal(result.value[0].nextStep, "Check staging abc123");
+  assert.equal(fake.calls.length, 1);
+});
+
+test("bad task context fields warn without breaking the issue list", async () => {
+  const fake = fakeExec(
+    success([
+      issue({
+        description: { instruction: "not text" },
+        metadata: { next_step: ["not", "a", "step"] },
+      }),
+      issue({ id: "jp-good" }),
+    ]),
+  );
+  const client = createBeadsClient(fake.exec, { env: { BEADS_DIR: store } });
+  const result = await client.listIssues();
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.length, 2);
+  assert.equal(result.value[0].description, undefined);
+  assert.equal(result.value[0].nextStep, null);
+  assert.match(
+    result.value[0].taskContextWarnings?.join(" ") ?? "",
+    /description/,
+  );
+  assert.match(
+    result.value[0].taskContextWarnings?.join(" ") ?? "",
+    /next_step/,
+  );
+  assert.equal(result.value[1].taskContextWarnings, undefined);
+});
+
 test("lists active issues by default and decodes normalized fields", async () => {
   const fake = fakeExec(
     success([issue({ labels: undefined, updated_at: "2026-08-16T12:00:00Z" })]),

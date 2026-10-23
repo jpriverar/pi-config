@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { decodeLifecycle } from "./task-lifecycle/model.js";
+import { NEXT_STEP_KEY, readNextStep } from "./task-lifecycle/next-step.js";
 import type {
   LifecycleCheck,
   LifecycleMetadataV1,
@@ -46,6 +47,9 @@ export type Readiness = "in_progress" | "blocked" | "ready" | "waiting";
 export interface BeadsIssue {
   id: string;
   title: string;
+  description?: string;
+  nextStep?: string | null;
+  taskContextWarnings?: string[];
   status: IssueStatus;
   labels: string[];
   updatedAt?: string;
@@ -243,6 +247,12 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
       .map((label) => normalizeBeadsLabel(label))
       .filter((label) => label.length > 0),
   };
+  const contextWarnings: string[] = [];
+  if (typeof record.description === "string") {
+    decoded.description = record.description;
+  } else if (record.description != null) {
+    contextWarnings.push("Task description is not text and was omitted.");
+  }
   if (record.updated_at !== undefined) {
     const updatedAt = normalizeMetadata(record.updated_at, UPDATED_AT_LIMIT);
     if (updatedAt) decoded.updatedAt = updatedAt;
@@ -267,6 +277,10 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
     } catch {
       // The existing WM summary retains the invalid-state warning without exposing raw data.
     }
+    const nextStep = readNextStep(metadata);
+    if (Object.hasOwn(metadata, NEXT_STEP_KEY))
+      decoded.nextStep = nextStep.value;
+    if (nextStep.warning) contextWarnings.push(nextStep.warning);
     const rawLifecycle = metadata.piLifecycle;
     if (rawLifecycle !== undefined) {
       const lifecycle = decodeLifecycle(rawLifecycle);
@@ -282,6 +296,7 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
     );
     if (summary) decoded.workManagement = summary;
   }
+  if (contextWarnings.length > 0) decoded.taskContextWarnings = contextWarnings;
   if (isDependencyEdgeSummaryList(record.dependencies)) {
     decoded.blockingDependencyIds = record.dependencies
       .filter((dependency) => dependency.type === "blocks")

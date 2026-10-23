@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { normalizeNextStep } from "./next-step.js";
 
 import type { OwnerIdentity } from "../../extensions/worktree-pool/operation-lock.js";
 import {
@@ -56,7 +57,7 @@ import type {
   LockOwner,
   Mutation,
   PreparedWorktreeOperation,
-  UpdateTaskLabelsInput,
+  UpdateTaskInput,
   WorktreeResource,
 } from "./types.js";
 
@@ -117,13 +118,24 @@ export interface ReconcileLimits {
 
 export type CloseDispositionInput = Omit<Disposition, "at">;
 
-export function normalizeLabelUpdate(
-  input: UpdateTaskLabelsInput,
-): UpdateTaskLabelsInput {
+export function normalizeTaskUpdate(input: UpdateTaskInput): UpdateTaskInput {
   const addLabels = normalizeLabels(input.addLabels);
   const removeLabels = normalizeLabels(input.removeLabels);
-  if (addLabels.length === 0 && removeLabels.length === 0) {
-    throw new Error("task update requires at least one label change");
+  if (
+    input.description !== undefined &&
+    (typeof input.description !== "string" ||
+      input.description.trim().length === 0 ||
+      /[\u0000-\u001f\u007f]/.test(input.description))
+  ) {
+    throw new Error("task description is invalid");
+  }
+  if (
+    addLabels.length === 0 &&
+    removeLabels.length === 0 &&
+    input.description === undefined &&
+    input.nextStep === undefined
+  ) {
+    throw new Error("task update requires at least one change");
   }
   const removed = new Set(removeLabels);
   const overlap = addLabels.find((label) => removed.has(label));
@@ -132,7 +144,16 @@ export function normalizeLabelUpdate(
       `label ${JSON.stringify(overlap)} cannot be both add and remove`,
     );
   }
-  return { addLabels, removeLabels };
+  return {
+    addLabels,
+    removeLabels,
+    ...(input.description === undefined
+      ? {}
+      : { description: input.description }),
+    ...(input.nextStep === undefined
+      ? {}
+      : { nextStep: normalizeNextStep(input.nextStep) }),
+  };
 }
 
 export class TaskLifecycleService {
@@ -149,15 +170,19 @@ export class TaskLifecycleService {
     );
   }
 
-  async updateLabels(
+  async updateTask(
     taskId: string,
-    input: UpdateTaskLabelsInput,
+    input: UpdateTaskInput,
     owner: LockOwner,
   ): Promise<LifecycleIssue> {
-    return this.deps.store.updateLabels(
+    return this.deps.store.updateTask(
       taskId,
-      normalizeLabelUpdate(input),
+      normalizeTaskUpdate(input),
       owner,
+      (issue) => {
+        const lifecycle = requireManaged(issue);
+        requireCurrentOwner(taskId, lifecycle, owner);
+      },
     );
   }
 

@@ -7,6 +7,7 @@ import type {
   LifecycleIssue,
   LockOwner,
 } from "../../lib/task-lifecycle/types.js";
+import type { TaskContextResult } from "./task-context.js";
 import {
   createTaskLifecycleExtension,
   type TaskLifecycleToolService,
@@ -85,6 +86,7 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
   const entryRenderers = new Map<string, Function>();
   const commands = new Map<string, any>();
   const calls: Array<{ name: string; args: unknown[] }> = [];
+  const sent: Array<{ message: any; options: any }> = [];
   const execCalls: Array<{
     executable: string;
     args: readonly string[];
@@ -102,8 +104,8 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
       calls.push({ name: "create", args });
       return normalizedIssue("actionable");
     },
-    async updateLabels(...args: any[]) {
-      calls.push({ name: "updateLabels", args });
+    async updateTask(...args: any[]) {
+      calls.push({ name: "updateTask", args });
       return normalizedIssue("actionable");
     },
     async log(...args: any[]) {
@@ -230,7 +232,9 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
       commands.set(name, command);
     },
     appendEntry() {},
-    sendMessage() {},
+    sendMessage(message: any, options: any) {
+      sent.push({ message, options });
+    },
     registerEntryRenderer(type: string, renderer: Function) {
       entryRenderers.set(type, renderer);
     },
@@ -268,6 +272,8 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
   })(pi as any);
   return {
     service,
+    pi,
+    sent,
     calls,
     execCalls,
     guardState,
@@ -280,7 +286,7 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
       sessionManager: {
         getSessionId: () => "session-1",
         getBranch: () => [{ type: "message" }],
-        getEntries: () => [],
+        getEntries: (): unknown[] => [],
         getSessionName: () => undefined,
       },
       ui: { notify() {} },
@@ -307,8 +313,10 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
     ],
   );
   assert.deepEqual(
-    [...h.handlers.keys()],
+    [...h.handlers.keys()].sort(),
     [
+      "session_shutdown",
+      "agent_before_settle",
       "turn_start",
       "tool_execution_start",
       "tool_execution_end",
@@ -317,7 +325,7 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
       "tool_result",
       "session_start",
       "session_compact",
-    ],
+    ].sort(),
   );
   assert.equal(h.entryRenderers.has("jp-work-startup"), true);
   for (const tool of h.tools.values()) {
@@ -344,6 +352,50 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
     h.tools.get("task_close")?.parameters.properties.reason.minLength,
     1,
   );
+});
+
+test("task_update exposes and forwards task content without inventing omitted fields", async () => {
+  const h = harness();
+  const tool = h.tools.get("task_update")!;
+  await tool.execute(
+    "content",
+    {
+      taskId: "jp-1",
+      description: "Build, validate and report",
+      next_step: null,
+    },
+    null,
+    null,
+    h.context,
+  );
+  assert.deepEqual(h.calls[0], {
+    name: "updateTask",
+    args: [
+      "jp-1",
+      {
+        addLabels: [],
+        removeLabels: [],
+        description: "Build, validate and report",
+        nextStep: null,
+      },
+      { pid: 4242, sessionId: "session-1", host: "host", started: NOW },
+    ],
+  });
+  assert.ok(Object.hasOwn(tool.parameters.properties, "description"));
+  assert.ok(Object.hasOwn(tool.parameters.properties, "next_step"));
+  assert.deepEqual(tool.parameters.required, ["taskId"]);
+
+  await tool.execute(
+    "labels",
+    { taskId: "jp-1", add_labels: ["needs:jp"] },
+    null,
+    null,
+    h.context,
+  );
+  assert.deepEqual(h.calls[1].args[1], {
+    addLabels: ["needs:jp"],
+    removeLabels: [],
+  });
 });
 
 test("wires passive Git observation through argv-only Pi execution", async () => {
@@ -452,7 +504,7 @@ test("routes safe task mutations with strict field mappings", async () => {
       ],
     },
     {
-      name: "updateLabels",
+      name: "updateTask",
       args: ["jp-1", { addLabels: ["one"], removeLabels: ["two"] }, owner],
     },
     {
@@ -1624,4 +1676,185 @@ test("catalog task tool refuses ambiguous area placement before calling service"
     /project/i,
   );
   assert.equal(h.calls.filter((c) => c.name === "create").length, 0);
+});
+
+function claimedContext(taskId = "jp-1"): TaskContextResult {
+  return {
+    kind: "available",
+    value: {
+      taskId,
+      description: "Build and verify the agreed outcome",
+      nextStep: "Verify abc123 in staging",
+      warnings: [],
+    },
+  };
+}
+
+test("claim queues owned context independently of the caller retaining its result", async () => {
+  const h = harness({ readTaskContext: async () => claimedContext() });
+  await h.tools
+    .get("task_claim")!
+    .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  assert.equal(h.sent.length, 1);
+  assert.deepEqual(h.sent[0].options, { triggerTurn: false });
+  assert.equal(h.sent[0].message.display, false);
+  assert.match(
+    h.sent[0].message.content,
+    /Build and verify the agreed outcome/,
+  );
+});
+
+test("context lookup failure does not turn a successful claim into a failed claim", async () => {
+  const h = harness({
+    readTaskContext: async () => {
+      throw new Error("private failure detail");
+    },
+  });
+  const result = await h.tools
+    .get("task_claim")!
+    .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  assert.match(result.content[0].text, /jp-1: active/);
+  assert.equal(result.isError, undefined);
+  assert.equal(h.sent.length, 1);
+  assert.match(h.sent[0].message.content, /unavailable/);
+  assert.doesNotMatch(JSON.stringify(h.sent), /private failure detail/);
+});
+
+test("context enqueue failure leaves a visible successful-claim diagnostic", async () => {
+  const h = harness({ readTaskContext: async () => claimedContext() });
+  h.pi.sendMessage = () => {
+    throw new Error("queue unavailable");
+  };
+  const result = await h.tools
+    .get("task_claim")!
+    .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  assert.match(result.content[0].text, /jp-1: active/);
+  assert.equal(result.isError, undefined);
+  assert.match(
+    JSON.stringify(result.content),
+    /context.*unavailable|context.*could not/i,
+  );
+});
+
+for (const interruption of [
+  "abort",
+  "session",
+  "project",
+  "away-and-back",
+  "shutdown",
+] as const) {
+  test(`claim context is not delivered after ${interruption} during lookup`, async () => {
+    let entered!: () => void;
+    let resolve!: (value: TaskContextResult) => void;
+    const started = new Promise<void>((done) => {
+      entered = done;
+    });
+    const lookup = new Promise<TaskContextResult>((done) => {
+      resolve = done;
+    });
+    const h = harness({
+      readTaskContext: () => {
+        entered();
+        return lookup;
+      },
+    });
+    const controller = new AbortController();
+    const pending = h.tools
+      .get("task_claim")!
+      .execute("claim", { taskId: "jp-1" }, controller.signal, null, h.context);
+    await started;
+    if (interruption === "abort") controller.abort();
+    else if (interruption === "shutdown") {
+      for (const handler of h.handlers.get("session_shutdown") ?? [])
+        await handler({}, h.context);
+    } else if (interruption === "project") {
+      h.context.sessionManager.getEntries = () => [
+        {
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 1, workstream: "different" },
+        },
+      ];
+    } else {
+      const changed = {
+        ...h.context,
+        sessionManager: {
+          ...h.context.sessionManager,
+          getSessionId: () => "different-session",
+        },
+      };
+      for (const handler of h.handlers.get("session_start") ?? [])
+        await handler({ reason: "resume" }, changed);
+      if (interruption === "away-and-back") {
+        for (const handler of h.handlers.get("session_start") ?? [])
+          await handler({ reason: "resume" }, h.context);
+      }
+    }
+    resolve(claimedContext());
+    await pending;
+    assert.equal(h.sent.length, 0);
+  });
+}
+
+test("post-claim context cannot substitute a different owned task", async () => {
+  const h = harness({
+    readTaskContext: async () => claimedContext("jp-different"),
+  });
+  await h.tools
+    .get("task_claim")!
+    .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  assert.equal(h.sent.length, 1);
+  assert.doesNotMatch(
+    h.sent[0].message.content,
+    /jp-different|Build and verify/,
+  );
+  assert.match(h.sent[0].message.content, /changed|unavailable/);
+});
+
+test("factory exposes operator-only review and injectable work-state health", async () => {
+  let healthReads = 0;
+  const h = harness({
+    workStateHealth: async () => {
+      healthReads += 1;
+      throw new Error("Fixture daemon unavailable");
+    },
+  });
+  assert.equal(h.commands.has("mission-check"), true);
+  assert.equal(h.tools.has("mission-check"), false);
+  for (const handler of h.handlers.get("before_agent_start") ?? [])
+    await handler({ messageType: "user" }, h.context);
+  assert.equal(healthReads, 1);
+});
+
+test("claim context is suppressed when a catalog view changes during lookup", async () => {
+  let entered!: () => void;
+  let resolve!: (value: TaskContextResult) => void;
+  const started = new Promise<void>((done) => {
+    entered = done;
+  });
+  const pendingContext = new Promise<TaskContextResult>((done) => {
+    resolve = done;
+  });
+  const h = harness({
+    readTaskContext: () => {
+      entered();
+      return pendingContext;
+    },
+  });
+  let scope: unknown = { kind: "global" };
+  h.context.sessionManager.getEntries = () => [
+    {
+      type: "custom",
+      customType: "jp-project-scope",
+      data: { version: 2, scope },
+    },
+  ];
+  const pending = h.tools
+    .get("task_claim")!
+    .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  await started;
+  scope = { kind: "area", areaId: "11111111-1111-4111-8111-111111111111" };
+  resolve(claimedContext());
+  await pending;
+  assert.equal(h.sent.length, 0);
 });

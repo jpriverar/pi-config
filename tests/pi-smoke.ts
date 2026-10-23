@@ -654,6 +654,7 @@ async function createContractHarness(
   const documents: string[] = [];
   const notifications: string[] = [];
   const widgets = new Map<string, any>();
+  const statuses = new Map<string, string | undefined>();
   let sessionName: string | undefined;
   let editorFactory: Function | undefined;
   let footerFactory: Function | undefined;
@@ -741,6 +742,9 @@ async function createContractHarness(
       setWidget(key: string, value: unknown) {
         widgets.set(key, value);
       },
+      setStatus(key: string, value: string | undefined) {
+        statuses.set(key, value);
+      },
       notify(message: string) {
         notifications.push(message);
       },
@@ -790,6 +794,7 @@ async function createContractHarness(
     notifications,
     pi,
     shortcuts,
+    statuses,
     styledEditor: () => editorFactory,
     tools,
     widgets,
@@ -949,6 +954,10 @@ async function verifyContractHarness(
   for (const handler of harness.handlers.get("session_start") ?? []) {
     await handler({ reason: "startup" }, harness.context);
   }
+  assert.ok(harness.statuses.has("scheduled-wakeup"));
+  assert.equal(harness.statuses.get("scheduled-wakeup"), undefined);
+  const wakeups = await invokeTool(harness, "list_wakeups", {});
+  assert.deepEqual(wakeups.details, { status: "ready" });
   await harness.commands.get("tasks").handler("", harness.context);
   assert.match(harness.documents.at(-1) ?? "", /Ready release task/);
   const statusWidget = harness.widgets.get("project-status");

@@ -42,7 +42,7 @@ async function manifestSkillRoots(): Promise<string[]> {
   });
 }
 
-test("Pi 0.84.1 discovers every manifest skill path without diagnostics", async () => {
+test("Pi discovers every manifest skill path without diagnostics", async () => {
   for (const root of await manifestSkillRoots()) {
     const rootInfo = await stat(root);
     assert.ok(
@@ -62,7 +62,7 @@ test("Pi 0.84.1 discovers every manifest skill path without diagnostics", async 
   }
 });
 
-test("Pi 0.84.1 loads exact valid skill metadata from the package manifest", async () => {
+test("Pi loads exact valid skill metadata from the package manifest", async () => {
   const roots = await manifestSkillRoots();
   const loaded = loadSkills({
     cwd: repository,

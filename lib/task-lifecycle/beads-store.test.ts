@@ -198,10 +198,11 @@ test("updates labels in one command and rejects no-op or overlap", async () => {
   };
   const store = createLifecycleStore(exec, options());
 
-  const saved = await store.updateLabels(
+  const saved = await store.updateTask(
     "jp-1",
     { addLabels: ["priority:high"], removeLabels: ["priority:low"] },
     OWNER,
+    () => {},
   );
 
   assert.equal(saved.lifecycle, null);
@@ -224,6 +225,65 @@ test("updates labels in one command and rejects no-op or overlap", async () => {
     "--db",
     STORE,
   ]);
+});
+
+test("stores mission and next step without changing lifecycle metadata", async () => {
+  const state = claimedMutation().lifecycle;
+  state.execution!.sessionId = OWNER.sessionId;
+  let current: Record<string, unknown> = {
+    ...rawIssue(state),
+    status: "in_progress",
+    description: "Build the feature",
+  };
+  const before = structuredClone(current.metadata) as Record<string, unknown>;
+  const calls: Array<readonly string[]> = [];
+  let validations = 0;
+  const exec: BeadsExec = async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "update") {
+      if (args.includes("--metadata"))
+        current.metadata = JSON.parse(args[args.indexOf("--metadata") + 1]);
+      if (args.includes("-d"))
+        current.description = args[args.indexOf("-d") + 1];
+    }
+    return result(current);
+  };
+  const store = createLifecycleStore(exec, options());
+
+  const saved = await store.updateTask(
+    "jp-1",
+    {
+      addLabels: [],
+      removeLabels: [],
+      description: "Build the feature and validate its deployed behavior",
+      nextStep: "Inspect the staging result for abc123",
+    },
+    OWNER,
+    (issue) => {
+      assert.equal(issue.lifecycle?.execution?.sessionId, OWNER.sessionId);
+      validations += 1;
+    },
+  );
+
+  assert.equal(
+    saved.metadata.next_step,
+    "Inspect the staging result for abc123",
+  );
+  assert.equal(
+    saved.description,
+    "Build the feature and validate its deployed behavior",
+  );
+  assert.deepEqual(saved.metadata, {
+    ...before,
+    next_step: "Inspect the staging result for abc123",
+  });
+  assert.deepEqual(saved.lifecycle, state);
+  assert.equal(saved.status, "in_progress");
+  assert.equal(validations, 1);
+  assert.deepEqual(
+    calls.map((args) => args[0]),
+    ["show", "update", "show"],
+  );
 });
 
 test("revalidates ownership under lock before appending a comment", async () => {
@@ -1208,10 +1268,11 @@ test("managed workstream labels cannot change via generic label updates", async 
     OWNER,
   );
   await assert.rejects(
-    f.store.updateLabels(
+    f.store.updateTask(
       "jp-1",
       { addLabels: ["workstream:elsewhere"], removeLabels: [] },
       OWNER,
+      () => {},
     ),
     /project|workstream/i,
   );
@@ -1241,9 +1302,27 @@ test("lifecycle and WM mutations preserve project identity and captured targets"
     created.metadata.piWorkManagement,
   ) as WorkManagementState;
   f.catalog.projects[P].areaId = B;
-  const mutated = await f.store.mutate("jp-1", OWNER, () => claimedMutation());
+  const claimed = claimedMutation();
+  claimed.lifecycle.execution!.sessionId = OWNER.sessionId;
+  const mutated = await f.store.mutate("jp-1", OWNER, () => claimed);
   assert.deepEqual(mutated.metadata.piProject, { version: 1, projectId: P });
   assert.deepEqual(mutated.metadata.piWorkManagement, wm);
+  const updated = await f.store.updateTask(
+    "jp-1",
+    {
+      addLabels: [],
+      removeLabels: [],
+      nextStep: "Verify the current candidate",
+    },
+    OWNER,
+    (issue) => {
+      assert.equal(issue.lifecycle?.phase, "active");
+      assert.equal(issue.lifecycle?.execution?.sessionId, OWNER.sessionId);
+    },
+  );
+  assert.equal(updated.metadata.next_step, "Verify the current candidate");
+  assert.deepEqual(updated.metadata.piProject, { version: 1, projectId: P });
+  assert.deepEqual(updated.metadata.piWorkManagement, wm);
   const synced = await f.store.mutateWorkManagement("jp-1", OWNER, () => ({
     ...wm,
     lastSentStatus: "Open",

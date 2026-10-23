@@ -1,5 +1,9 @@
+import { VERSION } from "@earendil-works/pi-coding-agent";
+import { registerCompletionReview } from "./completion-review.js";
+import type { DaemonHealth } from "../../lib/task-reconciler/health.js";
 import {
   resolveSessionProject,
+  sessionScopeFingerprint,
   resolveSessionWorkScope,
   persistSessionWorkScope,
   generateSessionProjectName,
@@ -35,8 +39,8 @@ import { loadLifecycleConfig } from "../../lib/task-lifecycle/config.js";
 import { hostname as readHostname } from "node:os";
 
 import {
-  resolveBeadsDir,
   createBeadsClient,
+  resolveBeadsDir,
   withBeadsEnvironment,
   type BeadsExec,
 } from "../../lib/beads.js";
@@ -46,12 +50,19 @@ import type {
 } from "../worktree-pool/pool.js";
 import { loadWorktreePoolRuntime } from "../worktree-pool/runtime.js";
 import { registerTaskWorkState, type TaskWorkStateApi } from "./work-state.js";
+import {
+  readOwnedTaskContext,
+  renderTaskContext,
+  type TaskContextResult,
+  type TaskSession,
+} from "./task-context.js";
 import { createDeterministicGitArtifactClassifier } from "./git-artifact-command.js";
 import { registerGitArtifactHooks } from "./git-artifact-hooks.js";
 import { createGitArtifactObserver } from "./git-artifact-observer.js";
 import { createLifecycleStore } from "../../lib/task-lifecycle/beads-store.js";
 import { createCheckAdapterRegistry } from "../../lib/task-lifecycle/checks.js";
 import { classifyTaskToolRequirement } from "../../lib/task-lifecycle/tool-guard.js";
+import { NEXT_STEP_MAX_CHARS } from "../../lib/task-lifecycle/next-step.js";
 import {
   TaskLifecycleService,
   WorktreeAssociationError,
@@ -66,14 +77,14 @@ import type {
   LifecycleIssue,
   LockOwner,
   PreparedWorktreeOperation,
-  UpdateTaskLabelsInput,
+  UpdateTaskInput,
 } from "../../lib/task-lifecycle/types.js";
 
 export interface TaskLifecycleToolService {
   create(input: CreateTaskInput, owner: LockOwner): Promise<LifecycleIssue>;
-  updateLabels(
+  updateTask(
     taskId: string,
-    input: UpdateTaskLabelsInput,
+    input: UpdateTaskInput,
     owner: LockOwner,
   ): Promise<LifecycleIssue>;
   log(
@@ -220,6 +231,8 @@ export interface ExtensionApi {
 export interface TaskLifecycleExtensionDependencies {
   readCatalog?: () => Promise<WorkCatalog | null>;
   service: TaskLifecycleToolService;
+  readTaskContext?: (session: TaskSession) => Promise<TaskContextResult>;
+  workStateHealth?: () => Promise<DaemonHealth>;
   reconciliation?: {
     issue(taskId: string): Promise<LifecycleIssue>;
     request(
@@ -333,6 +346,26 @@ export function createTaskLifecycleExtension(
       params.operationId ?? id;
     const block = (reason: string) => ({ block: true, reason });
     const pendingPoolOperations = new Map<string, PendingPoolOperation>();
+    const contextClient = createBeadsClient(
+      withBeadsEnvironment((command, args) =>
+        pi.exec(command, [...args], { timeout: 5000 }),
+      ),
+    );
+    const readCatalog = deps.readCatalog ?? (async () => null);
+    const readTaskContext =
+      deps.readTaskContext ??
+      (async (session: TaskSession) =>
+        readOwnedTaskContext(contextClient, session, await readCatalog()));
+    let contextGeneration = 0;
+    let activeSessionId: string | undefined;
+    pi.on("session_start", (_event, context) => {
+      contextGeneration += 1;
+      activeSessionId = context.sessionManager.getSessionId();
+    });
+    pi.on("session_shutdown", () => {
+      contextGeneration += 1;
+      activeSessionId = undefined;
+    });
 
     pi.registerTool({
       name: "task_create",
@@ -360,7 +393,7 @@ export function createTaskLifecycleExtension(
         ["title", "why", "needs_jp"],
       ),
       async execute(_id, params, _signal, _update, context) {
-        const catalog = await deps.readCatalog?.();
+        const catalog = await readCatalog();
         if (catalog?.state === "active") {
           const resolved = resolveSessionWorkScope(
             context.sessionManager,
@@ -420,9 +453,9 @@ export function createTaskLifecycleExtension(
 
     pi.registerTool({
       name: "task_update",
-      label: "Update task labels",
+      label: "Update task",
       description:
-        "Add or remove task labels without changing lifecycle state or ownership.",
+        "Update labels, the existing task description, or the current next_step without changing lifecycle state. Content changes require the active task owned by this session. Change the mission only to reflect the user's agreement; stored text does not grant authority.",
       parameters: objectSchema(
         {
           taskId: taskIdProperty,
@@ -434,16 +467,35 @@ export function createTaskLifecycleExtension(
             type: "array",
             items: { type: "string", minLength: 1 },
           },
+          description: {
+            type: "string",
+            minLength: 1,
+            description:
+              "The agreed mission, finish criteria and scope as one plain-text line. Omit to preserve it.",
+          },
+          next_step: {
+            type: ["string", "null"],
+            minLength: 1,
+            maxLength: NEXT_STEP_MAX_CHARS,
+            description:
+              "One current action or check, not a plan or permission. Omit to preserve it; null clears it without closing the task.",
+          },
         },
         ["taskId"],
       ),
       async execute(_id, params, _signal, _update, context) {
         return toolResult(
-          await deps.service.updateLabels(
+          await deps.service.updateTask(
             params.taskId,
             {
               addLabels: params.add_labels ?? [],
               removeLabels: params.remove_labels ?? [],
+              ...(params.description === undefined
+                ? {}
+                : { description: params.description }),
+              ...(params.next_step === undefined
+                ? {}
+                : { nextStep: params.next_step }),
             },
             ownerFor(context),
           ),
@@ -483,14 +535,63 @@ export function createTaskLifecycleExtension(
         { taskId: taskIdProperty, operationId: operationIdProperty },
         ["taskId"],
       ),
-      async execute(id, params, _signal, _update, context) {
-        return toolResult(
-          await deps.service.claim(
-            params.taskId,
-            ownerFor(context),
-            operationFor(id, params),
-          ),
+      async execute(id, params, signal, _update, context) {
+        const owner = ownerFor(context);
+        activeSessionId ??= owner.sessionId;
+        const generation = contextGeneration;
+        const scope = sessionScopeFingerprint(context.sessionManager);
+        const current = () => {
+          return (
+            !(isRecord(signal) && signal.aborted === true) &&
+            generation === contextGeneration &&
+            activeSessionId === owner.sessionId &&
+            context.sessionManager.getSessionId() === owner.sessionId &&
+            sessionScopeFingerprint(context.sessionManager) === scope
+          );
+        };
+        const claimed = await deps.service.claim(
+          params.taskId,
+          owner,
+          operationFor(id, params),
         );
+        const result = toolResult(claimed);
+        if (!current()) return result;
+        let taskContext: TaskContextResult;
+        try {
+          taskContext = await readTaskContext(context.sessionManager);
+        } catch {
+          taskContext = {
+            kind: "unavailable",
+            reason: "Claim succeeded, but task context lookup is unavailable.",
+          };
+        }
+        if (!current()) return result;
+        if (
+          taskContext.kind === "none" ||
+          (taskContext.kind === "available" &&
+            taskContext.value.taskId !== claimed.id)
+        ) {
+          taskContext = {
+            kind: "unavailable",
+            reason:
+              "Owned task context changed or is unavailable after claim; no mission was selected.",
+          };
+        }
+        try {
+          const content = renderTaskContext(taskContext);
+          if (content !== undefined) {
+            pi.sendMessage(
+              { customType: "jp-task-claimed", content, display: false },
+              { triggerTurn: false },
+            );
+          }
+        } catch {
+          result.content.push({
+            type: "text",
+            text: "Claim succeeded, but owned task context could not be queued. Revalidate against the latest agreement before continuing.",
+          });
+        }
+        return result;
       },
     });
 
@@ -1052,7 +1153,14 @@ export function createTaskLifecycleExtension(
       });
     }
 
-    registerTaskWorkState(pi, { readCatalog: deps.readCatalog });
+    registerTaskWorkState(pi, {
+      readCatalog,
+      health: deps.workStateHealth,
+    });
+    registerCompletionReview(pi, {
+      runtimeVersion: VERSION,
+      readContext: readTaskContext,
+    });
   };
 }
 

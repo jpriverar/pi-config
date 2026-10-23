@@ -31,9 +31,18 @@ task IDs are not stored as artifacts or duplicated in lifecycle metadata.
 
 The presentation layer reads the same normalized Beads data. Fresh empty
 sessions get a durable visible task table. Every model turn receives a bounded,
-scoped hidden summary marked as untrusted data, and compaction queues the same
-summary for the next turn. Store failures are redacted and never interrupt
-compaction.
+scoped hidden summary marked as untrusted data. A separate bounded block adds
+the full description and `metadata.next_step` of the uniquely owned active task.
+With an active catalog, a global/area/project selection changes the view, not
+ownership: an owned task outside that view retains its mission context with an
+outside-view warning. Invalid task membership is diagnosed, never guessed.
+Without an active catalog, legacy project matching still applies; version-2
+scope without its required catalog is unavailable rather than global.
+Ambiguous ownership across projects supplies no mission. Overview snapshots
+exclude these fields for other tasks. Compaction refreshes context without
+starting a turn. Store failures are
+redacted and never interrupt compaction. Missing records or a null next step
+never establish that a mission is complete.
 
 ## Task-scoped tool guards
 
@@ -46,9 +55,10 @@ The lifecycle extension enforces these initial pre-dispatch rules:
 - `subagent` child and workflow execution requires an attached Active task;
 - `subagent` management actions such as list, status, guidance, and control
   remain available while unattached;
-- `task_attach_artifact`, `task_log`, `task_wait`, `task_defer`, and
-  `task_close` must name the session's attached task in their structured
-  `taskId` argument;
+- `task_attach_artifact`, `task_log`, `task_wait`, `task_defer`, `task_close`,
+  and `task_update` when changing description/next_step must name the session's
+  attached task in their structured `taskId` argument; content updates also
+  revalidate active ownership inside the store lock;
 - ordinary `worktree_pool acquire` requires exactly one attached Active task;
 - `worktree_pool release` requires matching ownership when its claim is
   lifecycle-associated, while unassociated legacy release remains available;
@@ -169,13 +179,29 @@ scope whose required catalog is unavailable never falls back to global.
 
 ### `task_update`
 
-Required: `taskId`. Optional: `add_labels` and `remove_labels`; at least one
-label change is required.
+Required: `taskId`. Optional: `add_labels`, `remove_labels`, `description`,
+and `next_step`; at least one change must be requested.
 
-This administrative tool changes labels only. Status, phase, ownership,
-waiting state, resources, artifacts, dispositions, and arbitrary metadata are
-not accepted. Managed project/workstream membership cannot be changed through
-generic label edits.
+Label-only updates retain administrative behavior. Description and next-step
+updates require current active ownership, checked again under the native store
+lock. The existing description holds the agreed mission, finish criteria and
+scope; change it only to reflect the user's agreement. `metadata.next_step` is
+the only new persisted value: one current action/check, not a plan or authority.
+
+Omitted fields are preserved. `next_step: null` clears the hint without changing
+lifecycle state. Next-step strings are trimmed, nonempty, single-line, free of
+control characters and limited to 2000 Unicode code points. Description writes
+retain the existing nonempty single-line guard. An identical content update
+still checks ownership but does not write.
+
+The update uses one native write and verified read-back, preserving unrelated
+metadata. An uncertain write is not automatically retried. Status, phase,
+ownership, waits, artifacts, progress timestamps and lifecycle history are not
+changed by a content update; arbitrary metadata writes are not accepted.
+Closing/cancelling/superseding clears an existing next step, and reopening a
+Done task cannot revive an obsolete hint.
+
+Managed project/workstream membership cannot be changed through generic label edits.
 
 ### `task_log`
 
@@ -202,6 +228,13 @@ legacy expiry timestamp or a failed explicit release. It preserves the owner, or
 artifacts, and resource history; it does not inspect or repair worktrees.
 Same-timestamp retries do not write again. Another execution owner blocks the
 claim, even if that owner's legacy expiry timestamp passed or the operation ID was previously used.
+
+A successful claim adds bounded owned context independently of its returned
+tool result. Context-only delivery includes it after the current tool batch
+without waking an idle agent; SDK `nextTurn` delivery is not used because it
+waits for another submitted prompt. A failed refresh leaves the claim successful
+and provides a diagnostic. This does not make a claim and subsequent operations
+in the same batch transactional.
 
 ### `task_attach_artifact`
 
@@ -289,7 +322,7 @@ Check wait:
     "kind": "github_pull_request",
     "targetArtifactIds": ["pr-api", "pr-worker"],
     "predicate": { "mode": "all" },
-    "onSatisfied": "close",
+    "onSatisfied": "actionable",
     "wakeOn": ["action_required"],
     "state": "pending",
     "createdAt": "2026-09-17T10:00:00.000Z",
@@ -300,6 +333,10 @@ Check wait:
   }
 }
 ```
+
+Use `onSatisfied: actionable` while validation, communication or cleanup remains
+owed after the condition. Auto-close is appropriate only when satisfying that
+condition fulfills the entire agreed finish line.
 
 A dependency wait requires `blockerIds` and forbids `check`. A check wait
 requires one complete check and forbids `blockerIds`. If Active work already
@@ -383,6 +420,9 @@ superseded disposition also requires `supersedingTaskId`.
   "evidenceArtifactIds": ["pr-api", "pr-worker"]
 }
 ```
+
+The example above assumes a PR-only finish line. Merge receipts alone do not
+fulfill agreed deployment validation or final communication.
 
 `completed` is rejected while a dependency or typed-check condition remains
 unresolved. `cancelled` and `superseded` may explicitly abandon those
