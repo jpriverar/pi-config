@@ -11,6 +11,7 @@ import {
 export interface PaneReporter {
   updateRuntime(ctx: ExtensionContext): void;
   updateTask(assignment: TaskAssignment): void;
+  updateWaiting(label: string | null): void;
   stop(): Promise<void>;
 }
 
@@ -25,6 +26,7 @@ export function createPaneReporter(options: {
 }): PaneReporter | undefined {
   if (options.context.mode !== "tui") return undefined;
   let desired: PaneTokens = {
+    pi_waiting: null,
     ...runtimeTokens(options.context.model, options.context.getContextUsage()),
     ...taskTokens({ state: "unavailable", label: "Task unavailable" }),
   };
@@ -74,6 +76,11 @@ export function createPaneReporter(options: {
       desired = { ...desired, ...taskTokens(assignment) };
       queue();
     },
+    updateWaiting(label) {
+      if (stopped) return;
+      desired = { ...desired, pi_waiting: label };
+      queue();
+    },
     stop() {
       if (stopping) return stopping;
       stopped = true;
@@ -91,6 +98,7 @@ export function createPaneReporter(options: {
               pi_task_expires_at: null,
               pi_context_warning: null,
               pi_context_critical: null,
+              pi_waiting: null,
             },
             nextSequence(),
             new AbortController().signal,

@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { WakeupController, type WakeupState } from "../../lib/wakeups.js";
+import { createWakeupPresentation } from "./presentation.js";
 
 export default function wakeupExtension(pi: ExtensionAPI): void {
   registerWakeupTools(pi, VERSION);
@@ -23,10 +24,12 @@ export function registerWakeupTools(pi: ExtensionAPI, version: string): void {
   }
 
   let context: ExtensionContext | undefined;
+  const presentation = createWakeupPresentation(pi);
   const wakeups = new WakeupController({
     canDeliver: () =>
       Boolean(context?.isIdle() && !context.hasPendingMessages()),
     changed: (state) => {
+      presentation.update(state, context);
       const item = state.pending;
       context?.ui.setStatus(
         "scheduled-wakeup",
@@ -65,15 +68,18 @@ export function registerWakeupTools(pi: ExtensionAPI, version: string): void {
   pi.on("before_agent_start", (_event, ctx) => {
     context = ctx;
     wakeups.runStarted();
+    presentation.update(wakeups.inspect(), ctx);
   });
   pi.on("agent_start", (_event, ctx) => {
     context = ctx;
     wakeups.runStarted();
+    presentation.update(wakeups.inspect(), ctx);
   });
   pi.on("agent_settled", (event, ctx) => {
     context = ctx;
     // Missing abort information must never turn a stopped run into an automatic continuation.
     wakeups.runSettled(!("aborted" in event) || event.aborted !== false);
+    presentation.update(wakeups.inspect(), ctx);
   });
 
   pi.registerTool({

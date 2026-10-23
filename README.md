@@ -116,15 +116,29 @@ during an active wait does not silently renew its deadline. A `checking` status
 means the resumed turn is running, not that another timer is pending.
 
 Session replacement, branch navigation, reload, and exit cancel pending work.
-Nothing is persisted or replayed after restart. Cancellation cannot retract a
+Scheduling state is not persisted or replayed after restart. Cancellation cannot retract a
 turn that has already started. Delivery makes one send attempt, not an
 exactly-once execution guarantee; asynchronous errors are reported by Pi without
 blind retries. A wakeup grants no extra authority to publish, merge, deploy, or
 claim work.
 
-The extension itself uses one in-process timer and makes no filesystem, shell,
-or network calls. Resumed agents use their normal tools and provider. Waiting
-between checks makes no model requests.
+The scheduler uses one in-process timer, with no background daemon or network
+polling. Resumed agents use their normal tools and provider. Waiting between
+checks makes no model requests.
+
+In the interactive TUI, yielding with a pending check adds a compact waiting
+notice with its reason and local due time. These display-only entries stay in
+chat history but never enter model context or restore timers. Cancellation and
+expiry close the notice; repeated status reads do not add duplicate notices.
+Active work, queued input, and human-input blockers take precedence over the
+live waiting label. There is no continuously repainting countdown.
+
+The existing Herdr pane reporter also publishes `pi_waiting`. The optional
+[sidebar layout](plugins/herdr-space-tabs/README.md) renders it in warm amber
+without changing Herdr’s native state dot. Labels clear on resumption,
+cancellation, expiry, session replacement, reload, and orderly shutdown;
+startup clears stale values. Forced process termination cannot guarantee
+cleanup. Sidebar delivery remains bounded and best-effort.
 
 When replacing a separate preview implementation, remove that package source
 with `pi remove <old-preview-source>` before `/reload`; do not load two packages

@@ -8,6 +8,7 @@ import {
 } from "../../lib/work-catalog/test-fixtures.js";
 import type { WorkCatalog, WorkScope } from "../../lib/work-catalog/model.js";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 import type { PaneTokens } from "./herdr-values.js";
@@ -108,7 +109,9 @@ function createHarness(
   const issues = options.issues ?? [];
   const readyIds = new Set(options.readyIds ?? []);
 
+  const events = new EventEmitter();
   const pi = {
+    events,
     on(event: string, handler: Handler) {
       handlers.set(event, handler);
     },
@@ -189,6 +192,7 @@ function createHarness(
       : null,
   });
   return {
+    events,
     executionLimits,
     metadata,
     setIssues(next: BeadsIssue[]) {
@@ -804,4 +808,32 @@ test("catalog view changes keep the session-owned task visible with an outside-v
   await h.handlers.get("session_start")!({}, h.context);
   assert.match(h.renderHeader(), /zz-owned/);
   assert.match(h.renderHeader(), /outside current view/);
+});
+
+test("waiting events publish and clear an independent sidebar label", async () => {
+  const h = createHarness({ herdr: true });
+  await start(h);
+  assert.equal(h.metadata.at(-1)!.pi_waiting, null);
+  const task = h.metadata.at(-1)!.pi_task;
+  const calls = h.calls.length;
+  h.events.emit("pi:wakeup-waiting", "Waiting · until 15:05 UTC");
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.pi_waiting, "Waiting · until 15:05 UTC");
+  assert.equal(h.metadata.at(-1)!.pi_task, task);
+  assert.equal(h.calls.length, calls, "waiting UI must not query Beads");
+  const sent = h.metadata.length;
+  h.events.emit("pi:wakeup-waiting", "Waiting · until 15:05 UTC");
+  h.events.emit("pi:wakeup-waiting", { invalid: true });
+  await setImmediate();
+  assert.equal(h.metadata.length, sent);
+  h.events.emit("pi:wakeup-waiting", null);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.pi_waiting, null);
+  h.events.emit("pi:wakeup-waiting", "Waiting · until 16:00 UTC");
+  await setImmediate();
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+  assert.equal(h.metadata.at(-1)!.pi_waiting, null);
+  h.events.emit("pi:wakeup-waiting", "Stale wait");
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.pi_waiting, null);
 });

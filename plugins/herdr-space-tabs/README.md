@@ -17,7 +17,9 @@ The plugin runs from Herdr events, with no daemon or database polling.
 ## Display semantics
 
 The example layout shows Pi panes in three rows: state icon, tab, and space;
-task; then state text, Pi, and model. Spaces show their state icon and name,
+task; then state text, Pi, and model. A conditional fourth row shows
+`pi_waiting` in warm amber while a bounded wakeup is waiting. The row disappears
+when the token is absent, keeping existing task/model rows intact. Spaces show their state icon and name,
 then `N tabs` and `M in-progress` on the next row. Sidebar context and active-tab
 labels are omitted; their metadata remains available for custom layouts.
 
@@ -36,6 +38,19 @@ only one set at a time. The displayed percentage is floored. Unknown usage
 (including immediately after compaction) and usage below 75% hide both. This
 mirrors Pi's context estimate, not an exact token counter. Existing state
 labels and subagent summaries remain separate.
+
+`pi_waiting` is a presentation label such as `Waiting · until 15:05 UTC`, not a
+new Herdr agent state. Herdr’s native dot remains unchanged. The wakeup extension
+publishes it only for an idle interactive session with a pending check and no
+human-input blocker or queued input. Active work, cancellation, expiration,
+reload, and shutdown clear it. This is session-local waiting, not a persistent
+alarm or an exact-time execution guarantee. The label updates on lifecycle
+transitions, not a countdown polling loop.
+
+The sidebar change is opt-in: merge the `$pi_waiting` row from the example into
+your existing Pi rows, preserving other styles and labels. No Herdr binary or
+managed agent-state integration changes are required. Waiting-only updates do
+not query Beads or refresh space task counts.
 
 The space plugin owns `active_tab` (`tab: <label>`), `tab_count`
 (`1 tab` / `N tabs`), and `active_tasks` (`M in-progress`). Task counts use

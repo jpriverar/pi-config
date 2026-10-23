@@ -237,6 +237,11 @@ export default function projectStatus(
     return refreshing;
   }
 
+  pi.events.on("pi:wakeup-waiting", (label: unknown) => {
+    if (label === null || typeof label === "string")
+      reporter?.updateWaiting(label);
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     const generation = ++sessionGeneration;
     const previous = reporter;

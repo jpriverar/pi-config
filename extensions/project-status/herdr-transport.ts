@@ -58,6 +58,7 @@ export function createHerdrMetadataSender(
       "pi_task_expires_at",
       "pi_context_warning",
       "pi_context_critical",
+      "pi_waiting",
     ] as const) {
       const value = tokens[key] === null ? "" : normalizeMetadata(tokens[key]);
       args.push(
