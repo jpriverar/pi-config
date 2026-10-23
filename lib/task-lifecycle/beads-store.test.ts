@@ -1185,7 +1185,6 @@ test("catalog task creation atomically records project, compatibility label and 
       title: "task",
       why: "goal",
       projectId: P,
-      scope: { kind: "area", areaId: A },
       needsJp: false,
     },
     lifecycle(),
@@ -1200,21 +1199,25 @@ test("catalog task creation atomically records project, compatibility label and 
   assert.deepEqual(wm.target, area.publication.target);
   assert.equal(f.calls.filter((c) => c[0] === "create").length, 1);
 });
-test("catalog routing rejects missing project and stale area membership before create", async (t) => {
+test("locked catalog creation refuses missing placement even with stale scope input", async (t) => {
+  const { P } = await import("../work-catalog/test-fixtures.js");
+  const f = await catalogStoreFixture(t);
+  const request = {
+    title: "task",
+    why: "goal",
+    scope: { kind: "project" as const, projectId: P },
+    needsJp: false,
+  };
+  await assert.rejects(
+    f.store.create(request, lifecycle(), OWNER),
+    /explicit project/i,
+  );
+  assert.equal(f.calls.filter((c) => c[0] === "create").length, 0);
+});
+
+test("locked catalog creation uses current area policy rather than stale browse scope", async (t) => {
   const { A, B, P } = await import("../work-catalog/test-fixtures.js");
   const f = await catalogStoreFixture(t);
-  await assert.rejects(
-    f.store.create(
-      {
-        title: "task",
-        why: "goal",
-        scope: { kind: "area", areaId: A },
-        needsJp: false,
-      },
-      lifecycle(),
-      OWNER,
-    ),
-  );
   const request = {
     title: "task",
     why: "goal",
@@ -1223,11 +1226,10 @@ test("catalog routing rejects missing project and stale area membership before c
     needsJp: false,
   };
   f.catalog.projects[P].areaId = B;
-  await assert.rejects(
-    f.store.create(request, lifecycle(), OWNER),
-    /area|scope/i,
-  );
-  assert.equal(f.calls.filter((c) => c[0] === "create").length, 0);
+  const created = await f.store.create(request, lifecycle(), OWNER);
+  assert.deepEqual(created.metadata.piProject, { version: 1, projectId: P });
+  assert.equal(Object.hasOwn(created.metadata, "piWorkManagement"), false);
+  assert.equal(f.calls.filter((c) => c[0] === "create").length, 1);
 });
 test("partial activation and config/catalog mismatch cannot use legacy fallback", async (t) => {
   const { P } = await import("../work-catalog/test-fixtures.js");

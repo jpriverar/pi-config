@@ -8,9 +8,7 @@ import {
   findProject,
   type ProjectRecord,
   type WorkCatalog,
-  type WorkScope,
 } from "./model.js";
-import { validateWorkScope } from "./membership.js";
 
 export function workRoutingMode(
   config: WorkManagementConfig | null | undefined,
@@ -33,7 +31,9 @@ function availableProject(catalog: WorkCatalog, id: string): ProjectRecord {
   if (catalog.state !== "active") throw new Error("Work catalog is not active");
   const project = catalog.projects[catalogId(id)];
   if (!project)
-    throw new Error(`Project ${id} does not exist; select /project`);
+    throw new Error(
+      `Project ${id} does not exist; choose a registered project`,
+    );
   if (project.archived)
     throw new Error(`Project ${project.name} is archived; restore it first`);
   const area =
@@ -48,10 +48,8 @@ function availableProject(catalog: WorkCatalog, id: string): ProjectRecord {
 }
 export function resolveCreateProject(
   catalog: WorkCatalog,
-  value: WorkScope,
   selection: { projectId?: string; workstream?: string },
 ): ProjectRecord {
-  const scope = validateWorkScope(catalog, value);
   const named =
     selection.workstream === undefined
       ? undefined
@@ -66,27 +64,10 @@ export function resolveCreateProject(
     selection.projectId !== named.id
   )
     throw new Error("Project ID conflicts with the supplied workstream");
-  const selected = selection.projectId ?? named?.id;
-  if (
-    scope.kind === "project" &&
-    selected !== undefined &&
-    selected !== scope.projectId
-  )
-    throw new Error(
-      "Requested project conflicts with session scope; select /project before creating work elsewhere",
-    );
-  const id =
-    selected ?? (scope.kind === "project" ? scope.projectId : undefined);
+  const id = selection.projectId ?? named?.id;
   if (id === undefined)
-    throw new Error(
-      "Choose an explicit project when creating tasks from an area or global view",
-    );
-  const project = availableProject(catalog, id);
-  if (scope.kind === "area" && project.areaId !== scope.areaId)
-    throw new Error(
-      `Project ${project.name} is outside the selected area; select the intended scope first`,
-    );
-  return project;
+    throw new Error("Choose an explicit project when creating a task");
+  return availableProject(catalog, id);
 }
 export function resolveNewTaskTarget(
   catalog: WorkCatalog,

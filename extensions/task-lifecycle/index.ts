@@ -4,7 +4,6 @@ import type { DaemonHealth } from "../../lib/task-reconciler/health.js";
 import {
   resolveSessionProject,
   sessionScopeFingerprint,
-  resolveSessionWorkScope,
   persistSessionWorkScope,
   generateSessionProjectName,
   type SessionProjectReader,
@@ -371,7 +370,7 @@ export function createTaskLifecycleExtension(
       name: "task_create",
       label: "Create task",
       description:
-        "Create an explicitly approved lifecycle-managed work item in the Beads store. Uses the current session project scope and rejects a conflicting workstream.",
+        "Create an explicitly approved lifecycle-managed work item in the Beads store. Catalog-backed creation requires an explicit project; session identity and browsing never select it.",
       parameters: objectSchema(
         {
           title: { type: "string", minLength: 1 },
@@ -380,13 +379,13 @@ export function createTaskLifecycleExtension(
             type: "string",
             minLength: 1,
             description:
-              "Stable registered project ID. In catalog mode, defaults only in a project-scoped session; area/global views require explicit placement.",
+              "Explicit stable registered project ID. Required in catalog mode unless workstream names a registered project.",
           },
           workstream: {
             type: "string",
             minLength: 1,
             description:
-              "Defaults to the current session project. If supplied in a scoped session, must match that project (case-insensitive). Switch with /project to create elsewhere.",
+              "Explicit registered project name or alias in catalog mode; must match projectId if both are supplied. Legacy mode retains its workstream handling.",
           },
           needs_jp: { type: "boolean" },
         },
@@ -395,12 +394,7 @@ export function createTaskLifecycleExtension(
       async execute(_id, params, _signal, _update, context) {
         const catalog = await readCatalog();
         if (catalog?.state === "active") {
-          const resolved = resolveSessionWorkScope(
-            context.sessionManager,
-            catalog,
-          );
-          if (resolved.kind === "invalid") throw new Error(resolved.reason);
-          const project = resolveCreateProject(catalog, resolved.scope, params);
+          const project = resolveCreateProject(catalog, params);
           return toolResult(
             await deps.service.create(
               {
@@ -408,7 +402,6 @@ export function createTaskLifecycleExtension(
                 why: params.why,
                 needsJp: params.needs_jp,
                 projectId: project.id,
-                scope: resolved.scope,
                 ...(params.workstream === undefined
                   ? {}
                   : { workstream: params.workstream }),

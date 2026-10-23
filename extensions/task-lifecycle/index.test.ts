@@ -287,7 +287,7 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
         getSessionId: () => "session-1",
         getBranch: () => [{ type: "message" }],
         getEntries: (): unknown[] => [],
-        getSessionName: () => undefined,
+        getSessionName: (): string | undefined => undefined,
       },
       ui: { notify() {} },
     } satisfies Context,
@@ -1620,62 +1620,169 @@ test("task result includes independent work management health without changing i
   );
 });
 
-test("catalog task tool inherits a stable project and passes scope for locked revalidation", async () => {
+test("catalog creation requires explicit placement in every session state", async (t) => {
+  const { A, P, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  for (const [name, scope] of [
+    ["project", { kind: "project", projectId: P }],
+    ["area", { kind: "area", areaId: A }],
+    ["global", { kind: "global" }],
+    ["malformed", { kind: "invalid" }],
+    ["display name only", undefined],
+  ] as const) {
+    await t.test(name, async () => {
+      const h = harness({ readCatalog: async () => catalogFixture() });
+      h.guardState.activeTasks = [activeIssue("owned")];
+      h.guardState.activeTasks[0].metadata.piProject = {
+        version: 1,
+        projectId: P,
+      };
+      h.context.sessionManager.getSessionName = () => "api";
+      h.context.sessionManager.getEntries = () =>
+        scope === undefined
+          ? []
+          : [
+              {
+                type: "custom",
+                customType: "jp-project-scope",
+                data: { version: 2, scope },
+              },
+            ];
+      await assert.rejects(
+        h.tools
+          .get("task_create")!
+          .execute(
+            "create",
+            { title: "new task", why: "goal", needs_jp: false },
+            undefined,
+            undefined,
+            h.context,
+          ),
+        /explicit project/i,
+      );
+      assert.equal(
+        h.calls.length,
+        0,
+        "no creation or ownership lookup without placement",
+      );
+      assert.equal(h.execCalls.length, 0);
+    });
+  }
+});
+
+test("explicit placement is independent of browsing and current work", async (t) => {
+  const { B, P, Q, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  for (const scope of [
+    { kind: "project", projectId: P },
+    { kind: "area", areaId: B },
+    { kind: "global" },
+    { kind: "invalid" },
+  ]) {
+    await t.test(scope.kind, async () => {
+      const h = harness({ readCatalog: async () => catalogFixture() });
+      h.guardState.activeTasks = [activeIssue("owned")];
+      h.guardState.activeTasks[0].metadata.piProject = {
+        version: 1,
+        projectId: P,
+      };
+      const ownedBefore = structuredClone(h.guardState.activeTasks);
+      const entries = [
+        {
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope },
+        },
+      ];
+      h.context.sessionManager.getEntries = () => entries;
+      h.context.sessionManager.getSessionName = () => "api-580c8e67";
+      const sessionWrites: unknown[] = [];
+      Object.assign(h.pi, {
+        appendEntry: (...args: unknown[]) => sessionWrites.push(args),
+        setSessionName: (name: string) => sessionWrites.push(name),
+      });
+      await h.tools
+        .get("task_create")!
+        .execute(
+          "create",
+          { title: "new task", why: "goal", projectId: Q, needs_jp: false },
+          undefined,
+          undefined,
+          h.context,
+        );
+      assert.deepEqual(
+        h.calls.map((c) => c.name),
+        ["create"],
+      );
+      assert.deepEqual(h.calls[0].args[0], {
+        title: "new task",
+        why: "goal",
+        projectId: Q,
+        needsJp: false,
+      });
+      assert.deepEqual(h.guardState.activeTasks, ownedBefore);
+      assert.deepEqual(sessionWrites, []);
+      assert.equal(h.execCalls.length, 0);
+    });
+  }
+});
+
+test("explicit catalog creation never reads session display or scope", async () => {
   const { P, catalogFixture } = await import(
     "../../lib/work-catalog/test-fixtures.js"
   );
   const h = harness({ readCatalog: async () => catalogFixture() });
-  const context: Context = h.context;
-  context.sessionManager.getEntries = () => [
-    {
-      type: "custom",
-      customType: "jp-project-scope",
-      data: { version: 2, scope: { kind: "project", projectId: P } },
-    },
-  ];
+  h.context.sessionManager.getEntries = () => {
+    throw new Error("scope must not determine placement");
+  };
+  h.context.sessionManager.getSessionName = () => {
+    throw new Error("display name must not determine placement");
+  };
   await h.tools
     .get("task_create")!
     .execute(
       "create",
-      { title: "new task", why: "goal", needs_jp: false },
+      { title: "new task", why: "goal", workstream: "API", needs_jp: false },
       undefined,
       undefined,
-      context,
+      h.context,
     );
-  assert.deepEqual(h.calls.find((c) => c.name === "create")!.args[0], {
+  assert.deepEqual(h.calls[0].args[0], {
     title: "new task",
     why: "goal",
-    needsJp: false,
     projectId: P,
-    scope: { kind: "project", projectId: P },
+    workstream: "API",
+    needsJp: false,
   });
 });
-test("catalog task tool refuses ambiguous area placement before calling service", async () => {
-  const { A, catalogFixture } = await import(
-    "../../lib/work-catalog/test-fixtures.js"
-  );
-  const h = harness({ readCatalog: async () => catalogFixture() });
-  const context: Context = h.context;
-  context.sessionManager.getEntries = () => [
-    {
-      type: "custom",
-      customType: "jp-project-scope",
-      data: { version: 2, scope: { kind: "area", areaId: A } },
-    },
-  ];
-  await assert.rejects(
-    h.tools
-      .get("task_create")!
-      .execute(
-        "create",
-        { title: "new task", why: "goal", needs_jp: false },
-        undefined,
-        undefined,
-        context,
-      ),
-    /project/i,
-  );
-  assert.equal(h.calls.filter((c) => c.name === "create").length, 0);
+
+test("missing required catalog never falls back to legacy creation", async () => {
+  const { P } = await import("../../lib/work-catalog/test-fixtures.js");
+  for (const selection of [{ projectId: P }, { workstream: "API" }]) {
+    const h = harness({ readCatalog: async () => null });
+    h.context.sessionManager.getEntries = () => [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "project", projectId: P } },
+      },
+    ];
+    await assert.rejects(
+      h.tools
+        .get("task_create")!
+        .execute(
+          "create",
+          { title: "new task", why: "goal", needs_jp: false, ...selection },
+          undefined,
+          undefined,
+          h.context,
+        ),
+      /catalog|scope/i,
+    );
+    assert.equal(h.calls.length, 0);
+  }
 });
 
 function claimedContext(taskId = "jp-1"): TaskContextResult {

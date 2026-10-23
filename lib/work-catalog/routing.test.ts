@@ -40,39 +40,26 @@ test("catalog mode requires a compatible active catalog/config pair", () => {
     );
   }
 });
-test("project scope inherits only its own project; broader scopes require explicit placement", () => {
+test("catalog creation requires an explicit project", () => {
+  assert.throws(
+    () => resolveCreateProject(catalogFixture(), {}),
+    /explicit project/i,
+  );
+});
+test("explicit placement resolves by project ID or registered name", () => {
   const c = catalogFixture();
-  assert.equal(
-    resolveCreateProject(c, { kind: "project", projectId: P }, {}).id,
-    P,
+  assert.equal(resolveCreateProject(c, { projectId: Q }).id, Q);
+  assert.equal(resolveCreateProject(c, { workstream: "API" }).id, P);
+});
+test("conflicting and unknown explicit identifiers are rejected", () => {
+  const c = catalogFixture();
+  assert.throws(
+    () => resolveCreateProject(c, { projectId: P, workstream: "Maintenance" }),
+    /conflicts/i,
   );
-  assert.equal(
-    resolveCreateProject(c, { kind: "area", areaId: A }, { workstream: "API" })
-      .id,
-    P,
-  );
-  assert.equal(
-    resolveCreateProject(c, { kind: "global" }, { projectId: Q }).id,
-    Q,
-  );
-  assert.throws(() => resolveCreateProject(c, { kind: "area", areaId: A }, {}));
-  assert.throws(() => resolveCreateProject(c, { kind: "global" }, {}));
-  assert.throws(() =>
-    resolveCreateProject(
-      c,
-      { kind: "project", projectId: P },
-      { projectId: Q },
-    ),
-  );
-  assert.throws(() =>
-    resolveCreateProject(c, { kind: "area", areaId: B }, { projectId: P }),
-  );
-  assert.throws(() =>
-    resolveCreateProject(
-      c,
-      { kind: "global" },
-      { projectId: P, workstream: "Maintenance" },
-    ),
+  assert.throws(
+    () => resolveCreateProject(c, { workstream: "missing" }),
+    /not registered/i,
   );
 });
 test("unclassified, archived and unknown destinations never produce a task target", () => {
@@ -83,17 +70,11 @@ test("unclassified, archived and unknown destinations never produce a task targe
   ]) {
     const c = catalogFixture();
     change(c);
-    assert.throws(() =>
-      resolveCreateProject(c, { kind: "global" }, { projectId: P }),
-    );
+    assert.throws(() => resolveCreateProject(c, { projectId: P }));
     assert.throws(() => resolveNewTaskTarget(c, c.projects[P]));
   }
   assert.throws(() =>
-    resolveCreateProject(
-      catalogFixture(),
-      { kind: "global" },
-      { projectId: NEW },
-    ),
+    resolveCreateProject(catalogFixture(), { projectId: NEW }),
   );
 });
 test("all projects inherit area publication, not their names", () => {
