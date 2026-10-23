@@ -25,7 +25,36 @@ evidence need not be repeated mechanically. An environment-only failure need not
 restart code review; a broken design assumption may require returning to intent
 or design.
 
+## Bounded pre-PR simplification
+
+After implementation and focused tests, make one simplification pass before
+presenting the candidate as review-ready:
+
+1. Read the current diff and the nearby code needed to understand it. Look for
+   avoidable duplication, branching, state and indirection in the changed code;
+   check existing helpers before inventing another abstraction.
+2. Apply small, clearly beneficial, behavior-preserving improvements within the
+   approved scope. Preserve contracts, edge cases, side effects and their order,
+   error handling and meaningful tests. Fewer lines alone is not an improvement.
+3. Rerun affected checks after edits. A cleanup that changes behavior returns to
+   implementation and verification; do not weaken tests to label it a refactor.
+4. Stop after the pass, or leave the code unchanged when no worthwhile
+   simplification is evident. Briefly report what became simpler (or why nothing
+   changed) and the actual checks. This is author self-review, not independent
+   review or a guarantee of correctness.
+
+Do not widen this into unrelated cleanup, speculative framework work or a
+repeat-until-perfect loop. If the useful change requires a broader design or
+scope decision, propose it rather than silently doing it. Material later fixes
+revisit the newly changed portions; an unchanged candidate does not need another
+whole pass.
+
 ## Review with context and independence
+
+Default to `correctness-review`: supply the intended business behavior and
+contracts along with the diff. Keep concrete defects separate from structural
+preferences. Use `thermo-nuclear-code-quality-review` for an explicitly requested
+structural audit, not as an automatic second review gate.
 
 Use a separate session or authorized reviewer agent for independent review. The
 implementer reading a rubric to itself is not independent review, and agent

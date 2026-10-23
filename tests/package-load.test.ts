@@ -29,13 +29,14 @@ const publicResources = {
     "./skills/grill-me",
     "./skills/thinking-partner",
     "./skills/handoff",
+    "./skills/correctness-review",
     "./skills/thermo-nuclear-code-quality-review",
     "./skills/standup",
     "./skills/explaining-technical-work",
     "./skills/development-workflow",
     "./skills/writing-rfcs",
   ],
-  prompts: ["./prompts/review.md"],
+  prompts: ["./prompts/review.md", "./prompts/review-quality.md"],
   themes: ["./themes/modus-vivendi-tinted.json", "./themes/gold-rush.json"],
 };
 

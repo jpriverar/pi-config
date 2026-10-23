@@ -343,8 +343,8 @@ The package manifest loads:
   and conversation cloning,
   bounded worktree allocation, lifecycle-safe task mutation and presentation,
   project status, `/tasks`, and bounded scheduled wakeups on supported runtimes;
-- eight skill roots: critical review, collaborative thinking, handoffs,
-  the Thermo-Nuclear code-quality review, incremental standup updates,
+- nine skill roots: critical review, collaborative thinking, handoffs,
+  correctness review, the Thermo-Nuclear code-quality review, incremental standup updates,
   behavior-first technical explanations, development workflows, and brief RFCs;
 - the `modus-vivendi-tinted` and `gold-rush` themes.
 
@@ -369,9 +369,28 @@ It reuses existing specialist skills and task tools rather than adding task
 states, background watchers, or permission to merge, deploy, post, or create
 follow-up tasks. It is not needed for every quick question or review-only request.
 
-The strict review skill uses `explaining-technical-work` for substantial findings
-while retaining its maintainability bar and inline `/review` behavior. Skill
-completion is evidence about a step, not automatic completion of the whole task.
+Before presenting a PR candidate as review-ready, the implementer makes one
+bounded simplification pass over the changed code, preserving behavior and
+rerunning affected checks. No worthwhile simplification is a valid no-change
+result; this is not an unrelated refactor or a repeat-until-perfect loop. Skill
+completion remains evidence about a step, not completion of the whole task.
+
+### Code review modes
+
+- `/review <target>` uses `correctness-review`: business logic, behavioral
+  defects and concrete regression risks first. Findings identify a trigger,
+  expected/observed behavior and evidence; style preferences are not defects.
+- `/review-quality <target>` uses the existing Thermo-Nuclear rubric for an
+  explicit strict structural/maintainability audit. Its approval bar is unchanged.
+
+Both commands run inline and return results in the conversation; neither starts
+another reviewer or posts externally. Both skills remain available through
+`/skill:<name>`. Ordinary review requests can use `correctness-review` directly;
+the structural audit is not an automatic second gate. Author self-review is not
+independent review, and no findings is not permission to merge.
+
+Run `/reload` after installing this revision to refresh prompts and skill
+discovery. No daemon change or `/mission-check` activation is needed.
 
 ### Project-placement guidance and evaluation
 

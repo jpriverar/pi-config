@@ -33,6 +33,7 @@ const skillNames = [
   "grill-me",
   "thinking-partner",
   "handoff",
+  "correctness-review",
   "thermo-nuclear-code-quality-review",
   "explaining-technical-work",
   "development-workflow",
