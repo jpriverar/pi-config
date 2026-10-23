@@ -1,7 +1,9 @@
 # Verification
 
 Choose the smallest proof that covers the changed behavior and the repository's
-requirements. Deployment health and feature behavior are separate claims.
+requirements. Evidence belongs to a candidate/revision, configuration and
+environment. Deployment health and feature behavior are separate claims; an
+artifact, task transition, loaded skill or completed agent session proves neither.
 
 ## Define the proof before an expensive run
 
@@ -48,12 +50,16 @@ Report the exact missing proof. Continue independent approved work; otherwise
 propose waiting, a valid alternative proof, or a specific user-approved exception.
 Neither an environment problem nor a waiver grants merge/deployment authority.
 
-Carry agreed missing runtime proof into the existing task or an approved,
-independently meaningful verification task. There is no mandatory production task
-for a local tool or a PR-only deliverable. See
-[handoff and communication](handoff-and-communication.md).
+Keep agreed missing runtime proof in the same task by default. A delayed rollout
+is a wait, not successful delivery or an automatic verification successor. Split
+only for an independently meaningful outcome with approval and an explicit
+handoff. There is no mandatory production task for a local tool or a PR-only
+deliverable. See [handoff and communication](handoff-and-communication.md).
 
-On resume after a code change, redeployment, or long wait, reassess evidence
-freshness. A replaced staging build or changed dependency can invalidate an older
-success. Recheck affected assertions and revisit exceptions whose risk changed.
-A timer becoming due means recheck the environment, not that deployment occurred.
+After every material correction—including review/QA fixes, recovery, automation
+and late cleanup changes—revisit affected tests, review and environment proof.
+Reassess freshness after redeployment or a long wait: a replaced staging build,
+changed targeting or changed dependency can invalidate an older success. Reuse
+unchanged evidence rather than mechanically repeating it, and revisit exceptions
+whose risk changed. A timer becoming due means recheck the environment, not that
+deployment occurred.

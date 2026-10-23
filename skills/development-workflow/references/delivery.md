@@ -6,20 +6,24 @@ A request for a review-ready PR does not silently become a production rollout.
 
 ## Make the change reviewable
 
-Keep focused tests, CI fixes, PR creation, rebases, review fixes, and agreed
-pre-merge proof with implementation. Publish or refresh the PR when that is part
-of the approved scope, rather than making the user repeat the request. Keep its
-title, description, related PRs, and merge order accurate. Planning notes belong
-in task evidence unless they are intended repository deliverables.
+Build, run focused tests, self-review, and simplify before treating the candidate
+as ready for external proof. Then open or update a **draft PR** when publication
+is authorized; do not wait until every review/QA phase is over to make the change
+reviewable. CI and independent review can overlap. Run applicable pre-merge QA
+when its prerequisites are available. Early environment exploration is not proof
+for code changed afterward.
 
-Review and validation may overlap. The diagram is a navigation aid, not new task
-states or a rule against early human feedback:
+Keep tests, CI fixes, rebases, review fixes and agreed pre-merge proof with the
+implementation. Keep the PR title, description, related PRs and merge order
+accurate. Planning notes belong in task evidence unless they are intended
+repository deliverables. The [delivery map](../SKILL.md) is navigation, not new
+task states or a rule against early human feedback.
 
-```text
-Implement / PR → review + CI + applicable proof → ready for authorized merge
-                    ↑              |
-                    └─ affected fixes / rechecks
-```
+Code/config fixes from review, CI, QA, recovery or late cleanup return to the
+build/self-review/simplification loop and affected tests, review and QA. Unchanged
+evidence need not be repeated mechanically. An environment-only failure need not
+restart code review; a broken design assumption may require returning to intent
+or design.
 
 ## Review with context and independence
 
@@ -43,12 +47,20 @@ Use current PR state, actual review threads, repository requirements, checks,
 conflicts, related PRs, and relevant validation evidence to assess readiness.
 Identify who is expected to merge. A green CI run is not merge authority.
 
+When the PR is ready and posting is authorized, share it in the approved existing
+Slack thread with the validation status and review/merge ask. If audience or
+authority is missing, ask for that concrete decision rather than inventing a
+channel. Continue other useful approved work meanwhile. See
+[handoff and communication](handoff-and-communication.md) for thread continuity.
+
 Merge only under the applicable explicit authorization. A watcher's auto-merge or
 feedback options are capabilities, not permission. When invoking a specialist,
 retain its result and limitations, then return to this workflow; “nothing left
 to babysit” is not evidence that every commitment is complete.
 
-After merge, verify the merge and remaining closeout conditions. If communication
-or a handoff still needs an agent, resume actionable work rather than auto-close.
-Use [handoff and communication](handoff-and-communication.md) before ending the
-producing task. Merged code is not deployment or feature-behavior proof.
+After merge, verify it, then carry out the remaining agreed delivery work: confirm
+the deployed revision/targeting, validate actual behavior, send the final agreed
+update, and finish cleanup. Merged code is not deployment or feature-behavior
+proof. A post-merge defect uses a corrective change/PR, not rewritten merged
+history. If rollout is delayed, retain the task and concrete next action through
+the wait. Do not auto-close while an agent still owes validation or communication.
