@@ -88,9 +88,12 @@ promise unattended follow-through or silently add a watcher to compensate.
 
 ## Communicate where it advances the work
 
-Use the approved audience and existing thread. Record its link, the last useful
-message, and which deliverable owns any outstanding update. Re-read the thread
-before publishing so another session does not duplicate a message or miss a reply.
+Use the approved audience and existing thread. If no external audience was
+approved, report in the current conversation. A visible destination ID is not
+approval: do not add it to the description, next step or journal as a commitment.
+Record an approved thread's link, the last useful message, and which deliverable
+owns any outstanding update. Re-read the thread before publishing so another
+session does not duplicate a message or miss a reply.
 
 - **Ready-PR review request:** change/PR link, relevant context, validation status,
   exact ask and intended merge owner in the approved thread. Drafting a message

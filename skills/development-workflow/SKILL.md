@@ -40,7 +40,9 @@ with the task description, evidence, and current facts. The description keeps th
 mission, observable finish criteria, and scope. Revalidate the recorded
 `next_step`; it is one current action/check, not a plan, permission, or proof of
 completion. Missing or contradictory records require conversation-based judgment,
-not a smaller inferred mission.
+not a smaller inferred mission. When refreshing records, carry only agreed
+outcomes and audiences; available tools, IDs and destinations are context, not
+authorization.
 
 | Choice    | Condition                                                                                                      |
 | --------- | -------------------------------------------------------------------------------------------------------------- |
