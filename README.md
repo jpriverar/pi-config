@@ -76,7 +76,7 @@ read-only migration report.
 
 With an explicitly activated catalog, `/area` and `/project` select global,
 area, or project views and manage described, persistent entities—even empty
-projects. Each project inherits its area's explicit local-only or Datadog
+projects. Each project inherits its area's explicit local-only or linked work-item
 publication policy for **new tasks**. There is no default-board fallback.
 Selection does not claim or release work; a session-owned task outside the view
 remains visible in status. Renames preserve stable identity and aliases; moves

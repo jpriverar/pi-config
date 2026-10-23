@@ -570,15 +570,15 @@ test("proposal guard permits fixture and skill reads but blocks escapes and all 
 test("isolated fixture satisfies the parent-policy launcher without inheriting live policy", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "skill-bootstrap-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const credentials = join(root, "fake-credentials");
-  await mkdir(credentials);
-  await writeFile(join(credentials, "auth.json"), "{}");
-  await writeFile(join(credentials, "models.json"), "{}");
+  const credentialDirectory = join(root, "fake-credentials");
+  await mkdir(credentialDirectory);
+  await writeFile(join(credentialDirectory, "auth.json"), "{}");
+  await writeFile(join(credentialDirectory, "models.json"), "{}");
   const controller = new AbortController();
   const fixture = await runner.createFixture(
     root,
     controller.signal,
-    credentials,
+    credentialDirectory,
   );
   const wrapper = join(root, "launcher.mjs");
   await writeFile(

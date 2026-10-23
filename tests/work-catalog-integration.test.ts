@@ -1,3 +1,25 @@
+import {
+  SessionManager,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
+import tasksOverlay from "../extensions/tasks-overlay/index.js";
+import herdrClone from "../extensions/herdr-clone/index.js";
+import {
+  createCatalogService,
+  type CatalogCommand,
+} from "../lib/work-catalog/service.js";
+import {
+  buildWorkView,
+  selectWorkIssues,
+  workSelectionLabel,
+} from "../lib/work-catalog/membership.js";
+import {
+  persistSessionWorkScope,
+  resolveSessionSelection,
+} from "../lib/session-project.js";
+import type { CatalogIssue, WorkCatalog } from "../lib/work-catalog/model.js";
 import { hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createLifecycleStore } from "../lib/task-lifecycle/beads-store.js";
@@ -21,6 +43,7 @@ import {
   writeFile,
   readFile,
   stat,
+  readdir,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,8 +129,8 @@ test(
 );
 
 test(
-  "real-store CLI preview and prepare preserve bindings, lifecycle, and journal through exact-plan recovery",
-  { timeout: 90000 },
+  "real-store migration, routing, and session views preserve existing task history",
+  { timeout: 120000 },
   async (t) => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), "pi-migration-test-")),
@@ -291,5 +314,272 @@ test(
     assert.equal(fresh.metadata.piWorkManagement, undefined);
     await activateCatalogMigration(plan, deps);
     assert.deepEqual((await store.show(old.id)).metadata, before.metadata);
+
+    const service = createCatalogService({ client, store: catalog, storePath });
+    const apply = async (command: CatalogCommand) =>
+      service.apply(command, (await service.read()).revision, owner);
+    const localArea = Object.keys(plan.catalog.areas)[0];
+    const remoteTarget = {
+      ...target,
+      projectId: "99999999-9999-4999-8999-999999999999",
+    };
+    const remoteArea = await apply({
+      kind: "create_area",
+      name: "Operations",
+      description: "Service operations fixture.",
+      publication: { mode: "datadog", target: remoteTarget },
+    });
+    const localProject = await apply({
+      kind: "create_project",
+      name: "Local Work",
+      description: "Local fixture work.",
+      areaId: localArea,
+    });
+    const remoteProject = await apply({
+      kind: "create_project",
+      name: "Published Work",
+      description: "Published fixture work.",
+      areaId: remoteArea.entityId,
+    });
+    const issues = async () => {
+      const result = await client.listIssues();
+      if (!result.ok) throw new Error(result.error.message);
+      return result.value;
+    };
+    const empty = buildWorkView(await service.read(), await issues(), {
+      kind: "global",
+    });
+    for (const id of [localProject.entityId, remoteProject.entityId]) {
+      const row = empty.projects.find((row) => row.project.id === id)!;
+      assert.equal(row.hidden, false);
+      assert.equal(row.unfinished, 0);
+    }
+    const localTask = await store.create(
+      {
+        title: "Local scoped fixture",
+        why: "Local area route",
+        needsJp: false,
+        projectId: localProject.entityId,
+        scope: { kind: "global" },
+      },
+      lifecycle,
+      owner,
+    );
+    const remoteTask = await store.create(
+      {
+        title: "Published scoped fixture",
+        why: "Explicit area route",
+        needsJp: false,
+        projectId: remoteProject.entityId,
+        scope: { kind: "area", areaId: remoteArea.entityId },
+      },
+      lifecycle,
+      owner,
+    );
+    assert.equal(localTask.metadata.piWorkManagement, undefined);
+    const savedRemote = structuredClone(remoteTask.metadata);
+    assert.deepEqual(
+      (remoteTask.metadata.piWorkManagement as { target: unknown }).target,
+      remoteTarget,
+    );
+    await apply({
+      kind: "describe",
+      entity: "project",
+      id: remoteProject.entityId,
+      description: "Revised fixture description; same identity.",
+    });
+    await apply({
+      kind: "rename",
+      entity: "project",
+      id: remoteProject.entityId,
+      name: "Renamed Published Work",
+    });
+    await apply({
+      kind: "move_project",
+      projectId: remoteProject.entityId,
+      areaId: localArea,
+    });
+    const final = await service.read();
+    assert.equal(
+      final.projects[remoteProject.entityId].description,
+      "Revised fixture description; same identity.",
+    );
+    assert.deepEqual((await store.show(remoteTask.id)).metadata, savedRemote);
+    assert.deepEqual((await store.show(old.id)).metadata, before.metadata);
+    assert.deepEqual(await store.comments(old.id), comments);
+    const rows = await issues();
+    const view = buildWorkView(final, rows, {
+      kind: "area",
+      areaId: localArea,
+    });
+    assert.ok(view.issues.some((row) => row.id === localTask.id));
+    assert.ok(view.issues.some((row) => row.id === remoteTask.id));
+    assert.equal(
+      view.projects.find((row) => row.project.id === remoteProject.entityId)!
+        .destinationMismatches,
+      1,
+    );
+    await verifySessionViews(
+      root,
+      catalog,
+      final,
+      rows,
+      remoteProject.entityId,
+      remoteTask.id,
+    );
   },
 );
+
+async function verifySessionViews(
+  root: string,
+  catalog: ReturnType<typeof createCatalogStore>,
+  currentCatalog: WorkCatalog,
+  issues: CatalogIssue[],
+  projectId: string,
+  taskId: string,
+) {
+  const source = SessionManager.create(root, join(root, "sessions"));
+  source.appendMessage({
+    role: "user",
+    content: "Synthetic catalog session",
+    timestamp: 1,
+  });
+  const leaf = source.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "Synthetic answer" }],
+    api: "openai-responses",
+    provider: "openai",
+    model: "fixture",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 2,
+  });
+  persistSessionWorkScope(source, { kind: "project", projectId });
+  source.branch(leaf);
+  const sourceFile = source.getSessionFile()!;
+  let current = SessionManager.open(sourceFile, source.getSessionDir(), root);
+  const verify = (manager: SessionManager) => {
+    const selected = resolveSessionSelection(manager, currentCatalog);
+    assert.equal(selected.kind, "catalog");
+    assert.equal(workSelectionLabel(selected), "Renamed Published Work");
+    assert.deepEqual(
+      selectWorkIssues(selected, issues).map((issue) => issue.id),
+      [taskId],
+    );
+  };
+  verify(current);
+  type Handler = (event: { reason?: string }, ctx: ExtensionContext) => unknown;
+  const handlers = new Map<string, Handler>();
+  const pi = {
+    on: (name: string, handler: Handler) => handlers.set(name, handler),
+    registerCommand: () => {},
+    registerShortcut: () => {},
+    appendEntry: (type: string, data: unknown) =>
+      current.appendCustomEntry(type, data),
+    setSessionName: (name: string) => current.appendSessionInfo(name),
+    exec: async () => {
+      throw new Error("Unexpected external command in scoped session fixture");
+    },
+  } as unknown as ExtensionAPI;
+  const context = () =>
+    ({
+      cwd: root,
+      sessionManager: current,
+      ui: {
+        notify: (message: string, level?: string) => {
+          if (level !== "info") assert.fail(message);
+        },
+      },
+    }) as unknown as ExtensionContext;
+  tasksOverlay(pi, { catalog });
+  await handlers.get("session_start")!({ reason: "resume" }, context());
+  await handlers.get("session_before_fork")!({}, context());
+  current.createBranchedSession(leaf);
+  await handlers.get("session_start")!({ reason: "fork" }, context());
+  verify(current);
+  verify(
+    SessionManager.open(
+      current.getSessionFile()!,
+      source.getSessionDir(),
+      root,
+    ),
+  );
+
+  const savedEnv = {
+    HERDR_ENV: process.env.HERDR_ENV,
+    HERDR_PANE_ID: process.env.HERDR_PANE_ID,
+    HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
+  };
+  Object.assign(process.env, {
+    HERDR_ENV: "1",
+    HERDR_PANE_ID: "w1:p1",
+    HERDR_SOCKET_PATH: join(root, "fake-herdr.sock"),
+  });
+  try {
+    let cloneCommand:
+      | Parameters<ExtensionAPI["registerCommand"]>[1]
+      | undefined;
+    const beforeFiles = new Set(await readdir(source.getSessionDir()));
+    const calls: string[] = [];
+    herdrClone({
+      registerCommand: (_name, command) => {
+        cloneCommand = command;
+      },
+      getThinkingLevel: () => "low",
+      exec: async (command, args) => {
+        calls.push(command);
+        return {
+          code: 0,
+          killed: false,
+          stderr: "",
+          stdout: JSON.stringify({
+            result:
+              args[0] === "pane"
+                ? { pane: { pane_id: "w1:p2" } }
+                : {
+                    agent: {
+                      pane_id: "w1:p2",
+                      terminal_id: "fixture",
+                      name: args[2],
+                      kind: "pi",
+                      state: "idle",
+                    },
+                  },
+          }),
+        };
+      },
+    } as ExtensionAPI);
+    await cloneCommand!.handler("", {
+      ...context(),
+      sessionManager: source,
+      mode: "tui",
+      model: { provider: "openai", id: "fixture" },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+    } as unknown as ExtensionCommandContext);
+    assert.deepEqual(calls, ["herdr", "herdr"]);
+    const clonedFiles = (await readdir(source.getSessionDir())).filter(
+      (file) => !beforeFiles.has(file),
+    );
+    assert.equal(clonedFiles.length, 1);
+    verify(
+      SessionManager.open(
+        join(source.getSessionDir(), clonedFiles[0]),
+        source.getSessionDir(),
+        root,
+      ),
+    );
+    verify(source);
+  } finally {
+    for (const [key, value] of Object.entries(savedEnv))
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+  }
+}
