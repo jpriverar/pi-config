@@ -185,8 +185,8 @@ ensure_formula beads
 export VOLTA_HOME="$HOME/.volta"
 export PATH="$VOLTA_HOME/bin:$PATH"
 run_step "Volta install node@22.19.0" volta install node@22.19.0
-run_step "npm install @earendil-works/pi-coding-agent@0.84.1" \
-  npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.1
+run_step "npm install @earendil-works/pi-coding-agent@1.2.0" \
+  npm install --global --ignore-scripts @earendil-works/pi-coding-agent@1.2.0
 
 run_step "profile validation" run_profile_command validate
 snapshot_settings
@@ -200,8 +200,8 @@ NODE_VERSION=$(node --version)
 [ "$NODE_VERSION" = "v22.19.0" ] || \
   fail "expected node version v22.19.0, got $NODE_VERSION"
 PI_VERSION=$(pi --version)
-[ "$PI_VERSION" = "0.84.1" ] || \
-  fail "expected pi version 0.84.1, got $PI_VERSION"
+[ "$PI_VERSION" = "1.2.0" ] || \
+  fail "expected pi version 1.2.0, got $PI_VERSION"
 
 mkdir -p "$HOME/beads"
 (

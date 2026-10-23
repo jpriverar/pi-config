@@ -180,7 +180,7 @@ async function expectedHappyPathCommandLog(state: BootstrapState) {
     "brew list --formula beads",
     "brew install beads",
     "volta install node@22.19.0",
-    "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.1",
+    "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@1.2.0",
     `node ${reconcilerPath} validate --agent-dir ${agentDir} --repo-dir ${state.repoRoot}`,
     `node ${reconcilerPath} settings --agent-dir ${agentDir} --repo-dir ${state.repoRoot}`,
     `pi install ${state.repoRoot}`,
@@ -461,7 +461,7 @@ for argument in "$@"; do
   printf " %s" "$argument" >> "$BOOTSTRAP_COMMAND_LOG"
 done
 printf "\\n" >> "$BOOTSTRAP_COMMAND_LOG"
-if [ "$#" -eq 4 ] && [ "$1" = "install" ] && [ "$2" = "--global" ] && [ "$3" = "--ignore-scripts" ] && [ "$4" = "@earendil-works/pi-coding-agent@0.84.1" ]; then
+if [ "$#" -eq 4 ] && [ "$1" = "install" ] && [ "$2" = "--global" ] && [ "$3" = "--ignore-scripts" ] && [ "$4" = "@earendil-works/pi-coding-agent@1.2.0" ]; then
   exit 0
 fi
 echo "unexpected npm invocation: $*" >&2
@@ -508,7 +508,7 @@ for argument in "$@"; do
 done
 printf "\\n" >> "$BOOTSTRAP_COMMAND_LOG"
 if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
-  printf "%s\\n" "${options.fakePiVersion ?? "0.84.1"}"
+  printf "%s\\n" "${options.fakePiVersion ?? "1.2.0"}"
   exit 0
 fi
 if [ "$#" -eq 2 ] && [ "$1" = "install" ]; then
@@ -1357,7 +1357,7 @@ test("bootstrap fails before Beads setup when pi is not the reviewed version", a
 
   assert.equal(result.status, 1);
   assert.equal(result.stdout.includes("/login"), false);
-  assert.match(result.stderr, /expected pi version 0\.84\.1, got 0\.84\.2/);
+  assert.match(result.stderr, /expected pi version 1\.2\.0, got 0\.84\.2/);
   assert.equal(result.commandLog.includes("node --version"), true);
   assert.equal(result.commandLog.includes("pi --version"), true);
   assert.equal(

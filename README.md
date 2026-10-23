@@ -18,7 +18,7 @@ cd pi-config
 Any clone path is valid; whichever checkout you bootstrap becomes the local
 package source that Pi loads.
 
-The script installs and owns Node.js 22.19.0 via Volta, Pi 0.84.1, this
+The script installs and owns Node.js 22.19.0 via Volta, Pi 1.2.0, this
 checkout as the local Pi package source, five public npm package sources, and
 upstream Superpowers:
 
@@ -169,8 +169,9 @@ network requests are rejected and personal credentials are not loaded.
 On a stable Pi runtime **1.2.0 or newer**, the operator can use
 `/mission-check on|off|status`. Review is **off by default**, parent-only and
 session-local; new, resumed and forked sessions start off. Task text cannot
-enable it. The personal bootstrap above still pins an older runtime and does
-not provide this capability; upgrading that host is a separate operation.
+enable it. The personal bootstrap pins the tested 1.2.0 runtime. Reloading this
+package does not upgrade an older host; upgrade it explicitly before using this
+revision's native context-delivery and settlement behavior.
 
 When enabled, a native pre-settlement hook offers one automatic reconsideration
 of the latest user agreement against completed work. The SDK presents the cue

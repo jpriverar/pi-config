@@ -116,7 +116,7 @@ test("README documents the public macOS bootstrap flow and boundaries", () => {
   );
   for (const snippet of [
     "Homebrew is the only prerequisite.",
-    "The script installs and owns Node.js 22.19.0 via Volta, Pi 0.84.1, this checkout as the local Pi package source, five public npm package sources, and upstream Superpowers:",
+    "The script installs and owns Node.js 22.19.0 via Volta, Pi 1.2.0, this checkout as the local Pi package source, five public npm package sources, and upstream Superpowers:",
     "- `npm:pi-mcp-adapter@2.26.0`",
     "- `npm:pi-subagents@0.50.0`",
     "- `npm:context-mode@1.0.169`",
