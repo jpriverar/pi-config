@@ -86,7 +86,7 @@ read-only migration report.
 On **Pi 1.2 or newer within 1.x**, this package exposes three tools:
 
 - `schedule_wakeup`: schedule one follow-up check and return immediately.
-- `list_wakeups`: inspect the pending check and retained wait deadline.
+- `list_wakeups`: inspect the pending alarm and retained follow-up cutoff.
 - `cancel_wakeup`: cancel an exact pending ID and stop automatic rearming.
 
 The personal bootstrap and development SDK use Pi 1.2.0. On older, prerelease,
@@ -106,23 +106,47 @@ with:
 }
 ```
 
-The agent ends its turn. At the due time, the runtime sends a visible custom
-continuation—not fresh user input—and starts another turn. The agent must still
-verify the external operation's actual state. Prefer an existing background
-completion event when one already supplies that signal.
+The agent ends its turn. Once due and the session is available, the runtime sends
+a visible custom continuation—not fresh user input—and requests another turn.
+The agent must still verify the external operation's actual state. Prefer an
+existing background completion event when one already supplies that signal.
 
-Only one wakeup may be pending. Delays must be whole seconds from **60 to 3600**.
-The initial wait budget defaults to one hour and may be set up to 24 hours; it
-must exceed the first delay. Every subsequent check retains the original
-absolute deadline, even if its prompt changes. Prompts must contain nonempty text
-of at most 8192 characters; reasons at most 512. Tool results include the pending
-ID, prompt/reason, due time, and deadline; timestamps are Unix milliseconds.
+Choose **exactly one** timing input:
 
-Busy runs, compaction, and queued user input postpone delivery. Expired work is
-dropped with a notice instead of starting another model turn. Cancellation or
-an aborted run blocks automatic rearming until fresh real user input. Real input
-during an active wait does not silently renew its deadline. A `checking` status
-means the resumed turn is running, not that another timer is pending.
+- `delaySeconds`: a whole number from **60 to 3600**.
+- `at`: a calendar-valid `YYYY-MM-DDTHH:mm:ss[.sss]` timestamp with `Z` or an
+  explicit UTC offset, **60 seconds through 7 days ahead**. Up to three fractional
+  digits are accepted; timezone-free dates are rejected. For example,
+  `"at": "2030-06-10T09:00:00+02:00"` (substitute a target within the next week).
+
+Both forms share one pending alarm. Busy runs, compaction, and queued input take
+priority. An armed alarm remains pending however late it becomes while the
+session survives; lateness does not discard it. Delivery is best-effort, not an
+exact-time guarantee.
+
+`timeoutSeconds` bounds **additional automatic checks**, not delivery of an
+already-armed alarm. It accepts whole seconds from **61 to 86400**, default 3600:
+
+- Initial relative check: cutoff is scheduling time plus the budget; the budget
+  must exceed the delay.
+- Initial absolute check: cutoff is the target time plus the budget.
+- Later checks retain the original cutoff, even when switching timing forms.
+  Their due times must precede it. Omit `timeoutSeconds` or repeat its initial
+  value; changing it cannot renew the budget.
+
+For example, an absolute alarm for tomorrow at 09:00 with a one-hour budget has
+an automatic-follow-up cutoff of 10:00 tomorrow. If the session cannot run until
+11:00, that alarm still delivers once, but it cannot automatically schedule
+another check. Fresh real user input is needed to start a new budget after the
+check settles. Input during an active wait does not silently renew its cutoff.
+Cancellation or an aborted run also blocks automatic rearming until fresh input.
+
+Prompts must contain nonempty text of at most 8192 characters; reasons at most 512. Results include the pending ID, prompt/reason, `dueAt`, and `deadline`, in
+Unix milliseconds. **`deadline` is the follow-up cutoff, not alarm expiry.**
+`scheduled` includes overdue alarms. `checking` means a continuation was
+requested, not that another timer is pending; `completed` describes that turn,
+not the watched operation. `expired` means the follow-up cutoff has elapsed
+without a pending alarm—it never removes an already-armed alarm.
 
 Session replacement, branch navigation, reload, and exit cancel pending work.
 Scheduling state is not persisted or replayed after restart. Cancellation cannot retract a
@@ -132,20 +156,23 @@ blind retries. A wakeup grants no extra authority to publish, merge, deploy, or
 claim work.
 
 The scheduler uses one in-process timer, with no background daemon or network
-polling. Resumed agents use their normal tools and provider. Waiting between
-checks makes no model requests.
+polling. Future alarms recheck wall time at intervals of at most one minute;
+busy overdue alarms retry availability every five seconds. This catches clock
+changes and suspend/resume without early delivery or a post-cutoff timer spin.
+Resumed agents use their normal tools and provider. Waiting makes no model requests.
 
 In the interactive TUI, yielding with a pending check adds a compact waiting
-notice with its reason and local due time. These display-only entries stay in
-chat history but never enter model context or restore timers. Cancellation and
-expiry close the notice; repeated status reads do not add duplicate notices.
+notice with its reason and local due time; long waits use days and hours.
+Overdue labels retain the original due time. These display-only entries stay in
+chat history but never enter model context or restore timers. Cancellation
+closes the notice; repeated status reads do not add duplicate notices.
 Active work, queued input, and human-input blockers take precedence over the
 live waiting label. There is no continuously repainting countdown.
 
 The existing Herdr pane reporter also publishes `pi_waiting`. The optional
 [sidebar layout](plugins/herdr-space-tabs/README.md) renders it in warm amber
 without changing Herdr’s native state dot. Labels clear on resumption,
-cancellation, expiry, session replacement, reload, and orderly shutdown;
+cancellation, session replacement, reload, and orderly shutdown;
 startup clears stale values. Forced process termination cannot guarantee
 cleanup. Sidebar delivery remains bounded and best-effort.
 

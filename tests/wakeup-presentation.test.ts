@@ -128,3 +128,66 @@ test("display persistence and consumer failures cannot interrupt scheduler state
     ),
   );
 });
+
+for (const [minutes, label] of [
+  [60, "1 h"],
+  [3064, "2 d 3 h 4 min"],
+  [10080, "7 d"],
+] as const) {
+  test(`long waiting notices display ${label} instead of raw minutes`, (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now });
+    const h = harness();
+    h.view.update(
+      { ...scheduled, pending: { ...pending, dueAt: now + minutes * 60_000 } },
+      h.context,
+    );
+    const component = h.renderers.get("wakeup-wait")!(
+      {
+        type: "custom",
+        id: "entry",
+        parentId: null,
+        timestamp: new Date(now).toISOString(),
+        ...h.entries[0],
+      },
+      { expanded: false },
+      { fg: (_color: string, text: string) => text } as Theme,
+    )!;
+    assert.ok(
+      component
+        .render(160)
+        .join("\n")
+        .includes(`Waiting ${label} · next check at`),
+    );
+  });
+}
+
+test("a first notice shown overdue preserves the original date instead of saying due now", (t) => {
+  const old = process.env.TZ;
+  process.env.TZ = "UTC";
+  t.after(() => {
+    if (old === undefined) delete process.env.TZ;
+    else process.env.TZ = old;
+  });
+  t.mock.timers.enable({ apis: ["Date"], now: now + 3 * 86_400_000 });
+  const h = harness();
+  h.view.update(scheduled, h.context);
+  const component = h.renderers.get("wakeup-wait")!(
+    {
+      type: "custom",
+      id: "entry",
+      parentId: null,
+      timestamp: new Date(now).toISOString(),
+      ...h.entries[0],
+    },
+    { expanded: false },
+    { fg: (_color: string, text: string) => text } as Theme,
+  )!;
+  const text = component.render(160).join("\n");
+  assert.match(text, /overdue since/i);
+  assert.match(text, /Feb 1/);
+  assert.doesNotMatch(text, /due now/);
+});
+
+test("date labels disambiguate an overdue alarm from a previous year", () => {
+  assert.match(wakeupTime(now, Date.UTC(2027, 1, 1)), /2026/);
+});

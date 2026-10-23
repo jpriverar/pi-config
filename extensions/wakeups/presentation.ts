@@ -30,7 +30,32 @@ export function wakeupTime(dueAt: number, now = Date.now()): string {
     minute: "2-digit",
     timeZoneName: "short",
     ...(sameDay ? {} : { month: "short", day: "numeric" }),
+    ...(due.getFullYear() === new Date(now).getFullYear()
+      ? {}
+      : { year: "numeric" }),
   }).format(due);
+}
+
+function waitDuration(milliseconds: number): string {
+  const minutes = Math.ceil(milliseconds / 60_000);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  return [
+    days && `${days} d`,
+    hours && `${hours} h`,
+    minutes % 60 && `${minutes % 60} min`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function waitingTitle(data: WaitNotice): string {
+  const remaining = data.dueAt - data.recordedAt;
+  if (remaining === 0) return "◷ Waiting · next check due now";
+  const due = wakeupTime(data.dueAt, data.recordedAt);
+  return remaining > 0
+    ? `◷ Waiting ${waitDuration(remaining)} · next check at ${due}`
+    : `◷ Waiting · overdue since ${due}`;
 }
 
 export function createWakeupPresentation(pi: ExtensionAPI) {
@@ -45,12 +70,9 @@ export function createWakeupPresentation(pi: ExtensionAPI) {
     (entry, _options, theme) => {
       const data = entry.data;
       if (!data) return new Text("Wait status unavailable", 0, 0);
-      const remaining = data.dueAt - data.recordedAt;
       const title =
         data.phase === "waiting"
-          ? remaining > 0
-            ? `◷ Waiting ${Math.ceil(remaining / 60_000)} min · next check at ${wakeupTime(data.dueAt, data.recordedAt)}`
-            : "◷ Waiting · next check due now"
+          ? waitingTitle(data)
           : `◷ Wait ${data.phase === "expired" ? "expired" : "cancelled"}`;
       return new Text(
         `${theme.fg("warning", title)}\n${theme.fg("muted", clean(data.reason))}`,
@@ -77,7 +99,7 @@ export function createWakeupPresentation(pi: ExtensionAPI) {
       context.isIdle() &&
       !context.hasPendingMessages();
     const label = waiting
-      ? `Waiting · until ${wakeupTime(pending.dueAt)}`
+      ? `${pending.dueAt < Date.now() ? "Overdue · since" : "Waiting · until"} ${wakeupTime(pending.dueAt)}`
       : null;
     if (label !== lastLabel) {
       try {
