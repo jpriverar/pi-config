@@ -92,6 +92,11 @@ the view, never ownership or claims. A session-owned task outside the view stays
 visible in status with an outside-current-view marker. Fork, clone, and clear
 preserve explicit session-wide scope, including global scope.
 
+Compatibility remains for sessions without scope metadata: an exact registered
+display name or alias resolves to that project; unmatched names require explicit
+selection, and generated suffixes are not guessed. Explicit scope always takes
+precedence. Select `/area` or `/project` to remove this legacy ambiguity.
+
 The `work_catalog` tool provides bounded `list_areas`, `list_projects`, `get_area`,
 `get_project`, and `select` actions plus catalog mutations. Lists expose summaries,
 not raw targets or executable configuration, and return `nextOffset` for additional

@@ -100,3 +100,40 @@ test("encoded and decoded catalogs enforce a UTF-8 byte bound", () => {
   assert.throws(() => encodeWorkCatalog(catalog), /63 KiB/);
   assert.throws(() => decodeWorkCatalog(JSON.stringify(catalog)), /63 KiB/);
 });
+
+test("catalog names and compatibility keys reject bidi formatting without rejecting international text", () => {
+  for (const control of [
+    "\u202a",
+    "\u202b",
+    "\u202c",
+    "\u202d",
+    "\u202e",
+    "\u2066",
+    "\u2067",
+    "\u2068",
+    "\u2069",
+  ]) {
+    for (const change of [
+      (catalog: ReturnType<typeof catalogFixture>) => {
+        catalog.areas[A].name += control;
+      },
+      (catalog: ReturnType<typeof catalogFixture>) => {
+        catalog.projects[P].name += control;
+      },
+      (catalog: ReturnType<typeof catalogFixture>) => {
+        catalog.projects[P].workstreamKey += control;
+      },
+      (catalog: ReturnType<typeof catalogFixture>) => {
+        catalog.projects[P].aliases = ["old" + control];
+      },
+    ]) {
+      const catalog = catalogFixture();
+      change(catalog);
+      assert.throws(() => decodeWorkCatalog(catalog), /name|bidirectional/i);
+    }
+  }
+  const catalog = catalogFixture();
+  catalog.areas[A].name = "Équipe";
+  catalog.projects[P].name = "مرحبا 👩‍💻";
+  assert.deepEqual(decodeWorkCatalog(catalog), catalog);
+});

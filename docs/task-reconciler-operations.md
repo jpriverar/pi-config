@@ -141,7 +141,10 @@ and configuration outside public commits.
    ```
 
    Prepared + v1 still permits legacy creation, so the operator's temporary
-   creation pause is essential. Any relevant source/config changes require a
+   creation pause is essential. Ordinary lifecycle status changes do not invalidate
+   a plan: they do not change reviewed classification. Task IDs, workstream
+   labels, project references, captured destinations, aliases, archives, and
+   configuration remain checked. Any relevant source/config changes require a
    new review; stale plans are refused rather than silently regenerated.
 
 5. **Activate only after approval.** Supply the matching verified build directory:
@@ -158,8 +161,16 @@ and configuration outside public commits.
    snapshots. Active + v2 allows only classified, unarchived projects and their
    area's policy, without legacy fallback. No generic force flag exists.
 
+   Legacy project/label edits are not runtime-disabled while prepared. Keep the
+   coordinated creation/catalog-edit pause in force; these changes still require
+   inspection and a new reviewed recovery decision rather than force/replay.
+
 6. **Read back before resuming creation.** Inspect catalog state/revision/IDs,
-   exact v2 config, daemon health, and `/area`, `/project`, and `/tasks`. Compare
+   exact v2 config, daemon health, and `/area`, `/project`, and `/tasks`. For legacy
+   name-only sessions, explicitly select the intended scope: exact registered
+   display names/aliases still provide compatibility fallback until explicit
+   scope metadata exists; other names require selection. Renaming a chat is not
+   a substitute for deliberate scope selection. Compare
    saved existing task bindings/lifecycle/comments; do not create a disposable
    live task without separate approval. Missing descriptions and unclassified
    imported projects remain explicit review work, not implicit guesses.

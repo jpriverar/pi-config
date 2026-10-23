@@ -87,6 +87,10 @@ export function catalogId(value: unknown): string {
 }
 export function catalogName(value: unknown): string {
   if (typeof value !== "string") throw new Error("work catalog: invalid name");
+  if (/[\u202a-\u202e\u2066-\u2069]/.test(value))
+    throw new Error(
+      "work catalog: name cannot contain bidirectional formatting controls",
+    );
   const result = validateProjectName(value);
   if (!result.ok) throw new Error(`work catalog: ${result.message}`);
   return result.value;

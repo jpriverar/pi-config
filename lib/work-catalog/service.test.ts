@@ -218,3 +218,29 @@ test("creation cannot use an archived area or omit an area description", async (
     ),
   );
 });
+
+test("create and rename reject bidi names before any catalog write", async (t) => {
+  const f = await fixture(t);
+  const name = "Misleading\u202e";
+  for (const command of [
+    {
+      kind: "create_area" as const,
+      name,
+      description: "A responsibility.",
+      publication: { mode: "local" as const },
+    },
+    {
+      kind: "create_project" as const,
+      name,
+      description: "An effort.",
+      areaId: A,
+    },
+    { kind: "rename" as const, entity: "area" as const, id: A, name },
+    { kind: "rename" as const, entity: "project" as const, id: P, name },
+  ])
+    await assert.rejects(
+      f.service.apply(command, 0, f.owner),
+      /name|bidirectional/i,
+    );
+  assert.equal(f.writes(), 0);
+});

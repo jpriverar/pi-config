@@ -109,7 +109,7 @@ function sourceFingerprint(snapshot: MigrationSnapshot): string {
       ids.add(issue.id);
       return {
         id: issue.id,
-        status: issue.status,
+        // Lifecycle progress does not change the reviewed project classification.
         labels: [
           ...new Set(issue.labels.filter((l) => l.startsWith("workstream:"))),
         ].sort(),

@@ -280,3 +280,57 @@ test("activation refuses changed task snapshots, prepared catalogs, and incompat
   assert.equal(h.state.config!.version, 1);
   assert.deepEqual(h.writes, ["prepared"]);
 });
+
+for (const interrupted of [false, true]) {
+  test(`status changes do not strand ${interrupted ? "partial v2 activation" : "prepared v1 migration"}`, async (t) => {
+    const h = await harness(t);
+    await prepareCatalogMigration(h.plan, h.deps);
+    if (interrupted) {
+      h.crash("after-config");
+      await assert.rejects(
+        activateCatalogMigration(h.plan, h.deps),
+        /after-config/,
+      );
+      assert.throws(
+        () => workRoutingMode(h.state.config, h.state.catalog),
+        /catalog/i,
+      );
+      h.crash("");
+    }
+    h.state.issues[0].status = "closed";
+    h.state.issues[1].status = "open";
+    h.state.issues[2].status = "deferred";
+    const currentTasks = structuredClone(h.state.issues);
+    if (!interrupted) await prepareCatalogMigration(h.plan, h.deps);
+    await activateCatalogMigration(h.plan, h.deps);
+    assert.equal(h.state.catalog!.state, "active");
+    assert.deepEqual(h.state.catalog!.projects, h.plan.catalog.projects);
+    assert.deepEqual(h.state.issues, currentTasks);
+  });
+}
+
+test("partial activation still refuses classification and destination changes", async (t) => {
+  const h = await harness(t);
+  await prepareCatalogMigration(h.plan, h.deps);
+  h.crash("after-config");
+  await assert.rejects(
+    activateCatalogMigration(h.plan, h.deps),
+    /after-config/,
+  );
+  h.crash("");
+  const original = structuredClone(h.state.issues[0]);
+  for (const changed of [
+    { ...original, labels: ["workstream:Maintenance"] },
+    {
+      ...original,
+      capturedDestination: { ...target, projectId: "different-project" },
+    },
+  ]) {
+    h.state.issues[0] = changed;
+    await assert.rejects(
+      activateCatalogMigration(h.plan, h.deps),
+      /source.*changed/i,
+    );
+    assert.equal(h.state.catalog!.state, "prepared");
+  }
+});

@@ -1318,3 +1318,67 @@ test("corrupt catalog blocks hidden context instead of broadening scope", async 
   assert.doesNotMatch(result.message.content, /zz-hidden/);
   assert.equal(h.cursors.length, 0);
 });
+
+test("a project moved during catalog refresh leaves the area view and cursor on the next read", async () => {
+  const fixture = catalogViewFixture();
+  const entries: any[] = [
+    {
+      type: "custom",
+      customType: SESSION_PROJECT_ENTRY_TYPE,
+      data: { version: 2, scope: { kind: "area", areaId: A } },
+    },
+  ];
+  const issues = fixture.issues.map((issue) => ({
+    ...issue,
+    lifecycle: lifecycle("actionable", "2026-09-20T12:00:00Z"),
+  }));
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let hold = true;
+  const options = {
+    catalog: fixture.catalog,
+    entries,
+    branch: entries,
+    exec: async () => {
+      if (hold) {
+        entered();
+        await pending;
+      }
+      return {
+        code: 0,
+        stdout: JSON.stringify(issues.map(rawIssue)),
+        stderr: "",
+      };
+    },
+  };
+  const h = createHarness(options);
+  const inFlight = h.handlers.get("before_agent_start")!({}, h.context);
+  await started;
+  options.catalog = structuredClone(fixture.catalog);
+  options.catalog.projects[P].areaId = B;
+  options.catalog.revision++;
+  hold = false;
+  release();
+  const first = await inFlight;
+  assert.match(first.message.content, /zz-api/);
+  assert.doesNotMatch(first.message.content, /zz-other|zz-unscoped/);
+  assert.deepEqual(h.cursors.at(-1)!.data.cursor.knownTaskIds, ["zz-api"]);
+  const next = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.doesNotMatch(next.message.content, /zz-api|zz-other|zz-unscoped/);
+  assert.deepEqual(h.cursors.at(-1)!.data.cursor.knownTaskIds, []);
+  assert.ok(h.cursors.every((entry) => entry.data.scopeKey === `area:${A}`));
+  assert.deepEqual(
+    entries
+      .filter((entry) => entry.customType === SESSION_PROJECT_ENTRY_TYPE)
+      .map((entry) => entry.data),
+    [{ version: 2, scope: { kind: "area", areaId: A } }],
+  );
+  assert.ok(
+    !h.notifications.some((note) => note.message.includes("completed")),
+  );
+});
