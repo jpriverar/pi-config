@@ -72,6 +72,77 @@ See [Task lifecycle](docs/task-lifecycle.md) for tool schemas, Beads mappings,
 artifact and worktree identity, reconciliation behavior, verification, and the
 read-only migration report.
 
+## Scheduled wakeups
+
+On **Pi 1.2 or newer within 1.x**, this package exposes three tools:
+
+- `schedule_wakeup`: schedule one follow-up check and return immediately.
+- `list_wakeups`: inspect the pending check and retained wait deadline.
+- `cancel_wakeup`: cancel an exact pending ID and stop automatic rearming.
+
+The bootstrap's older pinned runtime remains unchanged. On older, prerelease,
+or unknown runtimes, the extension reports that wakeups are disabled rather
+than scheduling without reliable abort information. No slash commands or
+recurring-loop scheduler are added.
+
+For example, an agent checking an approved operation can call `schedule_wakeup`
+with:
+
+```json
+{
+  "delaySeconds": 120,
+  "prompt": "Check deployment run-123. Report its state and schedule another check only if still needed.",
+  "reason": "The approved deployment is still running",
+  "timeoutSeconds": 3600
+}
+```
+
+The agent ends its turn. At the due time, the runtime sends a visible custom
+continuation—not fresh user input—and starts another turn. The agent must still
+verify the external operation's actual state. Prefer an existing background
+completion event when one already supplies that signal.
+
+Only one wakeup may be pending. Delays must be whole seconds from **60 to 3600**.
+The initial wait budget defaults to one hour and may be set up to 24 hours; it
+must exceed the first delay. Every subsequent check retains the original
+absolute deadline, even if its prompt changes. Prompts must contain nonempty text
+of at most 8192 characters; reasons at most 512. Tool results include the pending
+ID, prompt/reason, due time, and deadline; timestamps are Unix milliseconds.
+
+Busy runs, compaction, and queued user input postpone delivery. Expired work is
+dropped with a notice instead of starting another model turn. Cancellation or
+an aborted run blocks automatic rearming until fresh real user input. Real input
+during an active wait does not silently renew its deadline. A `checking` status
+means the resumed turn is running, not that another timer is pending.
+
+Session replacement, branch navigation, reload, and exit cancel pending work.
+Nothing is persisted or replayed after restart. Cancellation cannot retract a
+turn that has already started. Delivery makes one send attempt, not an
+exactly-once execution guarantee; asynchronous errors are reported by Pi without
+blind retries. A wakeup grants no extra authority to publish, merge, deploy, or
+claim work.
+
+The extension itself uses one in-process timer and makes no filesystem, shell,
+or network calls. Resumed agents use their normal tools and provider. Waiting
+between checks makes no model requests.
+
+When replacing a separate preview implementation, remove that package source
+with `pi remove <old-preview-source>` before `/reload`; do not load two packages
+that register the same tool names. This package is already the permanent source
+when installed through the personal bootstrap.
+
+Tests cover the controller, tool adapter, and version guard. The real-SDK tests
+skip on the repository's older pinned SDK. To exercise them against a supported
+installed SDK without changing dependency pins:
+
+```sh
+PI_WAKEUP_SDK=file:///absolute/path/to/pi/dist/index.js \
+  npm run test:file -- tests/wakeups-runtime.test.ts
+```
+
+Those tests use a temporary configuration, fake time, and an in-process provider;
+network requests are rejected and personal credentials are not loaded.
+
 ## Project picker
 
 With an explicitly activated catalog, `/area` and `/project` select global,
@@ -222,7 +293,7 @@ The package manifest loads:
   gates, plan and spec progress, the styled editor, Herdr blocked-state mapping
   and conversation cloning,
   bounded worktree allocation, lifecycle-safe task mutation and presentation,
-  project status, and `/tasks`;
+  project status, `/tasks`, and bounded scheduled wakeups on supported runtimes;
 - eight skill roots: critical review, collaborative thinking, handoffs,
   the Thermo-Nuclear code-quality review, incremental standup updates,
   behavior-first technical explanations, development workflows, and brief RFCs;

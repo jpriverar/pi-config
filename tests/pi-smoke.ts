@@ -41,6 +41,7 @@ const publicManifest = {
     "./extensions/herdr-ask-user-bridge/index.ts",
     "./extensions/herdr-clone/index.ts",
     "./extensions/session-clear/index.ts",
+    "./extensions/wakeups/index.ts",
     "./extensions/worktree-pool/index.ts",
     "./extensions/task-lifecycle/index.ts",
     "./extensions/project-status/index.ts",
