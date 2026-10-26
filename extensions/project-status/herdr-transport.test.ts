@@ -72,6 +72,8 @@ test("publishes only owned keys with argv, sequence and finite execution limits"
     "w1:p2",
     "--source",
     "jp:pi-sidebar",
+    "--agent",
+    "pi",
     "--seq",
     "12",
     "--display-agent",
@@ -240,11 +242,7 @@ test("display labels use only fallback metadata and clear only their own field",
     args[args.indexOf("--display-agent") + 1],
     "jp-one • Fix $(touch nope)",
   );
-  assert.ok(
-    !args.includes("--title") &&
-      !args.includes("--clear-title") &&
-      !args.includes("--agent"),
-  );
+  assert.ok(!args.includes("--title") && !args.includes("--clear-title"));
   for (const displayAgent of [null, "\n "]) {
     calls.length = 0;
     await send({ ...values, displayAgent }, 2, signal);
@@ -262,6 +260,23 @@ test("display labels use only fallback metadata and clear only their own field",
       "jp:pi-sidebar",
     ]);
   }
+});
+
+test("display metadata is scoped to Pi without claiming lifecycle authority", async () => {
+  const calls: string[][] = [];
+  const send = createHerdrMetadataSender(environment, async (_file, args) => {
+    calls.push([...args]);
+    return replyFor(args);
+  })!;
+  await send(values, 1, new AbortController().signal);
+  assert.deepEqual(calls[0].slice(0, 3), ["pane", "report-metadata", "w1:p2"]);
+  assert.equal(calls[0][calls[0].indexOf("--agent") + 1], "pi");
+  assert.ok(
+    calls.every(
+      (args) =>
+        !args.includes("report-agent") && !args.includes("release-agent"),
+    ),
+  );
 });
 
 test("a rejected metadata write never triggers count refresh", async () => {

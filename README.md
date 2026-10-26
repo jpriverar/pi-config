@@ -538,7 +538,8 @@ project/area views still identify their filter.
 The reporter uses native **display-agent metadata**, not a primary title or a
 pane rename. Explicit Herdr titles and manual pane names keep priority, and
 neither Pi's session name nor Herdr's detected agent/lifecycle authority changes.
-With no owned task, the label uses the current session name (normally
+A native Pi guard keeps the display label from applying to a shell or another
+agent in the pane. With no owned task, the label uses the current session name (normally
 `unassigned-<suffix>`), or `Unassigned` if unnamed. Failed or ambiguous task
 lookups show `Task unavailable` rather than pretending no task is owned.
 

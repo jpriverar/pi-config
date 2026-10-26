@@ -47,6 +47,8 @@ export function createHerdrMetadataSender(
       pane,
       "--source",
       "jp:pi-sidebar",
+      "--agent",
+      "pi",
       "--seq",
       String(sequence),
     ];
