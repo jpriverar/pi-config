@@ -1,4 +1,5 @@
 import type { BeadsClient, BeadsIssue } from "../../lib/beads.js";
+import { resolveOwnedTask } from "../../lib/session-identity.js";
 import {
   resolveSessionProject,
   resolveSessionSelection,
@@ -10,6 +11,40 @@ import {
   matchesWorkScope,
   resolveTaskMembership,
 } from "../../lib/work-catalog/membership.js";
+
+export type SessionFactsResult =
+  | {
+      kind: "available";
+      issues: readonly BeadsIssue[];
+      catalog: WorkCatalog | null;
+    }
+  | { kind: "unavailable"; reason: string };
+
+export async function readSessionFacts(
+  client: BeadsClient,
+  readCatalog: () => Promise<WorkCatalog | null>,
+): Promise<SessionFactsResult> {
+  try {
+    const [listed, catalog] = await Promise.all([
+      client.listIssues(),
+      readCatalog(),
+    ]);
+    if (!listed.ok)
+      return {
+        kind: "unavailable",
+        reason: `${listed.error.operation} in Beads store ${listed.error.store}: ${listed.error.message}`,
+      };
+    return { kind: "available", issues: listed.value, catalog };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      reason:
+        error instanceof Error
+          ? error.message
+          : "Session facts lookup failed; no ownership was inferred.",
+    };
+  }
+}
 
 export type TaskSession = SessionProjectReader & { getSessionId?(): string };
 export interface OwnedTaskContext {
@@ -38,7 +73,8 @@ export function selectOwnedTaskContext(
       reason: "Session identity is unavailable; no task was selected.",
     };
   }
-  let selection: SessionWorkSelection;
+  let selection: SessionWorkSelection | undefined;
+  let viewWarning: string | undefined;
   try {
     selection = resolveSessionSelection(session, catalog);
     if (
@@ -47,17 +83,28 @@ export function selectOwnedTaskContext(
     )
       throw new Error("Malformed legacy project scope");
   } catch {
-    return {
-      kind: "unavailable",
-      reason: "Work scope is unavailable or malformed; no task was selected.",
-    };
+    if (catalog?.state !== "active")
+      return {
+        kind: "unavailable",
+        reason: "Work scope is unavailable or malformed; no task was selected.",
+      };
+    viewWarning =
+      "Browse view is unavailable or invalid; ownership is unchanged.";
   }
-  const owned = issues.filter(
-    (issue) =>
-      issue.status === "in_progress" &&
-      issue.lifecycle?.phase === "active" &&
-      issue.lifecycle.execution?.sessionId === sessionId,
-  );
+  let owned: readonly BeadsIssue[];
+  if (catalog?.state === "active") {
+    const selected = resolveOwnedTask(issues, sessionId);
+    if (selected.kind === "unavailable" || selected.kind === "ambiguous")
+      return selected;
+    owned = selected.kind === "owned" ? [selected.issue] : [];
+  } else {
+    owned = issues.filter(
+      (issue) =>
+        issue.status === "in_progress" &&
+        issue.lifecycle?.phase === "active" &&
+        issue.lifecycle.execution?.sessionId === sessionId,
+    );
+  }
   if (owned.length === 0)
     return { kind: "none", reason: "No owned active task was found." };
   if (owned.length !== 1) {
@@ -72,7 +119,7 @@ export function selectOwnedTaskContext(
     .find((label) => label.startsWith("workstream:"))
     ?.slice("workstream:".length);
   if (
-    selection.kind === "legacy" &&
+    selection?.kind === "legacy" &&
     selection.project !== undefined &&
     workstream?.toLowerCase() !== selection.project.toLowerCase()
   ) {
@@ -82,14 +129,20 @@ export function selectOwnedTaskContext(
     };
   }
   const description = issue.description?.trim() ? issue.description : null;
-  const warnings = [...(issue.taskContextWarnings ?? [])];
-  if (selection.kind === "catalog") {
-    const membership = resolveTaskMembership(selection.catalog, issue);
+  const warnings = [
+    ...(issue.taskContextWarnings ?? []),
+    ...(viewWarning ? [viewWarning] : []),
+  ];
+  if (catalog?.state === "active") {
+    const membership = resolveTaskMembership(catalog, issue);
     if (membership.kind === "invalid")
       warnings.push(
         "Task project membership is invalid; inspect its metadata.",
       );
-    if (!matchesWorkScope(selection.catalog, membership, selection.scope))
+    if (
+      selection?.kind === "catalog" &&
+      !matchesWorkScope(catalog, membership, selection.scope)
+    )
       warnings.push(
         "Owned task is outside the selected view; ownership is unchanged.",
       );

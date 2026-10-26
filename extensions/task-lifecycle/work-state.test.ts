@@ -1265,7 +1265,45 @@ for (const scope of [
     );
   });
 }
-test("stale scope queries cannot append reconciliation cursors", async () => {
+test("navigation during the global facts read selects the latest view without relisting", async () => {
+  const fixture = catalogViewFixture();
+  const issues = fixture.issues.map((issue) => ({
+    ...issue,
+    lifecycle: lifecycle("actionable", "2026-09-20T12:00:00Z"),
+  }));
+  const entries: any[] = [
+    {
+      type: "custom",
+      customType: "jp-project-scope",
+      data: { version: 2, scope: { kind: "area", areaId: A } },
+    },
+  ];
+  const h = createHarness({
+    catalog: fixture.catalog,
+    entries,
+    exec: async (_command, args) => {
+      if (args[0] === "list")
+        entries.push({
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope: { kind: "project", projectId: Q } },
+        });
+      return {
+        code: 0,
+        stdout: JSON.stringify(issues.map(rawIssue)),
+        stderr: "",
+      };
+    },
+  });
+  const result = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.match(result.message.content, /zz-other/);
+  assert.doesNotMatch(result.message.content, /zz-api|zz-unscoped/);
+  assert.equal(h.cursors.at(-1)?.data.scopeKey, `project:${Q}`);
+  assert.deepEqual(h.cursors.at(-1)?.data.cursor.knownTaskIds, ["zz-other"]);
+  assert.equal(h.calls.filter((c) => c.args[0] === "list").length, 1);
+});
+
+test("scope changes during classification cannot append reconciliation cursors", async () => {
   const entries: any[] = [
     {
       type: "custom",
@@ -1276,12 +1314,13 @@ test("stale scope queries cannot append reconciliation cursors", async () => {
   const h = createHarness({
     catalog: catalogFixture(),
     entries,
-    exec: async () => {
-      entries.push({
-        type: "custom",
-        customType: "jp-project-scope",
-        data: { version: 2, scope: { kind: "project", projectId: Q } },
-      });
+    exec: async (_command, args) => {
+      if (args[0] === "ready")
+        entries.push({
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope: { kind: "project", projectId: Q } },
+        });
       return { code: 0, stdout: "[]", stderr: "" };
     },
   });

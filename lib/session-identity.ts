@@ -19,16 +19,17 @@ export type WorkingIdentity =
   | { kind: "unassigned" }
   | { kind: "unavailable"; reason: string };
 
-export function resolveWorkingIdentity(
+export type OwnedTaskSelection =
+  | { kind: "owned"; issue: BeadsIssue }
+  | { kind: "unassigned" }
+  | { kind: "ambiguous" | "unavailable"; reason: string };
+
+export function resolveOwnedTask(
   issues: readonly BeadsIssue[],
-  catalog: WorkCatalog,
   sessionId: string,
-): WorkingIdentity {
-  if (!sessionId.trim() || catalog.state !== "active")
-    return {
-      kind: "unavailable",
-      reason: "Working identity requires a session ID and active catalog",
-    };
+): OwnedTaskSelection {
+  if (!sessionId.trim())
+    return { kind: "unavailable", reason: "Session identity is unavailable" };
   const owned: BeadsIssue[] = [];
   for (const issue of issues) {
     if (
@@ -57,10 +58,27 @@ export function resolveWorkingIdentity(
   if (owned.length === 0) return { kind: "unassigned" };
   if (owned.length !== 1)
     return {
-      kind: "unavailable",
+      kind: "ambiguous",
       reason: "Multiple active tasks are owned by this session",
     };
-  const issue = owned[0];
+  return { kind: "owned", issue: owned[0] };
+}
+
+export function resolveWorkingIdentity(
+  issues: readonly BeadsIssue[],
+  catalog: WorkCatalog,
+  sessionId: string,
+): WorkingIdentity {
+  if (catalog.state !== "active")
+    return {
+      kind: "unavailable",
+      reason: "Working identity requires an active catalog",
+    };
+  const owned = resolveOwnedTask(issues, sessionId);
+  if (owned.kind === "unassigned") return owned;
+  if (owned.kind !== "owned")
+    return { kind: "unavailable", reason: owned.reason };
+  const issue = owned.issue;
   const membership = resolveTaskMembership(catalog, issue);
   if (membership.kind !== "project")
     return {

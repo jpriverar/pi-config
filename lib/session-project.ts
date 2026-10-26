@@ -195,6 +195,12 @@ export function latestSessionScopeEntry(
   }
   return undefined;
 }
+export function sessionBrowseFingerprint(
+  session: SessionProjectReader,
+): string {
+  return JSON.stringify(latestSessionScopeEntry(session) ?? null);
+}
+
 export function sessionScopeFingerprint(session: SessionProjectReader): string {
   const entry = latestSessionScopeEntry(session);
   return JSON.stringify(

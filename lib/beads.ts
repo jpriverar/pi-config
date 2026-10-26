@@ -791,13 +791,18 @@ export async function listClassifiedIssues(
 ): Promise<BeadsResult<ClassifiedIssue[]>> {
   const listed = await client.listIssues(statuses);
   if (!listed.ok) return listed;
+  return classifyListedIssues(client, listed.value);
+}
+
+export async function classifyListedIssues(
+  client: BeadsClient,
+  issues: readonly BeadsIssue[],
+): Promise<BeadsResult<ClassifiedIssue[]>> {
   const ready = await client.listReadyIssueIds();
   if (!ready.ok) return ready;
 
   const blockerIds = [
-    ...new Set(
-      listed.value.flatMap((issue) => issue.blockingDependencyIds ?? []),
-    ),
+    ...new Set(issues.flatMap((issue) => issue.blockingDependencyIds ?? [])),
   ];
   const blockersById = new Map<string, BeadsIssue>();
   if (blockerIds.length > 0) {
@@ -806,7 +811,7 @@ export async function listClassifiedIssues(
     for (const blocker of blockers.value) blockersById.set(blocker.id, blocker);
   }
 
-  const enriched = listed.value.map((issue): BeadsIssue => {
+  const enriched = issues.map((issue): BeadsIssue => {
     if (issue.blockingDependencyIds === undefined) return issue;
     const blockingDependencies = issue.blockingDependencyIds
       .map((id): NativeDependency => {

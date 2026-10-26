@@ -11,6 +11,7 @@ import {
 } from "../../lib/work-catalog/test-fixtures.js";
 import {
   applySessionIdentity,
+  createSessionIdentityController,
   WORKING_IDENTITY_ENTRY_TYPE,
 } from "./session-identity.js";
 
@@ -233,6 +234,118 @@ test("freshness is checked between writes, not only before applying a projection
   });
   assert.equal(f.writes.length, 1);
   assert.equal(f.session.getSessionName(), "manual name");
+});
+
+test("observations begun before or during a mutation cannot apply afterward", () => {
+  const f = fixture();
+  const controller = createSessionIdentityController(f.host);
+  const before = controller.observe(f.session);
+  const finish = controller.beginMutation();
+  const during = controller.observe(f.session);
+  assert.equal(before.current(), false);
+  assert.equal(during.current(), false);
+  finish();
+  assert.equal(before.current(), false);
+  assert.equal(during.current(), false);
+  assert.deepEqual(
+    during.apply(
+      { kind: "available", catalog: catalogFixture(), issues: [] },
+      { recover: false, allowBrowseReset: true },
+    ),
+    { applied: false, browseChanged: false },
+  );
+  assert.deepEqual(f.writes, []);
+  assert.equal(controller.observe(f.session).current(), true);
+});
+
+test("failed marker persistence cannot repeatedly overwrite later explicit browsing", () => {
+  const f = fixture();
+  f.browse({ kind: "project", projectId: P });
+  const append = f.host.appendEntry;
+  let fail = true;
+  f.host.appendEntry = (type, data) => {
+    if (type === WORKING_IDENTITY_ENTRY_TYPE && fail)
+      throw new Error("marker write failed");
+    append(type, data);
+  };
+  const controller = createSessionIdentityController(f.host);
+  const apply = () =>
+    controller
+      .observe(f.session)
+      .apply(
+        { kind: "available", catalog: catalogFixture(), issues: [] },
+        { recover: false, allowBrowseReset: true },
+      );
+  assert.throws(apply, /marker write failed/);
+  f.browse({ kind: "project", projectId: Q });
+  assert.throws(apply, /marker write failed/);
+  assert.deepEqual(f.scope(), {
+    kind: "resolved",
+    scope: { kind: "project", projectId: Q },
+    source: "explicit",
+  });
+  fail = false;
+  apply();
+  assert.deepEqual(f.scope(), {
+    kind: "resolved",
+    scope: { kind: "project", projectId: Q },
+    source: "explicit",
+  });
+  assert.equal(f.session.getSessionName(), "unassigned-580c8e67");
+});
+
+test("failed navigation is retried when no later user navigation superseded it", () => {
+  const f = fixture();
+  f.browse({ kind: "project", projectId: P });
+  const append = f.host.appendEntry;
+  let fail = true;
+  f.host.appendEntry = (type, data) => {
+    if (type === "jp-project-scope" && fail)
+      throw new Error("scope write failed");
+    append(type, data);
+  };
+  const controller = createSessionIdentityController(f.host);
+  const apply = () =>
+    controller
+      .observe(f.session)
+      .apply(
+        { kind: "available", catalog: catalogFixture(), issues: [] },
+        { recover: false, allowBrowseReset: true },
+      );
+  assert.throws(apply, /scope write failed/);
+  fail = false;
+  assert.equal(apply().browseChanged, true);
+  assert.deepEqual(f.scope(), {
+    kind: "resolved",
+    scope: { kind: "global" },
+    source: "explicit",
+  });
+});
+
+test("session replacement and shutdown invalidate observations even after returning", () => {
+  const f = fixture();
+  const controller = createSessionIdentityController(f.host);
+  const before = controller.observe(f.session);
+  controller.start("another-session");
+  controller.start(SESSION);
+  assert.equal(before.current(), false);
+  const resumed = controller.observe(f.session);
+  controller.shutdown();
+  assert.equal(resumed.current(), false);
+});
+
+test("display edits do not become navigation but a repeated explicit selection does", () => {
+  const f = fixture();
+  const controller = createSessionIdentityController(f.host);
+  f.browse({ kind: "project", projectId: Q });
+  Object.assign(f.entries.at(-1)!, { id: "first-navigation" });
+  const observation = controller.observe(f.session);
+  f.host.setSessionName("manual edit");
+  assert.equal(observation.browseCurrent(), true);
+  f.browse({ kind: "project", projectId: Q });
+  Object.assign(f.entries.at(-1)!, { id: "second-navigation" });
+  assert.equal(observation.current(), true);
+  assert.equal(observation.browseCurrent(), false);
 });
 
 test("name-write failure does not cause retry to repeat a completed navigation transition", () => {

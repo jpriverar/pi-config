@@ -3,7 +3,6 @@ import { registerCompletionReview } from "./completion-review.js";
 import type { DaemonHealth } from "../../lib/task-reconciler/health.js";
 import {
   resolveSessionProject,
-  sessionScopeFingerprint,
   persistSessionWorkScope,
   generateSessionProjectName,
   type SessionProjectReader,
@@ -50,11 +49,14 @@ import type {
 import { loadWorktreePoolRuntime } from "../worktree-pool/runtime.js";
 import { registerTaskWorkState, type TaskWorkStateApi } from "./work-state.js";
 import {
-  readOwnedTaskContext,
+  readSessionFacts,
+  selectOwnedTaskContext,
   renderTaskContext,
+  type SessionFactsResult,
   type TaskContextResult,
   type TaskSession,
 } from "./task-context.js";
+import { createSessionIdentityController } from "./session-identity.js";
 import { createDeterministicGitArtifactClassifier } from "./git-artifact-command.js";
 import { registerGitArtifactHooks } from "./git-artifact-hooks.js";
 import { createGitArtifactObserver } from "./git-artifact-observer.js";
@@ -230,7 +232,7 @@ export interface ExtensionApi {
 export interface TaskLifecycleExtensionDependencies {
   readCatalog?: () => Promise<WorkCatalog | null>;
   service: TaskLifecycleToolService;
-  readTaskContext?: (session: TaskSession) => Promise<TaskContextResult>;
+  readSessionFacts?: () => Promise<SessionFactsResult>;
   workStateHealth?: () => Promise<DaemonHealth>;
   reconciliation?: {
     issue(taskId: string): Promise<LifecycleIssue>;
@@ -351,20 +353,115 @@ export function createTaskLifecycleExtension(
       ),
     );
     const readCatalog = deps.readCatalog ?? (async () => null);
-    const readTaskContext =
-      deps.readTaskContext ??
-      (async (session: TaskSession) =>
-        readOwnedTaskContext(contextClient, session, await readCatalog()));
-    let contextGeneration = 0;
-    let activeSessionId: string | undefined;
-    pi.on("session_start", (_event, context) => {
-      contextGeneration += 1;
-      activeSessionId = context.sessionManager.getSessionId();
+    const readFacts =
+      deps.readSessionFacts ??
+      (() => readSessionFacts(contextClient, readCatalog));
+    const contextFromFacts = (
+      facts: SessionFactsResult,
+      session: TaskSession,
+    ): TaskContextResult =>
+      facts.kind === "available"
+        ? selectOwnedTaskContext(facts.issues, session, facts.catalog)
+        : facts;
+    const identity = createSessionIdentityController({
+      appendEntry: (type, data) => pi.appendEntry(type, data),
+      setSessionName: (name) => {
+        if (!pi.setSessionName)
+          throw new Error("Session name writer is unavailable");
+        pi.setSessionName(name);
+      },
     });
-    pi.on("session_shutdown", () => {
-      contextGeneration += 1;
-      activeSessionId = undefined;
-    });
+    pi.on("session_start", (_event, context) =>
+      identity.start(context.sessionManager.getSessionId()),
+    );
+    pi.on("session_shutdown", () => identity.shutdown());
+
+    async function changeOwnership(
+      context: ExtensionContext,
+      signal: unknown,
+      operation: (owner: LockOwner) => Promise<LifecycleIssue>,
+      claimed = false,
+    ) {
+      const before = identity.observe(context.sessionManager, signal);
+      const finish = identity.beginMutation();
+      let issue: LifecycleIssue;
+      try {
+        issue = await operation(ownerFor(context));
+      } finally {
+        finish();
+      }
+      const result = toolResult(issue);
+      if (!before.sessionCurrent()) return result;
+      const observation = identity.observe(context.sessionManager, signal);
+      if (!observation.current()) return result;
+      let facts: SessionFactsResult;
+      try {
+        facts = await readFacts();
+      } catch {
+        facts = {
+          kind: "unavailable",
+          reason:
+            "Task operation succeeded, but session facts lookup is unavailable.",
+        };
+      }
+      if (!observation.current()) return result;
+      if (
+        facts.kind === "available" &&
+        facts.catalog?.state !== "active" &&
+        !before.legacyCurrent()
+      )
+        return result;
+      let taskContext = contextFromFacts(facts, context.sessionManager);
+      const mismatch =
+        claimed &&
+        (taskContext.kind === "none" ||
+          (taskContext.kind === "available" &&
+            taskContext.value.taskId !== issue.id));
+      if (mismatch) {
+        taskContext = {
+          kind: "unavailable",
+          reason:
+            "Owned task context changed or is unavailable after claim; no mission was selected.",
+        };
+      } else {
+        let projected = false;
+        try {
+          projected = observation.apply(facts, {
+            recover: false,
+            allowBrowseReset: before.browseCurrent(),
+          }).applied;
+        } catch {
+          // Ownership has committed; projection failure must not masquerade as a failed operation.
+        }
+        if (
+          !projected &&
+          (facts.kind === "unavailable" || facts.catalog?.state === "active")
+        )
+          result.content.push({
+            type: "text",
+            text: "Task operation succeeded, but working identity could not be updated. Ownership was not rolled back; revalidate before continuing.",
+          });
+      }
+      if (!observation.current()) return result;
+      if (!mismatch)
+        taskContext = contextFromFacts(facts, context.sessionManager);
+      if (claimed) {
+        try {
+          const content = renderTaskContext(taskContext);
+          if (content !== undefined)
+            pi.sendMessage(
+              { customType: "jp-task-claimed", content, display: false },
+              { triggerTurn: false },
+            );
+        } catch {
+          result.content.push({
+            type: "text",
+            text: "Claim succeeded, but owned task context could not be queued. Revalidate against the latest agreement before continuing.",
+          });
+        }
+      }
+      return result;
+    }
 
     pi.registerTool({
       name: "task_create",
@@ -529,62 +626,13 @@ export function createTaskLifecycleExtension(
         ["taskId"],
       ),
       async execute(id, params, signal, _update, context) {
-        const owner = ownerFor(context);
-        activeSessionId ??= owner.sessionId;
-        const generation = contextGeneration;
-        const scope = sessionScopeFingerprint(context.sessionManager);
-        const current = () => {
-          return (
-            !(isRecord(signal) && signal.aborted === true) &&
-            generation === contextGeneration &&
-            activeSessionId === owner.sessionId &&
-            context.sessionManager.getSessionId() === owner.sessionId &&
-            sessionScopeFingerprint(context.sessionManager) === scope
-          );
-        };
-        const claimed = await deps.service.claim(
-          params.taskId,
-          owner,
-          operationFor(id, params),
+        return changeOwnership(
+          context,
+          signal,
+          (owner) =>
+            deps.service.claim(params.taskId, owner, operationFor(id, params)),
+          true,
         );
-        const result = toolResult(claimed);
-        if (!current()) return result;
-        let taskContext: TaskContextResult;
-        try {
-          taskContext = await readTaskContext(context.sessionManager);
-        } catch {
-          taskContext = {
-            kind: "unavailable",
-            reason: "Claim succeeded, but task context lookup is unavailable.",
-          };
-        }
-        if (!current()) return result;
-        if (
-          taskContext.kind === "none" ||
-          (taskContext.kind === "available" &&
-            taskContext.value.taskId !== claimed.id)
-        ) {
-          taskContext = {
-            kind: "unavailable",
-            reason:
-              "Owned task context changed or is unavailable after claim; no mission was selected.",
-          };
-        }
-        try {
-          const content = renderTaskContext(taskContext);
-          if (content !== undefined) {
-            pi.sendMessage(
-              { customType: "jp-task-claimed", content, display: false },
-              { triggerTurn: false },
-            );
-          }
-        } catch {
-          result.content.push({
-            type: "text",
-            text: "Claim succeeded, but owned task context could not be queued. Revalidate against the latest agreement before continuing.",
-          });
-        }
-        return result;
       },
     });
 
@@ -649,51 +697,43 @@ export function createTaskLifecycleExtension(
         },
         ["taskId"],
       ),
-      async execute(id, params, _signal, _update, context) {
-        const owner = ownerFor(context);
-        const operationId = operationFor(id, params);
-        if (params.kind === undefined) {
-          if (params.blockerIds !== undefined || params.check !== undefined) {
-            throw new Error(
-              "task_wait kind is required when providing blockerIds or check",
-            );
-          }
-          return toolResult(
-            await deps.service.waitOnExistingCondition(
+      async execute(id, params, signal, _update, context) {
+        return changeOwnership(context, signal, async (owner) => {
+          const operationId = operationFor(id, params);
+          if (params.kind === undefined) {
+            if (params.blockerIds !== undefined || params.check !== undefined)
+              throw new Error(
+                "task_wait kind is required when providing blockerIds or check",
+              );
+            return deps.service.waitOnExistingCondition(
               params.taskId,
               owner,
               operationId,
-            ),
-          );
-        }
-        if (params.kind === "dependency") {
-          if (!Array.isArray(params.blockerIds) || params.check !== undefined) {
-            throw new Error(
-              "dependency wait requires blockerIds and must not include check",
             );
           }
-          return toolResult(
-            await deps.service.waitForDependencies(
+          if (params.kind === "dependency") {
+            if (!Array.isArray(params.blockerIds) || params.check !== undefined)
+              throw new Error(
+                "dependency wait requires blockerIds and must not include check",
+              );
+            return deps.service.waitForDependencies(
               params.taskId,
               params.blockerIds,
               owner,
               operationId,
-            ),
-          );
-        }
-        if (params.check === undefined || params.blockerIds !== undefined) {
-          throw new Error(
-            "check wait requires check and must not include blockerIds",
-          );
-        }
-        return toolResult(
-          await deps.service.waitForCheck(
+            );
+          }
+          if (params.check === undefined || params.blockerIds !== undefined)
+            throw new Error(
+              "check wait requires check and must not include blockerIds",
+            );
+          return deps.service.waitForCheck(
             params.taskId,
             params.check,
             owner,
             operationId,
-          ),
-        );
+          );
+        });
       },
     });
 
@@ -710,12 +750,12 @@ export function createTaskLifecycleExtension(
         },
         ["taskId", "reason"],
       ),
-      async execute(id, params, _signal, _update, context) {
-        return toolResult(
-          await deps.service.defer(
+      async execute(id, params, signal, _update, context) {
+        return changeOwnership(context, signal, (owner) =>
+          deps.service.defer(
             params.taskId,
             params.reason,
-            ownerFor(context),
+            owner,
             operationFor(id, params),
           ),
         );
@@ -848,9 +888,9 @@ export function createTaskLifecycleExtension(
         },
         ["taskId", "kind", "reason"],
       ),
-      async execute(id, params, _signal, _update, context) {
-        return toolResult(
-          await deps.service.close(
+      async execute(id, params, signal, _update, context) {
+        return changeOwnership(context, signal, (owner) =>
+          deps.service.close(
             params.taskId,
             {
               kind: params.kind,
@@ -861,7 +901,7 @@ export function createTaskLifecycleExtension(
                 ? { supersedingTaskId: params.supersedingTaskId }
                 : {}),
             },
-            ownerFor(context),
+            owner,
             operationFor(id, params),
           ),
         );
@@ -1147,12 +1187,19 @@ export function createTaskLifecycleExtension(
     }
 
     registerTaskWorkState(pi, {
-      readCatalog,
+      readSessionFacts: readFacts,
+      observeIdentity: (context) =>
+        identity.observe({
+          getEntries: () => context.sessionManager.getEntries(),
+          getSessionName: () => context.sessionManager.getSessionName(),
+          getSessionId: () => context.sessionManager.getSessionId?.() ?? "",
+        }),
       health: deps.workStateHealth,
     });
     registerCompletionReview(pi, {
       runtimeVersion: VERSION,
-      readContext: readTaskContext,
+      readContext: async (session) =>
+        contextFromFacts(await readFacts(), session),
     });
   };
 }
