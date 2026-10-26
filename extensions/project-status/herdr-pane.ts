@@ -4,13 +4,14 @@ import type { MetadataSender } from "./herdr-transport.js";
 import {
   runtimeTokens,
   taskTokens,
-  type PaneTokens,
+  taskPaneLabel,
+  type PaneMetadata,
   type TaskAssignment,
 } from "./herdr-values.js";
 
 export interface PaneReporter {
   updateRuntime(ctx: ExtensionContext): void;
-  updateTask(assignment: TaskAssignment): void;
+  updateTask(assignment: TaskAssignment, sessionName?: string): void;
   updateWaiting(label: string | null): void;
   stop(): Promise<void>;
 }
@@ -25,7 +26,8 @@ export function createPaneReporter(options: {
   send: MetadataSender;
 }): PaneReporter | undefined {
   if (options.context.mode !== "tui") return undefined;
-  let desired: PaneTokens = {
+  let desired: PaneMetadata = {
+    displayAgent: "Task unavailable",
     pi_waiting: null,
     ...runtimeTokens(options.context.model, options.context.getContextUsage()),
     ...taskTokens({ state: "unavailable", label: "Task unavailable" }),
@@ -71,9 +73,13 @@ export function createPaneReporter(options: {
       };
       queue();
     },
-    updateTask(assignment) {
+    updateTask(assignment, sessionName) {
       if (stopped) return;
-      desired = { ...desired, ...taskTokens(assignment) };
+      desired = {
+        ...desired,
+        ...taskTokens(assignment),
+        displayAgent: taskPaneLabel(assignment, sessionName),
+      };
       queue();
     },
     updateWaiting(label) {
@@ -91,6 +97,7 @@ export function createPaneReporter(options: {
         await options
           .send(
             {
+              displayAgent: null,
               pi_model: null,
               pi_task: null,
               pi_task_state: null,

@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
-import type { PaneTokens } from "./herdr-values.js";
+import type { PaneMetadata } from "./herdr-values.js";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
@@ -100,6 +100,7 @@ function createHarness(
     entries?: readonly Entry[];
     beforeExec?: (callNumber: number) => Promise<void>;
     herdr?: boolean;
+    metadataSuccess?: boolean;
     mode?: string;
   } = {},
 ) {
@@ -107,7 +108,7 @@ function createHarness(
   const calls: string[][] = [];
   const executionLimits: Array<{ timeout?: number } | undefined> = [];
   const staleAccesses: string[] = [];
-  const metadata: PaneTokens[] = [];
+  const metadata: PaneMetadata[] = [];
   let unavailable = options.unavailable;
   let stale = false;
   let sessionName =
@@ -194,9 +195,9 @@ function createHarness(
       return options.catalog ?? null;
     },
     metadataSender: options.herdr
-      ? async (tokens: PaneTokens) => {
+      ? async (tokens: PaneMetadata) => {
           metadata.push({ ...tokens });
-          return true;
+          return options.metadataSuccess ?? true;
         }
       : null,
   });
@@ -1014,6 +1015,58 @@ test("browse changes refresh counts without a session rename and ignore retired 
   await setImmediate();
   assert.equal(h.calls.length, calls);
   assert.deepEqual(h.staleAccesses, []);
+});
+
+for (const transport of ["success", "failure", "absent"] as const) {
+  test(`task remains in Pi status with ${transport} Herdr delivery`, async () => {
+    const h = createHarness({
+      ...catalogViewFixture(),
+      issues: [ownedCatalogIssue()],
+      entries: [projectEntry("maintenance")],
+      herdr: transport !== "absent",
+      metadataSuccess: transport !== "failure",
+    });
+    await start(h);
+    await setImmediate();
+    assert.match(
+      h.renderHeader(),
+      /API-session1 • Product.*zz-owned • Task zz-owned.*outside current view/,
+    );
+    assert.equal(h.calls.length, 1);
+    if (transport === "absent") assert.deepEqual(h.metadata, []);
+    else
+      assert.equal(h.metadata.at(-1)!.displayAgent, "zz-owned • Task zz-owned");
+  });
+}
+
+test("Herdr label follows existing refresh snapshots without a second task read", async () => {
+  const h = createHarness({
+    ...catalogViewFixture(),
+    issues: [ownedCatalogIssue()],
+    entries: [projectEntry("api")],
+    herdr: true,
+  });
+  await start(h);
+  await setImmediate();
+  h.setIssues([{ ...ownedCatalogIssue(), title: "Changed title" }]);
+  await h.handlers.get("turn_end")!({}, h.context);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.displayAgent, "zz-owned • Changed title");
+  assert.match(h.renderHeader(), /zz-owned • Changed title/);
+  assert.equal(h.calls.length, 2);
+  h.setIssues([]);
+  await h.handlers.get("tool_execution_end")!(
+    { toolName: "task_close" },
+    h.context,
+  );
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.displayAgent, "unassigned-session1");
+  assert.match(h.renderHeader(), /unassigned-session1/);
+  h.setUnavailable("active");
+  await h.handlers.get("turn_end")!({}, h.context);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.displayAgent, "Task unavailable");
+  assert.match(h.renderHeader(), /identity unavailable/);
 });
 
 test("waiting events publish and clear an independent sidebar label", async () => {

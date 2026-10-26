@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { BeadsIssue } from "../../lib/beads.js";
+import * as values from "./herdr-values.js";
+import type { TaskAssignment } from "./herdr-values.js";
 import {
   normalizeMetadata,
   runtimeTokens,
@@ -216,6 +218,58 @@ for (const legacyExpiry of ["2026-10-06T12:00:00Z", "2026-09-29T12:00:00Z"]) {
     );
   });
 }
+
+for (const [assignment, sessionName, expected] of [
+  [
+    { state: "assigned", taskId: "jp-one", label: "Fix auth" },
+    "api-12345678",
+    "jp-one • Fix auth",
+  ],
+  [
+    { state: "assigned", taskId: "jp-one", label: "Unassigned" },
+    "api-12345678",
+    "jp-one • Unassigned",
+  ],
+  [
+    { state: "unassigned", label: "Unassigned" },
+    "unassigned-12345678",
+    "unassigned-12345678",
+  ],
+  [{ state: "unassigned", label: "Unassigned" }, undefined, "Unassigned"],
+  [{ state: "unassigned", label: "Unassigned" }, "\u001b[31m \n", "Unassigned"],
+  [
+    { state: "unavailable", label: "Task unavailable" },
+    "api-12345678",
+    "Task unavailable",
+  ],
+] satisfies [TaskAssignment, string | undefined, string][]) {
+  test(`native pane label distinguishes ${assignment.state}: ${expected}`, () => {
+    assert.equal(typeof values.taskPaneLabel, "function");
+    assert.equal(values.taskPaneLabel(assignment, sessionName), expected);
+  });
+}
+
+test("native pane label strips controls and bounds the whole ID/title without breaking Unicode", () => {
+  assert.equal(typeof values.taskPaneLabel, "function");
+  assert.equal(
+    values.taskPaneLabel(
+      {
+        state: "assigned",
+        taskId: "jp-one",
+        label: "\u001b[31mFix\n auth\u001b[0m",
+      },
+      undefined,
+    ),
+    "jp-one • Fix auth",
+  );
+  assert.equal(
+    values.taskPaneLabel(
+      { state: "assigned", taskId: "jp-one", label: "😀".repeat(90) },
+      undefined,
+    ),
+    "jp-one • " + "😀".repeat(71),
+  );
+});
 
 test("durable task tokens clear obsolete deadline metadata", () => {
   const assignment = {

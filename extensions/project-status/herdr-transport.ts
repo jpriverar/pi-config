@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 
-import { normalizeMetadata, type PaneTokens } from "./herdr-values.js";
+import { normalizeMetadata, type PaneMetadata } from "./herdr-values.js";
 
 export type MetadataSender = (
-  tokens: PaneTokens,
+  tokens: PaneMetadata,
   sequence: number,
   signal: AbortSignal,
 ) => Promise<boolean>;
@@ -50,6 +50,16 @@ export function createHerdrMetadataSender(
       "--seq",
       String(sequence),
     ];
+    // Unlike a primary title, this fallback preserves manual pane names.
+    const displayAgent =
+      tokens.displayAgent === null
+        ? ""
+        : normalizeMetadata(tokens.displayAgent);
+    args.push(
+      ...(displayAgent
+        ? ["--display-agent", displayAgent]
+        : ["--clear-display-agent"]),
+    );
     for (const key of [
       "pi_model",
       "pi_task",

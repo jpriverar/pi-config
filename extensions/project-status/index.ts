@@ -236,6 +236,9 @@ export default function projectStatus(
           ? resolveWorkingIdentity(listed.value, catalog, sessionId)
           : { kind: "unavailable" as const, reason: "Task lookup failed" }
         : undefined;
+    currentSessionName = identity
+      ? (workingIdentityName(identity, ctx.sessionManager) ?? sessionName)
+      : sessionName;
     reporter?.updateTask(
       selectTaskAssignment(
         !listed.ok || identity?.kind === "unavailable"
@@ -245,10 +248,8 @@ export default function projectStatus(
             : listed.value,
         sessionId,
       ),
+      currentSessionName,
     );
-    currentSessionName = identity
-      ? (workingIdentityName(identity, ctx.sessionManager) ?? sessionName)
-      : sessionName;
     const area =
       identity?.kind === "assigned"
         ? identity.areaName

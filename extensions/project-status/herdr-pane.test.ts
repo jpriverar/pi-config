@@ -3,19 +3,19 @@ import { setImmediate } from "node:timers/promises";
 import test from "node:test";
 
 import { createPaneReporter } from "./herdr-pane.js";
-import type { PaneTokens } from "./herdr-values.js";
+import type { PaneMetadata } from "./herdr-values.js";
 
 function harness(
   options: {
     mode?: string;
     send?: (
-      values: PaneTokens,
+      values: PaneMetadata,
       seq: number,
       signal: AbortSignal,
     ) => Promise<boolean>;
   } = {},
 ) {
-  const sent: Array<{ values: PaneTokens; seq: number }> = [];
+  const sent: Array<{ values: PaneMetadata; seq: number }> = [];
   let percent: number | null = 12;
   let model = "model-one";
   const context = {
@@ -47,6 +47,7 @@ test("initializes current runtime without falsely claiming Unassigned", async ()
   const h = harness();
   await setImmediate();
   assert.deepEqual(h.sent[0].values, {
+    displayAgent: "Task unavailable",
     pi_waiting: null,
     pi_model: "model-one",
     pi_task: "Task unavailable",
@@ -105,6 +106,7 @@ test("suppresses unchanged data and serializes bursts to the latest value", asyn
   await setImmediate();
   assert.equal(h.sent.length, 2);
   assert.deepEqual(h.sent[1].values, {
+    displayAgent: "jp-task • Current task",
     pi_waiting: null,
     pi_model: "latest",
     pi_task: "Current task",
@@ -156,6 +158,7 @@ test("shutdown clears owned metadata and suppresses later updates", async () => 
   h.runtime("stale", 99);
   await setImmediate();
   assert.deepEqual(h.sent.at(-1)!.values, {
+    displayAgent: null,
     pi_waiting: null,
     pi_model: null,
     pi_task: null,
@@ -181,6 +184,7 @@ test("stop cancels an in-flight send before clearing only owned keys", async () 
   await h.reporter!.stop();
   assert.equal(h.sent.length, 2);
   assert.deepEqual(Object.keys(h.sent[1].values).sort(), [
+    "displayAgent",
     "pi_context_critical",
     "pi_context_warning",
     "pi_model",
@@ -213,6 +217,38 @@ test("clears claim identity whenever ownership becomes non-assigned", async () =
     assert.equal(h.sent.at(-1)!.values.pi_task_id, null);
     assert.equal(h.sent.at(-1)!.values.pi_task_expires_at, null);
   }
+  await h.reporter!.stop();
+});
+
+test("pane label follows task title changes and distinguishes release from failed lookup", async () => {
+  const h = harness();
+  h.reporter!.updateTask(
+    { state: "assigned", taskId: "jp-one", label: "Unassigned" },
+    "api-session1",
+  );
+  await setImmediate();
+  assert.equal(h.sent.at(-1)!.values.displayAgent, "jp-one • Unassigned");
+  h.reporter!.updateTask(
+    { state: "assigned", taskId: "jp-one", label: "Updated work" },
+    "api-session1",
+  );
+  await setImmediate();
+  assert.equal(h.sent.at(-1)!.values.displayAgent, "jp-one • Updated work");
+  h.runtime("another-model", 90);
+  await setImmediate();
+  assert.equal(h.sent.at(-1)!.values.displayAgent, "jp-one • Updated work");
+  h.reporter!.updateTask(
+    { state: "unassigned", label: "Unassigned" },
+    "unassigned-session1",
+  );
+  await setImmediate();
+  assert.equal(h.sent.at(-1)!.values.displayAgent, "unassigned-session1");
+  h.reporter!.updateTask(
+    { state: "unavailable", label: "Task unavailable" },
+    "api-session1",
+  );
+  await setImmediate();
+  assert.equal(h.sent.at(-1)!.values.displayAgent, "Task unavailable");
   await h.reporter!.stop();
 });
 
