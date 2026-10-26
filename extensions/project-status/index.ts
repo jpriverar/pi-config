@@ -49,7 +49,7 @@ type TaskState =
 function browseLabel(selection: SessionWorkSelection): string | undefined {
   if (selection.kind !== "catalog") return undefined;
   const { catalog, scope } = selection;
-  if (scope.kind === "global") return "All areas";
+  if (scope.kind === "global") return undefined;
   return scope.kind === "area"
     ? `${catalog.areas[scope.areaId].name} (area)`
     : catalog.projects[scope.projectId].name;

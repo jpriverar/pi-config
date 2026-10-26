@@ -742,7 +742,7 @@ for (const { scope, name, expected } of [
   {
     scope: { kind: "global" },
     name: "api-580c8e67",
-    expected: "unassigned-session1 │ Browse: All areas • 3 ready",
+    expected: "unassigned-session1 │ 3 ready",
   },
   {
     scope: { kind: "area", areaId: B },
@@ -757,7 +757,7 @@ for (const { scope, name, expected } of [
   {
     scope: { kind: "global" },
     name: "",
-    expected: "unassigned-session1 │ Browse: All areas • 3 ready",
+    expected: "unassigned-session1 │ 3 ready",
   },
 ] satisfies { scope: WorkScope; name: string; expected: string }[]) {
   test(`unassigned catalog ${scope.kind} header separates identity from browsing despite display ${JSON.stringify(name)}`, async () => {
@@ -777,6 +777,23 @@ for (const { scope, name, expected } of [
     assert.equal(h.calls.length, 3, "the area needs no additional task query");
   });
 }
+
+test("empty global view keeps identity without a redundant browse label", async () => {
+  const h = createHarness({
+    ...catalogViewFixture(),
+    issues: [],
+    entries: [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "global" } },
+      },
+    ],
+  });
+  await start(h);
+  assert.equal(h.renderHeader().trimEnd(), "unassigned-session1");
+  assert.equal(h.calls.length, 3);
+});
 
 test("unclassified projects do not display an invented area", async () => {
   const fixture = catalogViewFixture();
