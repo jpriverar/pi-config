@@ -186,6 +186,19 @@ export function persistSessionWorkScope(
   });
 }
 
+export function hasCatalogSessionScope(
+  session: Pick<SessionProjectReader, "getEntries">,
+): boolean {
+  return session
+    .getEntries()
+    .some(
+      (entry) =>
+        isProjectEntry(entry) &&
+        isRecord(entry.data) &&
+        entry.data.version === 2,
+    );
+}
+
 export function latestSessionScopeEntry(
   session: Pick<SessionProjectReader, "getEntries">,
 ): CustomEntry | undefined {
@@ -195,6 +208,12 @@ export function latestSessionScopeEntry(
   }
   return undefined;
 }
+export function sessionBrowseFingerprint(
+  session: SessionProjectReader,
+): string {
+  return JSON.stringify(latestSessionScopeEntry(session) ?? null);
+}
+
 export function sessionScopeFingerprint(session: SessionProjectReader): string {
   const entry = latestSessionScopeEntry(session);
   return JSON.stringify(

@@ -20,6 +20,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { BeadsExec } from "../../lib/beads.js";
+import { resolveSessionWorkScope } from "../../lib/session-project.js";
 import type { WorkScope } from "../../lib/work-catalog/model.js";
 import {
   A,
@@ -277,6 +278,11 @@ async function fixture(
         errors.push(error);
       },
     });
+    if (options.scope)
+      manager.appendCustomEntry("jp-project-scope", {
+        version: 2,
+        scope: options.scope,
+      });
     await session.prompt("/mission-check on");
     await session.prompt("Perform the bounded fixture action.");
     const contexts = manager
@@ -294,6 +300,11 @@ async function fixture(
       events,
       errors,
       contexts,
+      sessionName: manager.getSessionName(),
+      sessionId: manager.getSessionId(),
+      browseScope: options.scope
+        ? resolveSessionWorkScope(manager, catalogFixture())
+        : null,
     };
   } finally {
     session?.dispose();
@@ -393,6 +404,12 @@ for (const [name, scope, outside] of [
     const reviewed = JSON.stringify(payload);
     assert.deepEqual(r.record.metadata.piProject, { version: 1, projectId: P });
     assert.deepEqual(r.record.metadata.unrelated, { preserved: true });
+    assert.deepEqual(r.browseScope, {
+      kind: "resolved",
+      scope,
+      source: "explicit",
+    });
+    assert.equal(r.sessionName, `API-${r.sessionId.slice(-8)}`);
     if (outside) assert.match(reviewed, /outside the selected view/);
     else assert.doesNotMatch(reviewed, /outside the selected view/);
   });
@@ -408,10 +425,17 @@ test("native catalog claim outside the view delivers context after the same batc
     JSON.stringify(r.requests[1]),
     /Build, validate and report the owned fixture outcome/,
   );
-  assert.match(
+  assert.doesNotMatch(
     JSON.stringify(contextPayload(r, "jp-task-claimed")),
     /outside the selected view/,
   );
+  assert.deepEqual(r.browseScope, {
+    kind: "resolved",
+    scope: { kind: "project", projectId: P },
+    source: "explicit",
+  });
+  assert.equal(r.sessionName, `API-${r.sessionId.slice(-8)}`);
+  assert.equal(r.record.metadata.piLifecycle.execution?.sessionId, r.sessionId);
   assert.ok(
     r.events.indexOf("marker-executed") < r.events.indexOf("provider-2"),
   );

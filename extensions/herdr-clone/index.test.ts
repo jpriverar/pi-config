@@ -509,12 +509,54 @@ test("blocks another clone while the first pane launch is pending", async (t) =>
   assert.equal(h.calls.length, 2);
 });
 
+test("a cloned working-identity marker remains historical, not inherited ownership", async (t) => {
+  const h = harness(t);
+  const parentId = h.sm.getSessionId();
+  h.sm.appendCustomEntry("jp-project-scope", {
+    version: 2,
+    scope: { kind: "project", projectId: P },
+  });
+  h.sm.appendCustomEntry("jp-working-identity", {
+    version: 1,
+    sessionId: parentId,
+    taskId: "zz-parent",
+    projectId: P,
+  });
+  h.sm.appendSessionInfo(generateSessionProjectName(h.sm, "API"));
+  const original = readFileSync(h.sm.getSessionFile()!, "utf8");
+  await h.clone();
+  const launch = h.calls.at(-1)!;
+  const cloned = SessionManager.open(
+    launch.args[launch.args.indexOf("--session") + 1],
+  );
+  assert.notEqual(cloned.getSessionId(), parentId);
+  assert.equal(
+    cloned.getSessionName(),
+    generateSessionProjectName(cloned, "unassigned"),
+  );
+  assert.deepEqual(resolveSessionWorkScope(cloned, catalogFixture()), {
+    kind: "resolved",
+    scope: { kind: "global" },
+    source: "explicit",
+  });
+  const marker = cloned
+    .getEntries()
+    .find(
+      (entry) =>
+        entry.type === "custom" && entry.customType === "jp-working-identity",
+    );
+  assert.ok(marker && marker.type === "custom");
+  assert.equal((marker.data as { sessionId: string }).sessionId, parentId);
+  assert.equal(readFileSync(h.sm.getSessionFile()!, "utf8"), original);
+  assert.equal(h.calls.length, 2);
+});
+
 for (const scope of [
   { kind: "global" },
   { kind: "area", areaId: A },
   { kind: "project", projectId: P },
 ] as WorkScope[]) {
-  test(`clones session-wide v2 ${scope.kind} scope even when the selected branch omits it`, async (t) => {
+  test(`catalog clone starts neutral when its source has v2 ${scope.kind} scope outside the branch`, async (t) => {
     const h = harness(t);
     const leaf = h.sm.getLeafId()!;
     h.sm.appendCustomEntry("jp-project-scope", { version: 2, scope });
@@ -534,16 +576,17 @@ for (const scope of [
     );
     const resolved = resolveSessionWorkScope(cloned, catalogFixture());
     assert.equal(resolved.kind, "resolved");
-    if (resolved.kind === "resolved") assert.deepEqual(resolved.scope, scope);
+    if (resolved.kind === "resolved")
+      assert.deepEqual(resolved.scope, { kind: "global" });
     assert.equal(
       cloned.getSessionName(),
-      generateSessionProjectName(cloned, base),
+      generateSessionProjectName(cloned, "unassigned"),
     );
     assert.equal(readFileSync(h.sm.getSessionFile()!, "utf8"), original);
     assert.equal(
       h.calls.length,
       2,
-      "scope preservation makes no task-store calls",
+      "neutral seeding makes no task-store calls",
     );
   });
 }

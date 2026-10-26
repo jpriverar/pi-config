@@ -220,20 +220,13 @@ export function createLifecycleStore(
           (await options.readCatalog?.()) ?? undefined,
         );
         const mode = workRoutingMode(config, catalog);
-        if (
-          mode === "legacy" &&
-          (input.projectId !== undefined || input.scope !== undefined)
-        )
+        if (mode === "legacy" && input.projectId !== undefined)
           throw new Error(
             "Catalog routing is not active; select a legacy project or complete activation",
           );
         const project =
           mode === "catalog"
-            ? resolveCreateProject(
-                catalog!,
-                input.scope ?? { kind: "global" },
-                input,
-              )
+            ? resolveCreateProject(catalog!, input)
             : undefined;
         const workstream =
           project?.workstreamKey ??

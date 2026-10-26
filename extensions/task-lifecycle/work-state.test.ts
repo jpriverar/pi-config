@@ -1265,7 +1265,45 @@ for (const scope of [
     );
   });
 }
-test("stale scope queries cannot append reconciliation cursors", async () => {
+test("navigation during the global facts read selects the latest view without relisting", async () => {
+  const fixture = catalogViewFixture();
+  const issues = fixture.issues.map((issue) => ({
+    ...issue,
+    lifecycle: lifecycle("actionable", "2026-09-20T12:00:00Z"),
+  }));
+  const entries: any[] = [
+    {
+      type: "custom",
+      customType: "jp-project-scope",
+      data: { version: 2, scope: { kind: "area", areaId: A } },
+    },
+  ];
+  const h = createHarness({
+    catalog: fixture.catalog,
+    entries,
+    exec: async (_command, args) => {
+      if (args[0] === "list")
+        entries.push({
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope: { kind: "project", projectId: Q } },
+        });
+      return {
+        code: 0,
+        stdout: JSON.stringify(issues.map(rawIssue)),
+        stderr: "",
+      };
+    },
+  });
+  const result = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.match(result.message.content, /zz-other/);
+  assert.doesNotMatch(result.message.content, /zz-api|zz-unscoped/);
+  assert.equal(h.cursors.at(-1)?.data.scopeKey, `project:${Q}`);
+  assert.deepEqual(h.cursors.at(-1)?.data.cursor.knownTaskIds, ["zz-other"]);
+  assert.equal(h.calls.filter((c) => c.args[0] === "list").length, 1);
+});
+
+test("scope changes during classification cannot append reconciliation cursors", async () => {
   const entries: any[] = [
     {
       type: "custom",
@@ -1276,12 +1314,13 @@ test("stale scope queries cannot append reconciliation cursors", async () => {
   const h = createHarness({
     catalog: catalogFixture(),
     entries,
-    exec: async () => {
-      entries.push({
-        type: "custom",
-        customType: "jp-project-scope",
-        data: { version: 2, scope: { kind: "project", projectId: Q } },
-      });
+    exec: async (_command, args) => {
+      if (args[0] === "ready")
+        entries.push({
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope: { kind: "project", projectId: Q } },
+        });
       return { code: 0, stdout: "[]", stderr: "" };
     },
   });
@@ -1467,6 +1506,23 @@ test("startup snapshots retain only the bounded owned-context representation", a
   assert.match(serialized, /omitted/);
 });
 
+test("catalog model context separates unassigned identity from a selected view", async () => {
+  const h = createHarness({
+    ...catalogViewFixture(),
+    sessionId: "session-1",
+    entries: [
+      {
+        type: "custom",
+        customType: SESSION_PROJECT_ENTRY_TYPE,
+        data: { version: 2, scope: { kind: "project", projectId: P } },
+      },
+    ],
+  });
+  const result = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.match(result.message.content, /## Browse view — API/);
+  assert.match(result.message.content, /Working identity:.*Unassigned/);
+});
+
 test("catalog snapshots and compaction retain owned mission outside the view without foreign text", async () => {
   const catalog = catalogFixture();
   catalog.projects[Q].areaId = B;
@@ -1500,6 +1556,8 @@ test("catalog snapshots and compaction retain owned mission outside the view wit
   });
   const hidden = await h.handlers.get("before_agent_start")!({}, h.context);
   assert.match(hidden.message.content, /CATALOG OWNED MISSION/);
+  assert.match(hidden.message.content, /## Browse view — Area: Tooling/);
+  assert.match(hidden.message.content, /API • Product \(jp-owned\)/);
   assert.match(hidden.message.content, /outside.*view/i);
   assert.doesNotMatch(
     hidden.message.content,

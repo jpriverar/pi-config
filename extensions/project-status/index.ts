@@ -8,13 +8,19 @@ import {
   classifyReadiness,
   createBeadsClient,
   withBeadsEnvironment,
+  type BeadsIssue,
 } from "../../lib/beads.js";
 import {
   resolveSessionSelection,
   sessionScopeFingerprint,
+  hasCatalogSessionScope,
   type SessionWorkSelection,
 } from "../../lib/session-project.js";
 import { selectWorkIssues } from "../../lib/work-catalog/membership.js";
+import {
+  resolveWorkingIdentity,
+  workingIdentityName,
+} from "../../lib/session-identity.js";
 import { createCatalogStore } from "../../lib/work-catalog/store.js";
 import type { WorkCatalog } from "../../lib/work-catalog/model.js";
 import { createPaneReporter, type PaneReporter } from "./herdr-pane.js";
@@ -40,15 +46,13 @@ type TaskState =
   | { sessionTask: { id: string; title: string; outsideView?: boolean } }
   | "unavailable";
 
-function selectedAreaName(selection: SessionWorkSelection): string | undefined {
+function browseLabel(selection: SessionWorkSelection): string | undefined {
   if (selection.kind !== "catalog") return undefined;
   const { catalog, scope } = selection;
   if (scope.kind === "global") return "All areas";
-  const areaId =
-    scope.kind === "area"
-      ? scope.areaId
-      : catalog.projects[scope.projectId].areaId;
-  return areaId === null ? "Unclassified" : catalog.areas[areaId].name;
+  return scope.kind === "area"
+    ? `${catalog.areas[scope.areaId].name} (area)`
+    : catalog.projects[scope.projectId].name;
 }
 
 export default function projectStatus(
@@ -75,24 +79,20 @@ export default function projectStatus(
   let currentSessionName: string | undefined;
   let currentTaskState: TaskState = "unavailable";
   let sessionGeneration = 0;
+  let usesCatalog = false;
+  let currentContext: ExtensionContext | undefined;
 
   function isCurrentSession(generation: number): boolean {
     return generation === sessionGeneration;
   }
 
   async function getCounts(
+    issues: readonly BeadsIssue[],
     selection: SessionWorkSelection,
     sessionId: string,
     current: () => boolean,
   ): Promise<TaskState | undefined> {
-    const listed = await client.listIssues();
-    if (!current()) return undefined;
-    reporter?.updateTask(
-      selectTaskAssignment(listed.ok ? listed.value : undefined, sessionId),
-    );
-    if (!listed.ok) return "unavailable";
-
-    const sessionTasks = listed.value.filter(
+    const sessionTasks = issues.filter(
       (issue) =>
         issue.lifecycle?.phase === "active" &&
         issue.lifecycle.execution?.sessionId === sessionId,
@@ -118,7 +118,7 @@ export default function projectStatus(
     if (!closed.ok) return "unavailable";
     const active = selectWorkIssues(
       selection,
-      classifyReadiness(listed.value, ready.value),
+      classifyReadiness(issues, ready.value),
     );
     const historical = selectWorkIssues(
       selection,
@@ -141,6 +141,7 @@ export default function projectStatus(
     project: string | undefined,
     taskState: TaskState,
     area: string | undefined,
+    browse?: string,
   ): void {
     const theme = ctx.ui.theme;
     const leftParts: string[] = [];
@@ -162,6 +163,7 @@ export default function projectStatus(
       );
     } else {
       const segments: string[] = [];
+      if (browse) segments.push(theme.fg("muted", `Browse: ${browse}`));
       if (taskState.inProgress > 0) {
         segments.push(
           theme.fg("warning", `${taskState.inProgress} in-progress`),
@@ -212,20 +214,75 @@ export default function projectStatus(
     const sessionId = ctx.sessionManager.getSessionId();
     const current = () =>
       isCurrentSession(generation) &&
+      sessionId === ctx.sessionManager.getSessionId() &&
       fingerprint === sessionScopeFingerprint(ctx.sessionManager);
     const catalog = await readCatalog();
     if (!current()) return;
-    const selection = resolveSessionSelection(ctx.sessionManager, catalog);
-    const taskState = await getCounts(selection, sessionId, current);
+    usesCatalog =
+      catalog?.state === "active" || hasCatalogSessionScope(ctx.sessionManager);
+    const legacySelection =
+      catalog?.state === "active"
+        ? undefined
+        : resolveSessionSelection(ctx.sessionManager, catalog);
+    const listed = await client.listIssues(
+      catalog?.state === "active"
+        ? ["open", "in_progress", "blocked", "deferred"]
+        : undefined,
+    );
+    if (!current()) return;
+    const identity =
+      catalog?.state === "active"
+        ? listed.ok
+          ? resolveWorkingIdentity(listed.value, catalog, sessionId)
+          : { kind: "unavailable" as const, reason: "Task lookup failed" }
+        : undefined;
+    reporter?.updateTask(
+      selectTaskAssignment(
+        !listed.ok || identity?.kind === "unavailable"
+          ? undefined
+          : identity?.kind === "unassigned"
+            ? []
+            : listed.value,
+        sessionId,
+      ),
+    );
+    currentSessionName = identity
+      ? (workingIdentityName(identity, ctx.sessionManager) ?? sessionName)
+      : sessionName;
+    const area =
+      identity?.kind === "assigned"
+        ? identity.areaName
+        : identity?.kind === "unavailable"
+          ? "identity unavailable"
+          : undefined;
+    if (!listed.ok || identity?.kind === "unavailable") {
+      currentTaskState = "unavailable";
+      renderStatus(ctx, currentSessionName, currentTaskState, area);
+      return;
+    }
+    let selection: SessionWorkSelection;
+    try {
+      selection =
+        legacySelection ?? resolveSessionSelection(ctx.sessionManager, catalog);
+    } catch {
+      currentTaskState = "unavailable";
+      renderStatus(ctx, currentSessionName, currentTaskState, area);
+      return;
+    }
+    const taskState = await getCounts(
+      listed.value.filter((issue) => issue.status !== "deferred"),
+      selection,
+      sessionId,
+      current,
+    );
     if (taskState === undefined || !current()) return;
-
-    currentSessionName = sessionName;
     currentTaskState = taskState;
     renderStatus(
       ctx,
       currentSessionName,
       currentTaskState,
-      selectedAreaName(selection),
+      area,
+      browseLabel(selection),
     );
   }
 
@@ -251,7 +308,7 @@ export default function projectStatus(
               next.ctx,
               currentSessionName,
               currentTaskState,
-              undefined,
+              usesCatalog ? "identity unavailable" : undefined,
             );
           }
         }
@@ -262,6 +319,12 @@ export default function projectStatus(
     return refreshing;
   }
 
+  pi.events.on("pi:work-scope-changed", (sessionId: unknown) => {
+    const context = currentContext;
+    if (context && sessionId === context.sessionManager.getSessionId())
+      void refresh(context, sessionGeneration);
+  });
+
   pi.events.on("pi:wakeup-waiting", (label: unknown) => {
     if (label === null || typeof label === "string")
       reporter?.updateWaiting(label);
@@ -269,6 +332,8 @@ export default function projectStatus(
 
   pi.on("session_start", async (_event, ctx) => {
     const generation = ++sessionGeneration;
+    currentContext = ctx;
+    usesCatalog = false;
     const previous = reporter;
     reporter = undefined;
     await previous?.stop();
@@ -283,6 +348,7 @@ export default function projectStatus(
   });
   pi.on("session_shutdown", async () => {
     sessionGeneration += 1;
+    currentContext = undefined;
     pendingRefresh = undefined;
     const previous = reporter;
     reporter = undefined;

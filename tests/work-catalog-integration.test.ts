@@ -1,25 +1,23 @@
 import {
   SessionManager,
   type ExtensionAPI,
-  type ExtensionContext,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
+import { EventEmitter } from "node:events";
+import { TaskLifecycleService } from "../lib/task-lifecycle/service.js";
+import { createTaskLifecycleExtension } from "../extensions/task-lifecycle/index.js";
+import { readSessionFacts } from "../extensions/task-lifecycle/task-context.js";
 import tasksOverlay from "../extensions/tasks-overlay/index.js";
 import herdrClone from "../extensions/herdr-clone/index.js";
 import {
   createCatalogService,
   type CatalogCommand,
 } from "../lib/work-catalog/service.js";
-import {
-  buildWorkView,
-  selectWorkIssues,
-  workSelectionLabel,
-} from "../lib/work-catalog/membership.js";
+import { buildWorkView } from "../lib/work-catalog/membership.js";
 import {
   persistSessionWorkScope,
   resolveSessionSelection,
 } from "../lib/session-project.js";
-import type { CatalogIssue, WorkCatalog } from "../lib/work-catalog/model.js";
 import { hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createLifecycleStore } from "../lib/task-lifecycle/beads-store.js";
@@ -43,7 +41,6 @@ import {
   writeFile,
   readFile,
   stat,
-  readdir,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -305,7 +302,6 @@ test(
         why: "Future routing only",
         needsJp: false,
         projectId,
-        scope: { kind: "global" },
       },
       lifecycle,
       owner,
@@ -360,7 +356,6 @@ test(
         why: "Local area route",
         needsJp: false,
         projectId: localProject.entityId,
-        scope: { kind: "global" },
       },
       lifecycle,
       owner,
@@ -371,7 +366,6 @@ test(
         why: "Explicit area route",
         needsJp: false,
         projectId: remoteProject.entityId,
-        scope: { kind: "area", areaId: remoteArea.entityId },
       },
       lifecycle,
       owner,
@@ -419,167 +413,374 @@ test(
         .destinationMismatches,
       1,
     );
-    await verifySessionViews(
+    await verifyTaskDrivenSessions({
       root,
+      storePath,
+      run,
+      client,
       catalog,
-      final,
-      rows,
-      remoteProject.entityId,
-      remoteTask.id,
-    );
+      store,
+      projectId: remoteProject.entityId,
+      taskId: remoteTask.id,
+      otherProjectId: localProject.entityId,
+      moveAreaId: remoteArea.entityId,
+      apply,
+    });
+    assert.deepEqual((await store.show(old.id)).metadata, before.metadata);
+    assert.deepEqual(await store.comments(old.id), comments);
   },
 );
 
-async function verifySessionViews(
-  root: string,
-  catalog: ReturnType<typeof createCatalogStore>,
-  currentCatalog: WorkCatalog,
-  issues: CatalogIssue[],
-  projectId: string,
-  taskId: string,
-) {
-  const source = SessionManager.create(root, join(root, "sessions"));
-  source.appendMessage({
-    role: "user",
-    content: "Synthetic catalog session",
-    timestamp: 1,
-  });
-  const leaf = source.appendMessage({
-    role: "assistant",
-    content: [{ type: "text", text: "Synthetic answer" }],
-    api: "openai-responses",
-    provider: "openai",
-    model: "fixture",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: 2,
-  });
-  persistSessionWorkScope(source, { kind: "project", projectId });
-  source.branch(leaf);
-  const sourceFile = source.getSessionFile()!;
-  let current = SessionManager.open(sourceFile, source.getSessionDir(), root);
-  const verify = (manager: SessionManager) => {
-    const selected = resolveSessionSelection(manager, currentCatalog);
-    assert.equal(selected.kind, "catalog");
-    assert.equal(workSelectionLabel(selected), "Renamed Published Work");
-    assert.deepEqual(
-      selectWorkIssues(selected, issues).map((issue) => issue.id),
-      [taskId],
-    );
-  };
-  verify(current);
-  type Handler = (event: { reason?: string }, ctx: ExtensionContext) => unknown;
-  const handlers = new Map<string, Handler>();
-  const pi = {
-    on: (name: string, handler: Handler) => handlers.set(name, handler),
-    registerCommand: () => {},
-    registerShortcut: () => {},
-    appendEntry: (type: string, data: unknown) =>
-      current.appendCustomEntry(type, data),
-    setSessionName: (name: string) => current.appendSessionInfo(name),
-    exec: async () => {
-      throw new Error("Unexpected external command in scoped session fixture");
-    },
-  } as unknown as ExtensionAPI;
-  const context = () =>
-    ({
+async function verifyTaskDrivenSessions(input: {
+  root: string;
+  storePath: string;
+  run: BeadsExec;
+  client: ReturnType<typeof createBeadsClient>;
+  catalog: ReturnType<typeof createCatalogStore>;
+  store: ReturnType<typeof createLifecycleStore>;
+  projectId: string;
+  taskId: string;
+  otherProjectId: string;
+  moveAreaId: string;
+  apply(command: CatalogCommand): Promise<unknown>;
+}) {
+  const {
+    root,
+    storePath,
+    run,
+    client,
+    catalog,
+    store,
+    projectId,
+    taskId,
+    otherProjectId,
+  } = input;
+  const previousBeads = process.env.BEADS_DIR;
+  process.env.BEADS_DIR = storePath;
+  try {
+    const current = SessionManager.create(root, join(root, "sessions"));
+    current.appendMessage({
+      role: "user",
+      content: "Synthetic task identity session",
+      timestamp: 1,
+    });
+    const leaf = current.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Synthetic answer" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "fixture",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const service = new TaskLifecycleService({
+      store,
+      now: Date.now,
+      uuid: () => "fixture-identity-operation",
+      executionTimeoutMs: 60000,
+    });
+    type Handler = (event: any, ctx: any) => unknown;
+    const handlers = new Map<string, Handler[]>();
+    const tools = new Map<string, any>();
+    const commands = new Map<string, any>();
+    const messages: any[] = [];
+    const notifications: string[] = [];
+    let reads = 0;
+    const pi = {
+      events: new EventEmitter(),
+      on: (name: string, handler: Handler) =>
+        handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+      registerTool: (tool: any) => tools.set(tool.name, tool),
+      registerCommand: (name: string, command: any) =>
+        commands.set(name, command),
+      registerShortcut() {},
+      registerEntryRenderer() {},
+      appendEntry: (type: string, data: unknown) =>
+        current.appendCustomEntry(type, data),
+      setSessionName: (name: string) => current.appendSessionInfo(name),
+      getSessionName: () => current.getSessionName(),
+      sendMessage: (message: unknown) => messages.push(message),
+      exec: async (command: string, argv: readonly string[]) => {
+        const args = command === "env" ? argv.slice(2) : argv;
+        const binary = command === "env" ? argv[1] : command;
+        assert.equal(binary, "bd");
+        assert.equal(args[args.indexOf("--db") + 1], storePath);
+        return run(binary, args, { env: { BD_BACKUP_ENABLED: "false" } });
+      },
+    };
+    const context = () => ({
       cwd: root,
+      mode: "tui",
       sessionManager: current,
       ui: {
-        notify: (message: string, level?: string) => {
-          if (level !== "info") assert.fail(message);
+        notify: (message: string) => notifications.push(message),
+        select: async (_title: string, items: string[]) => {
+          const selected = items.find((item) =>
+            item.includes("/ Local Work —"),
+          );
+          assert.ok(selected, "fixture project picker must offer Local Work");
+          return selected;
         },
       },
-    }) as unknown as ExtensionContext;
-  tasksOverlay(pi, { catalog });
-  await handlers.get("session_start")!({ reason: "resume" }, context());
-  await handlers.get("session_before_fork")!({}, context());
-  current.createBranchedSession(leaf);
-  await handlers.get("session_start")!({ reason: "fork" }, context());
-  verify(current);
-  verify(
-    SessionManager.open(
-      current.getSessionFile()!,
-      source.getSessionDir(),
-      root,
-    ),
-  );
-
-  const savedEnv = {
-    HERDR_ENV: process.env.HERDR_ENV,
-    HERDR_PANE_ID: process.env.HERDR_PANE_ID,
-    HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
-  };
-  Object.assign(process.env, {
-    HERDR_ENV: "1",
-    HERDR_PANE_ID: "w1:p1",
-    HERDR_SOCKET_PATH: join(root, "fake-herdr.sock"),
-  });
-  try {
-    let cloneCommand:
-      | Parameters<ExtensionAPI["registerCommand"]>[1]
-      | undefined;
-    const beforeFiles = new Set(await readdir(source.getSessionDir()));
-    const calls: string[] = [];
-    herdrClone({
-      registerCommand: (_name, command) => {
-        cloneCommand = command;
+    });
+    createTaskLifecycleExtension({
+      service,
+      readCatalog: () => catalog.read(),
+      readSessionFacts: async () => {
+        reads++;
+        return readSessionFacts(client, () => catalog.read());
       },
-      getThinkingLevel: () => "low",
-      exec: async (command, args) => {
-        calls.push(command);
-        return {
-          code: 0,
-          killed: false,
-          stderr: "",
-          stdout: JSON.stringify({
-            result:
-              args[0] === "pane"
-                ? { pane: { pane_id: "w1:p2" } }
-                : {
-                    agent: {
-                      pane_id: "w1:p2",
-                      terminal_id: "fixture",
-                      name: args[2],
-                      kind: "pi",
-                      state: "idle",
-                    },
-                  },
-          }),
-        };
-      },
-    } as ExtensionAPI);
-    await cloneCommand!.handler("", {
-      ...context(),
-      sessionManager: source,
-      mode: "tui",
-      model: { provider: "openai", id: "fixture" },
-      isIdle: () => true,
-      hasPendingMessages: () => false,
-    } as unknown as ExtensionCommandContext);
-    assert.deepEqual(calls, ["herdr", "herdr"]);
-    const clonedFiles = (await readdir(source.getSessionDir())).filter(
-      (file) => !beforeFiles.has(file),
+      workStateHealth: async () => ({
+        state: "unavailable",
+        reason: "No live daemon in fixture",
+      }),
+      now: Date.now,
+      pid: process.pid,
+      hostname: hostname(),
+      activityWriteIntervalMs: 300000,
+      sessionReconcileLimit: 10,
+      sessionPrCheckLimit: 5,
+    })(pi as any);
+    // Run the browser after lifecycle recovery to catch an accidental override.
+    tasksOverlay(pi as unknown as ExtensionAPI, { catalog });
+    const emit = async (name: string, event: unknown = {}) => {
+      const results: any[] = [];
+      for (const handler of handlers.get(name) ?? [])
+        results.push(await handler(event, context()));
+      return results;
+    };
+    let operation = 0;
+    const call = async (name: string, params: unknown) => {
+      const result = await tools
+        .get(name)
+        .execute(
+          `fixture-${++operation}`,
+          params,
+          undefined,
+          undefined,
+          context(),
+        );
+      assert.equal(result.isError, undefined);
+      return result;
+    };
+    const view = async (manager = current) => {
+      const selection = resolveSessionSelection(
+        manager,
+        (await catalog.read())!,
+      );
+      assert.equal(selection.kind, "catalog");
+      if (selection.kind !== "catalog")
+        throw new Error("Fixture catalog selection missing");
+      return selection.scope;
+    };
+    const named = (project: string, manager = current) =>
+      `${project}-${manager.getSessionId().replaceAll("-", "").slice(-8)}`;
+    const bindings = (row: Awaited<ReturnType<typeof store.show>>) => ({
+      project: row.metadata.piProject,
+      publication: row.metadata.piWorkManagement,
+    });
+    const original = await store.show(taskId);
+    const originalBinding = structuredClone(bindings(original));
+    await emit("session_start", { reason: "startup" });
+    assert.equal(current.getSessionName(), named("unassigned"));
+    const beforeClaimReads = reads;
+    await call("task_claim", { taskId });
+    assert.equal(
+      reads - beforeClaimReads,
+      1,
+      "claim identity and mission share one snapshot",
     );
-    assert.equal(clonedFiles.length, 1);
-    verify(
-      SessionManager.open(
-        join(source.getSessionDir(), clonedFiles[0]),
-        source.getSessionDir(),
-        root,
+    assert.equal(current.getSessionName(), named("Renamed Published Work"));
+    assert.deepEqual(await view(), { kind: "project", projectId });
+    await commands.get("project").handler("", context());
+    assert.deepEqual(await view(), {
+      kind: "project",
+      projectId: otherProjectId,
+    });
+    assert.equal(current.getSessionName(), named("Renamed Published Work"));
+    const recorded = await call("task_create", {
+      title: "Independent recorded work",
+      why: "Record independent work",
+      needs_jp: false,
+      projectId: otherProjectId,
+    });
+    const recordedId = recorded.details.id as string;
+    assert.equal(recorded.details.lifecycle.execution, null);
+    assert.deepEqual(recorded.details.metadata.piProject, {
+      version: 1,
+      projectId: otherProjectId,
+    });
+    assert.equal(current.getSessionName(), named("Renamed Published Work"));
+    assert.deepEqual(await view(), {
+      kind: "project",
+      projectId: otherProjectId,
+    });
+    await assert.rejects(
+      call("task_create", {
+        title: "Missing placement",
+        why: "Must not inherit",
+        needs_jp: false,
+      }),
+      /explicit project/i,
+    );
+    assert.deepEqual(bindings(await store.show(taskId)), originalBinding);
+
+    await input.apply({
+      kind: "rename",
+      entity: "project",
+      id: projectId,
+      name: "Session-owned project",
+    });
+    await input.apply({
+      kind: "move_project",
+      projectId,
+      areaId: input.moveAreaId,
+    });
+    await input.apply({
+      kind: "rename",
+      entity: "area",
+      id: input.moveAreaId,
+      name: "Runtime Operations",
+    });
+    const refreshed = await emit("before_agent_start");
+    assert.equal(current.getSessionName(), named("Session-owned project"));
+    assert.deepEqual(await view(), {
+      kind: "project",
+      projectId: otherProjectId,
+    });
+    assert.match(
+      JSON.stringify(refreshed),
+      /Session-owned project • Runtime Operations/,
+    );
+    assert.deepEqual(bindings(await store.show(taskId)), originalBinding);
+    await call("task_defer", { taskId, reason: "Yield the fixture task" });
+    assert.equal(current.getSessionName(), named("unassigned"));
+    assert.deepEqual(await view(), { kind: "global" });
+    await call("task_claim", { taskId: recordedId });
+    assert.equal(current.getSessionName(), named("Local Work"));
+    assert.deepEqual(await view(), {
+      kind: "project",
+      projectId: otherProjectId,
+    });
+    const recordedBinding = structuredClone(
+      bindings(await store.show(recordedId)),
+    );
+    current.appendSessionInfo("Manual name is not authority");
+    persistSessionWorkScope(current, { kind: "project", projectId });
+    await emit("session_start", { reason: "resume" });
+    assert.equal(current.getSessionName(), named("Local Work"));
+    assert.deepEqual(await view(), {
+      kind: "project",
+      projectId: otherProjectId,
+    });
+
+    const parentId = current.getSessionId();
+    const parentFile = current.getSessionFile()!;
+    await emit("session_before_fork");
+    current.createBranchedSession(leaf);
+    assert.notEqual(current.getSessionId(), parentId);
+    await emit("session_start", { reason: "fork" });
+    assert.equal(current.getSessionName(), named("unassigned"));
+    assert.deepEqual(await view(), { kind: "global" });
+    assert.equal(
+      (await store.show(recordedId)).lifecycle!.execution!.sessionId,
+      parentId,
+    );
+    assert.deepEqual(bindings(await store.show(recordedId)), recordedBinding);
+    assert.deepEqual(bindings(await store.show(taskId)), originalBinding);
+    assert.equal((await store.show(taskId)).title, original.title);
+    assert.equal(
+      messages.filter((message) => message.customType === "jp-task-claimed")
+        .length,
+      2,
+    );
+    assert.ok(
+      !notifications.some((message) =>
+        /Startup tasks unavailable|identity could not/.test(message),
       ),
     );
-    verify(source);
+
+    const parent = SessionManager.open(
+      parentFile,
+      current.getSessionDir(),
+      root,
+    );
+    const parentBeforeClone = await readFile(parentFile, "utf8");
+    const savedEnv = {
+      HERDR_ENV: process.env.HERDR_ENV,
+      HERDR_PANE_ID: process.env.HERDR_PANE_ID,
+      HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
+    };
+    Object.assign(process.env, {
+      HERDR_ENV: "1",
+      HERDR_PANE_ID: "w1:p1",
+      HERDR_SOCKET_PATH: join(root, "fake-herdr.sock"),
+    });
+    try {
+      let cloneCommand:
+        | Parameters<ExtensionAPI["registerCommand"]>[1]
+        | undefined;
+      const calls: { command: string; args: string[] }[] = [];
+      herdrClone({
+        registerCommand: (_name, command) => {
+          cloneCommand = command;
+        },
+        getThinkingLevel: () => "low",
+        exec: async (command, args) => {
+          calls.push({ command, args });
+          return {
+            code: 0,
+            killed: false,
+            stderr: "",
+            stdout: JSON.stringify({
+              result:
+                args[0] === "pane"
+                  ? { pane: { pane_id: "w1:p2" } }
+                  : { agent: { pane_id: "w1:p2" } },
+            }),
+          };
+        },
+      } as ExtensionAPI);
+      await cloneCommand!.handler("", {
+        ...context(),
+        sessionManager: parent,
+        model: { provider: "openai", id: "fixture" },
+        isIdle: () => true,
+        hasPendingMessages: () => false,
+      } as unknown as ExtensionCommandContext);
+      assert.deepEqual(
+        calls.map((call) => call.command),
+        ["herdr", "herdr"],
+      );
+      const launch = calls[1].args;
+      const clone = SessionManager.open(
+        launch[launch.indexOf("--session") + 1],
+        parent.getSessionDir(),
+        root,
+      );
+      assert.notEqual(clone.getSessionId(), parentId);
+      assert.equal(clone.getSessionName(), named("unassigned", clone));
+      assert.deepEqual(await view(clone), { kind: "global" });
+      assert.equal(await readFile(parentFile, "utf8"), parentBeforeClone);
+      assert.equal(
+        (await store.show(recordedId)).lifecycle!.execution!.sessionId,
+        parentId,
+      );
+    } finally {
+      for (const [key, value] of Object.entries(savedEnv))
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+    }
   } finally {
-    for (const [key, value] of Object.entries(savedEnv))
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+    if (previousBeads === undefined) delete process.env.BEADS_DIR;
+    else process.env.BEADS_DIR = previousBeads;
   }
 }

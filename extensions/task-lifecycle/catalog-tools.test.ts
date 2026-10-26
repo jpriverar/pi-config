@@ -15,6 +15,7 @@ import {
   resolveSessionWorkScope,
 } from "../../lib/session-project.js";
 import { registerWorkCatalogTools } from "./catalog-tools.js";
+import taskLifecycle from "./index.js";
 
 async function harness(t: { after(fn: () => Promise<void>): void }) {
   const storePath = await mkdtemp(join(tmpdir(), "catalog-tool-"));
@@ -86,6 +87,10 @@ test("catalog tool exposes described, bounded data instead of raw routing config
 });
 test("catalog selection records stable scope without creating or claiming a task", async (t) => {
   const h = await harness(t);
+  assert.match(
+    h.tool.description,
+    /browsing.*not.*ownership.*identity.*placement/i,
+  );
   await h.call({ action: "select", scope: { kind: "area", areaId: A } });
   const resolved = resolveSessionWorkScope(h.manager, (await h.store.read())!);
   assert.equal(resolved.kind, "resolved");
@@ -93,6 +98,61 @@ test("catalog selection records stable scope without creating or claiming a task
     assert.deepEqual(resolved.scope, { kind: "area", areaId: A });
   assert.equal(h.writes(), 0);
 });
+test("default lifecycle catalog selection never writes the session name", async () => {
+  const tools = new Map<string, any>();
+  const entries: unknown[] = [];
+  const names: string[] = [];
+  const calls: string[][] = [];
+  taskLifecycle({
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    registerCommand() {},
+    registerEntryRenderer() {},
+    on() {},
+    sendMessage() {},
+    appendEntry: (customType: string, data: unknown) =>
+      entries.push({ type: "custom", customType, data }),
+    setSessionName: (name: string) => names.push(name),
+    exec: async (command: string, argv: string[]) => {
+      const args = command === "env" ? argv.slice(2) : argv;
+      calls.push(args);
+      assert.ok(
+        args[0] === "list" || (args[0] === "config" && args[1] === "get"),
+      );
+      return {
+        code: 0,
+        stdout: JSON.stringify(
+          args[0] === "config"
+            ? { value: JSON.stringify(catalogFixture()) }
+            : [],
+        ),
+        stderr: "",
+      };
+    },
+  } as any);
+  const manager = {
+    getSessionId: () => "fixture-session",
+    getSessionName: () => "owned-name",
+    getEntries: () => entries,
+  };
+  const result = await tools
+    .get("work_catalog")
+    .execute(
+      "select",
+      { action: "select", scope: { kind: "area", areaId: A } },
+      undefined,
+      undefined,
+      { cwd: "/fixture", sessionManager: manager },
+    );
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(resolveSessionWorkScope(manager, catalogFixture()), {
+    kind: "resolved",
+    scope: { kind: "area", areaId: A },
+    source: "explicit",
+  });
+  assert.deepEqual(names, []);
+  assert.ok(calls.length > 0);
+});
+
 test("catalog mutations require revision and descriptions and return safe identity", async (t) => {
   const h = await harness(t);
   await assert.rejects(

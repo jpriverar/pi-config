@@ -225,9 +225,18 @@ With an explicitly activated catalog, `/area` and `/project` select global,
 area, or project views and manage described, persistent entities—even empty
 projects. Each project inherits its area's explicit local-only or linked work-item
 publication policy for **new tasks**. There is no default-board fallback.
-Selection does not claim or release work; a session-owned task outside the view
-remains visible in status. Renames preserve stable identity and aliases; moves
-never retarget existing captured destinations.
+Selection changes browsing only: it does not rename the session, claim/release
+work, or choose placement for new tasks. Every catalog-backed creation supplies
+an explicit project ID or registered name, even when a task is already owned.
+Recording work elsewhere leaves the session unchanged.
+
+A claimed task supplies the working project/area and automatic
+`<project-name>-<session-suffix>` name. Relinquishing ownership produces
+`unassigned-<session-suffix>` and a global view. Later browsing remains independent;
+status labels filtered counts separately and keeps an outside-view owned task
+visible. Unknown ownership is unavailable, not unassigned. Manual names are
+replaced during reconciliation. Renames preserve stable identity and aliases;
+moves never retarget existing captured destinations.
 
 Catalog data is private Beads data, not package content. Use the
 [reviewed prepare/activate runbook](docs/task-reconciler-operations.md#reviewed-area-and-project-activation)
@@ -498,9 +507,11 @@ Use `/herdr-clone` from an idle, saved Pi conversation inside Herdr:
 The command copies the active conversation branch into a new session, opens
 and focuses the new pane, and starts Pi with the same working directory,
 model, and thinking level. The new agent waits for your next instruction;
-the original session is unchanged. A named clone gets a fresh display name
-using its project (or existing name) and the new session ID's suffix, while
-keeping the same project scope. Compaction records are preserved, so this
+the original session is unchanged. Catalog-backed clones start unassigned with
+a global browse view and a new session-ID suffix; they never inherit or transfer
+the parent’s ownership. Fork and `/clear` use the same neutral catalog behavior.
+Without a catalog, legacy name/scope preservation remains. Compaction records are
+preserved, so this
 separates future conversation growth but does not shrink inherited context.
 The new process loads its normal Pi configuration, not the source process's
 in-memory extension state or one-off CLI overrides.

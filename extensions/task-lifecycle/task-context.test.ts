@@ -5,6 +5,7 @@ import { createBeadsClient, type BeadsIssue } from "../../lib/beads.js";
 import { SESSION_PROJECT_ENTRY_TYPE } from "../../lib/session-project.js";
 import {
   readOwnedTaskContext,
+  readSessionFacts,
   renderTaskContext,
   selectOwnedTaskContext,
   type TaskSession,
@@ -230,6 +231,68 @@ test("fresh context lookup uses the existing read-only client once", async () =>
   ]);
 });
 
+test("shared facts read lists once and distinguishes empty data from catalog or task failure", async () => {
+  let calls = 0;
+  let fail = false;
+  const client = createBeadsClient(
+    async () => {
+      calls++;
+      return fail
+        ? { code: 1, stdout: "", stderr: "fixture failure" }
+        : { code: 0, stdout: "[]", stderr: "" };
+    },
+    { env: { BEADS_DIR: "/fixture/.beads" } },
+  );
+  let catalogReads = 0;
+  assert.deepEqual(
+    await readSessionFacts(client, async () => {
+      catalogReads++;
+      return null;
+    }),
+    { kind: "available", issues: [], catalog: null },
+  );
+  assert.equal(calls, 1);
+  assert.equal(catalogReads, 1);
+  fail = true;
+  assert.equal(
+    (await readSessionFacts(client, async () => null)).kind,
+    "unavailable",
+  );
+  fail = false;
+  assert.equal(
+    (
+      await readSessionFacts(client, async () => {
+        throw new Error("invalid catalog");
+      })
+    ).kind,
+    "unavailable",
+  );
+  assert.equal(calls, 3);
+});
+
+test("catalog mission selection cannot ignore ambiguous malformed ownership metadata", async () => {
+  const { P, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  const owned = {
+    ...issue(),
+    labels: [],
+    projectReference: { kind: "valid" as const, projectId: P },
+  };
+  const corrupt = {
+    ...issue("jp-corrupt"),
+    lifecycle: null,
+    lifecycleWarning: "invalid lifecycle",
+  };
+  const result = selectOwnedTaskContext(
+    [owned, corrupt],
+    session(null),
+    catalogFixture(),
+  );
+  assert.equal(result.kind, "unavailable");
+  assert.doesNotMatch(renderTaskContext(result) ?? "", /Build, verify/);
+});
+
 test("failed lookup returns an unavailable diagnostic, not success or an invented mission", async () => {
   const client = createBeadsClient(
     async () => ({ code: 1, stdout: "", stderr: "private detail" }),
@@ -322,7 +385,7 @@ test("catalog view filtering cannot hide multiple owned active tasks", async () 
   );
 });
 
-test("catalog context resolves registered aliases but never guesses display suffixes", async () => {
+test("catalog ownership survives legacy-name and generated-display filter differences", async () => {
   const { P, catalogFixture } = await import(
     "../../lib/work-catalog/test-fixtures.js"
   );
@@ -337,13 +400,20 @@ test("catalog context resolves registered aliases but never guesses display suff
     selectOwnedTaskContext([owned], session("legacy-api"), catalog).kind,
     "available",
   );
-  assert.equal(
-    selectOwnedTaskContext([owned], session("API-12345678"), catalog).kind,
-    "unavailable",
+  const renamedDisplay = selectOwnedTaskContext(
+    [owned],
+    session("API-12345678"),
+    catalog,
   );
+  assert.equal(renamedDisplay.kind, "available");
+  if (renamedDisplay.kind === "available")
+    assert.match(
+      renamedDisplay.value.warnings.join(" "),
+      /view.*unavailable|view.*invalid/i,
+    );
 });
 
-test("version-two context requires a valid active catalog and scope", async () => {
+test("catalog context requires an active catalog but not a valid browse filter", async () => {
   const { catalogFixture } = await import(
     "../../lib/work-catalog/test-fixtures.js"
   );
@@ -353,10 +423,19 @@ test("version-two context requires a valid active catalog and scope", async () =
     { kind: "global", unexpected: true },
     null,
   ]) {
-    assert.equal(
-      selectOwnedTaskContext([issue()], catalogSession(invalid), catalog).kind,
-      "unavailable",
+    const result = selectOwnedTaskContext(
+      [issue()],
+      catalogSession(invalid),
+      catalog,
     );
+    assert.equal(result.kind, "available");
+    if (result.kind === "available") {
+      assert.equal(result.value.taskId, "jp-owned");
+      assert.match(
+        result.value.warnings.join(" "),
+        /view.*unavailable|view.*invalid/i,
+      );
+    }
   }
   const global = catalogSession({ kind: "global" });
   assert.equal(selectOwnedTaskContext([issue()], global).kind, "unavailable");

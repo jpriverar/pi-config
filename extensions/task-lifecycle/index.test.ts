@@ -7,7 +7,7 @@ import type {
   LifecycleIssue,
   LockOwner,
 } from "../../lib/task-lifecycle/types.js";
-import type { TaskContextResult } from "./task-context.js";
+import type { SessionFactsResult } from "./task-context.js";
 import {
   createTaskLifecycleExtension,
   type TaskLifecycleToolService,
@@ -287,7 +287,7 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
         getSessionId: () => "session-1",
         getBranch: () => [{ type: "message" }],
         getEntries: (): unknown[] => [],
-        getSessionName: () => undefined,
+        getSessionName: (): string | undefined => undefined,
       },
       ui: { notify() {} },
     } satisfies Context,
@@ -316,6 +316,7 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
     [...h.handlers.keys()].sort(),
     [
       "session_shutdown",
+      "session_before_fork",
       "agent_before_settle",
       "turn_start",
       "tool_execution_start",
@@ -1620,78 +1621,191 @@ test("task result includes independent work management health without changing i
   );
 });
 
-test("catalog task tool inherits a stable project and passes scope for locked revalidation", async () => {
+test("catalog creation requires explicit placement in every session state", async (t) => {
+  const { A, P, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  for (const [name, scope] of [
+    ["project", { kind: "project", projectId: P }],
+    ["area", { kind: "area", areaId: A }],
+    ["global", { kind: "global" }],
+    ["malformed", { kind: "invalid" }],
+    ["display name only", undefined],
+  ] as const) {
+    await t.test(name, async () => {
+      const h = harness({ readCatalog: async () => catalogFixture() });
+      h.guardState.activeTasks = [activeIssue("owned")];
+      h.guardState.activeTasks[0].metadata.piProject = {
+        version: 1,
+        projectId: P,
+      };
+      h.context.sessionManager.getSessionName = () => "api";
+      h.context.sessionManager.getEntries = () =>
+        scope === undefined
+          ? []
+          : [
+              {
+                type: "custom",
+                customType: "jp-project-scope",
+                data: { version: 2, scope },
+              },
+            ];
+      await assert.rejects(
+        h.tools
+          .get("task_create")!
+          .execute(
+            "create",
+            { title: "new task", why: "goal", needs_jp: false },
+            undefined,
+            undefined,
+            h.context,
+          ),
+        /explicit project/i,
+      );
+      assert.equal(
+        h.calls.length,
+        0,
+        "no creation or ownership lookup without placement",
+      );
+      assert.equal(h.execCalls.length, 0);
+    });
+  }
+});
+
+test("explicit placement is independent of browsing and current work", async (t) => {
+  const { B, P, Q, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  for (const scope of [
+    { kind: "project", projectId: P },
+    { kind: "area", areaId: B },
+    { kind: "global" },
+    { kind: "invalid" },
+  ]) {
+    await t.test(scope.kind, async () => {
+      const h = harness({ readCatalog: async () => catalogFixture() });
+      h.guardState.activeTasks = [activeIssue("owned")];
+      h.guardState.activeTasks[0].metadata.piProject = {
+        version: 1,
+        projectId: P,
+      };
+      const ownedBefore = structuredClone(h.guardState.activeTasks);
+      const entries = [
+        {
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope },
+        },
+      ];
+      h.context.sessionManager.getEntries = () => entries;
+      h.context.sessionManager.getSessionName = () => "api-580c8e67";
+      const sessionWrites: unknown[] = [];
+      Object.assign(h.pi, {
+        appendEntry: (...args: unknown[]) => sessionWrites.push(args),
+        setSessionName: (name: string) => sessionWrites.push(name),
+      });
+      await h.tools
+        .get("task_create")!
+        .execute(
+          "create",
+          { title: "new task", why: "goal", projectId: Q, needs_jp: false },
+          undefined,
+          undefined,
+          h.context,
+        );
+      assert.deepEqual(
+        h.calls.map((c) => c.name),
+        ["create"],
+      );
+      assert.deepEqual(h.calls[0].args[0], {
+        title: "new task",
+        why: "goal",
+        projectId: Q,
+        needsJp: false,
+      });
+      assert.deepEqual(h.guardState.activeTasks, ownedBefore);
+      assert.deepEqual(sessionWrites, []);
+      assert.equal(h.execCalls.length, 0);
+    });
+  }
+});
+
+test("explicit catalog creation never reads session display or scope", async () => {
   const { P, catalogFixture } = await import(
     "../../lib/work-catalog/test-fixtures.js"
   );
   const h = harness({ readCatalog: async () => catalogFixture() });
-  const context: Context = h.context;
-  context.sessionManager.getEntries = () => [
-    {
-      type: "custom",
-      customType: "jp-project-scope",
-      data: { version: 2, scope: { kind: "project", projectId: P } },
-    },
-  ];
+  h.context.sessionManager.getEntries = () => {
+    throw new Error("scope must not determine placement");
+  };
+  h.context.sessionManager.getSessionName = () => {
+    throw new Error("display name must not determine placement");
+  };
   await h.tools
     .get("task_create")!
     .execute(
       "create",
-      { title: "new task", why: "goal", needs_jp: false },
+      { title: "new task", why: "goal", workstream: "API", needs_jp: false },
       undefined,
       undefined,
-      context,
+      h.context,
     );
-  assert.deepEqual(h.calls.find((c) => c.name === "create")!.args[0], {
+  assert.deepEqual(h.calls[0].args[0], {
     title: "new task",
     why: "goal",
-    needsJp: false,
     projectId: P,
-    scope: { kind: "project", projectId: P },
+    workstream: "API",
+    needsJp: false,
   });
 });
-test("catalog task tool refuses ambiguous area placement before calling service", async () => {
-  const { A, catalogFixture } = await import(
-    "../../lib/work-catalog/test-fixtures.js"
-  );
-  const h = harness({ readCatalog: async () => catalogFixture() });
-  const context: Context = h.context;
-  context.sessionManager.getEntries = () => [
-    {
-      type: "custom",
-      customType: "jp-project-scope",
-      data: { version: 2, scope: { kind: "area", areaId: A } },
-    },
-  ];
-  await assert.rejects(
-    h.tools
-      .get("task_create")!
-      .execute(
-        "create",
-        { title: "new task", why: "goal", needs_jp: false },
-        undefined,
-        undefined,
-        context,
-      ),
-    /project/i,
-  );
-  assert.equal(h.calls.filter((c) => c.name === "create").length, 0);
+
+test("missing required catalog never falls back to legacy creation", async () => {
+  const { P } = await import("../../lib/work-catalog/test-fixtures.js");
+  for (const selection of [{ projectId: P }, { workstream: "API" }]) {
+    const h = harness({ readCatalog: async () => null });
+    h.context.sessionManager.getEntries = () => [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "project", projectId: P } },
+      },
+    ];
+    await assert.rejects(
+      h.tools
+        .get("task_create")!
+        .execute(
+          "create",
+          { title: "new task", why: "goal", needs_jp: false, ...selection },
+          undefined,
+          undefined,
+          h.context,
+        ),
+      /catalog|scope/i,
+    );
+    assert.equal(h.calls.length, 0);
+  }
 });
 
-function claimedContext(taskId = "jp-1"): TaskContextResult {
+function claimedFacts(taskId = "jp-1"): SessionFactsResult {
   return {
     kind: "available",
-    value: {
-      taskId,
-      description: "Build and verify the agreed outcome",
-      nextStep: "Verify abc123 in staging",
-      warnings: [],
-    },
+    catalog: null,
+    issues: [
+      {
+        id: taskId,
+        title: "Lifecycle task",
+        status: "in_progress",
+        labels: [],
+        lifecycle: activeIssue(taskId).lifecycle,
+        description: "Build and verify the agreed outcome",
+        nextStep: "Verify abc123 in staging",
+      },
+    ],
   };
 }
 
 test("claim queues owned context independently of the caller retaining its result", async () => {
-  const h = harness({ readTaskContext: async () => claimedContext() });
+  const h = harness({ readSessionFacts: async () => claimedFacts() });
   await h.tools
     .get("task_claim")!
     .execute("claim", { taskId: "jp-1" }, null, null, h.context);
@@ -1706,7 +1820,7 @@ test("claim queues owned context independently of the caller retaining its resul
 
 test("context lookup failure does not turn a successful claim into a failed claim", async () => {
   const h = harness({
-    readTaskContext: async () => {
+    readSessionFacts: async () => {
       throw new Error("private failure detail");
     },
   });
@@ -1721,7 +1835,7 @@ test("context lookup failure does not turn a successful claim into a failed clai
 });
 
 test("context enqueue failure leaves a visible successful-claim diagnostic", async () => {
-  const h = harness({ readTaskContext: async () => claimedContext() });
+  const h = harness({ readSessionFacts: async () => claimedFacts() });
   h.pi.sendMessage = () => {
     throw new Error("queue unavailable");
   };
@@ -1745,17 +1859,18 @@ for (const interruption of [
 ] as const) {
   test(`claim context is not delivered after ${interruption} during lookup`, async () => {
     let entered!: () => void;
-    let resolve!: (value: TaskContextResult) => void;
+    let resolve!: (value: SessionFactsResult) => void;
     const started = new Promise<void>((done) => {
       entered = done;
     });
-    const lookup = new Promise<TaskContextResult>((done) => {
+    const lookup = new Promise<SessionFactsResult>((done) => {
       resolve = done;
     });
+    let reads = 0;
     const h = harness({
-      readTaskContext: () => {
+      readSessionFacts: () => {
         entered();
-        return lookup;
+        return ++reads === 1 ? lookup : Promise.resolve(claimedFacts());
       },
     });
     const controller = new AbortController();
@@ -1790,7 +1905,7 @@ for (const interruption of [
           await handler({ reason: "resume" }, h.context);
       }
     }
-    resolve(claimedContext());
+    resolve(claimedFacts());
     await pending;
     assert.equal(h.sent.length, 0);
   });
@@ -1798,7 +1913,7 @@ for (const interruption of [
 
 test("post-claim context cannot substitute a different owned task", async () => {
   const h = harness({
-    readTaskContext: async () => claimedContext("jp-different"),
+    readSessionFacts: async () => claimedFacts("jp-different"),
   });
   await h.tools
     .get("task_claim")!
@@ -1826,17 +1941,494 @@ test("factory exposes operator-only review and injectable work-state health", as
   assert.equal(healthReads, 1);
 });
 
-test("claim context is suppressed when a catalog view changes during lookup", async () => {
+async function catalogIdentityHarness() {
+  const { P, Q, catalogFixture } = await import(
+    "../../lib/work-catalog/test-fixtures.js"
+  );
+  const { resolveSessionWorkScope } = await import(
+    "../../lib/session-project.js"
+  );
+  const catalog = catalogFixture();
+  let catalogResult: typeof catalog | null = catalog;
+  const h = harness({
+    readCatalog: async () => catalogResult,
+    workStateHealth: async () => ({
+      state: "unavailable",
+      reason: "fixture daemon",
+    }),
+  });
+  let name = "before";
+  const entries: any[] = [];
+  const host = Object.assign(h.pi, {
+    setSessionName(value: string) {
+      name = value;
+    },
+    appendEntry(customType: string, data: unknown) {
+      entries.push({ type: "custom", customType, data });
+    },
+  });
+  h.context.sessionManager.getEntries = () => entries;
+  h.context.sessionManager.getSessionName = () => name;
+  const row = (id = "jp-1", projectId = P) => ({
+    id,
+    title: "Owned task",
+    status: "in_progress",
+    labels: [],
+    description: "The exact owned mission",
+    metadata: {
+      piProject: { version: 1, projectId },
+      piLifecycle: activeIssue(id).lifecycle,
+    },
+  });
+  let rows = [row()];
+  let readRows = async () => rows;
+  let reads = 0;
+  host.exec = async (command, originalArgs) => {
+    const args = command === "env" ? originalArgs.slice(2) : originalArgs;
+    if (args[0] === "list") {
+      reads++;
+      const statuses = args[args.indexOf("-s") + 1].split(",");
+      const listed = (await readRows()).filter((row) =>
+        statuses.includes(row.status),
+      );
+      return { code: 0, stdout: JSON.stringify(listed), stderr: "" };
+    }
+    return { code: 0, stdout: "[]", stderr: "" };
+  };
+  const browse = (scope: unknown) =>
+    host.appendEntry("jp-project-scope", { version: 2, scope });
+  const scope = () =>
+    resolveSessionWorkScope(h.context.sessionManager, catalog);
+  const claim = () =>
+    h.tools
+      .get("task_claim")!
+      .execute("claim", { taskId: "jp-1" }, null, null, h.context);
+  const event = async (name: string, value: unknown = {}) => {
+    const results: any[] = [];
+    for (const handler of h.handlers.get(name) ?? [])
+      results.push(await handler(value, h.context));
+    return results;
+  };
+  browse({ kind: "project", projectId: Q });
+  return {
+    ...h,
+    host,
+    entries,
+    P,
+    Q,
+    catalog,
+    row,
+    browse,
+    scope,
+    claim,
+    event,
+    reads: () => reads,
+    setCatalog(value: typeof catalog | null) {
+      catalogResult = value;
+    },
+    setRows(value: typeof rows) {
+      rows = value;
+    },
+    setReader(value: typeof readRows) {
+      readRows = value;
+    },
+  };
+}
+
+test("cross-project claim derives identity and queues its exact mission from one read", async () => {
+  const h = await catalogIdentityHarness();
+  await h.claim();
+  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.deepEqual(h.scope(), {
+    kind: "resolved",
+    scope: { kind: "project", projectId: h.P },
+    source: "explicit",
+  });
+  assert.equal(h.reads(), 1);
+  assert.equal(h.sent.length, 1);
+  assert.match(h.sent[0].message.content, /The exact owned mission/);
+});
+
+for (const conflict of ["deferred status", "non-active execution"] as const) {
+  test(`decoded ${conflict} cannot clear identity or deliver a mission`, async () => {
+    const h = await catalogIdentityHarness();
+    await h.claim();
+    h.browse({ kind: "project", projectId: h.Q });
+    const row = h.row();
+    if (conflict === "deferred status") row.status = "deferred";
+    else row.metadata.piLifecycle!.phase = "actionable";
+    h.setRows([row]);
+    const projection = () =>
+      h.entries.filter((entry) =>
+        ["jp-project-scope", "jp-working-identity"].includes(entry.customType),
+      );
+    const before = structuredClone(projection());
+    const result = await h.event("before_agent_start");
+    assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+    assert.deepEqual(projection(), before);
+    assert.match(JSON.stringify(result), /unavailable/i);
+    assert.doesNotMatch(JSON.stringify(result), /The exact owned mission/);
+    assert.equal(h.reads(), 2);
+  });
+}
+
+test("deferred ownership facts do not broaden the model work overview", async () => {
+  const h = await catalogIdentityHarness();
+  await h.claim();
+  const row = h.row();
+  row.status = "deferred";
+  row.metadata.piLifecycle!.phase = "deferred";
+  row.metadata.piLifecycle!.execution = null;
+  h.setRows([row]);
+  const result = await h.event("before_agent_start");
+  assert.equal(
+    h.context.sessionManager.getSessionName(),
+    "unassigned-session1",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    /Owned task|The exact owned mission/,
+  );
+  assert.equal(h.reads(), 2);
+});
+
+test("failed claim leaves identity and browsing untouched without a projection read", async () => {
+  const h = await catalogIdentityHarness();
+  h.service.claim = async () => {
+    throw new Error("claim rejected");
+  };
+  const before = structuredClone(h.entries);
+  await assert.rejects(h.claim(), /claim rejected/);
+  assert.deepEqual(h.entries, before);
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
+  assert.equal(h.reads(), 0);
+});
+
+test("navigation during claim lookup is preserved without suppressing its owned mission", async () => {
+  const h = await catalogIdentityHarness();
+  h.setReader(async () => {
+    h.browse({ kind: "global" });
+    return [h.row()];
+  });
+  await h.claim();
+  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.deepEqual(h.scope(), {
+    kind: "resolved",
+    scope: { kind: "global" },
+    source: "explicit",
+  });
+  assert.match(h.sent[0]?.message.content ?? "", /The exact owned mission/);
+  await h.event("before_agent_start");
+  assert.equal(h.scope().kind, "resolved");
+  assert.deepEqual(h.scope(), {
+    kind: "resolved",
+    scope: { kind: "global" },
+    source: "explicit",
+  });
+});
+
+test("malformed browsing cannot hide a valid owned mission or identity", async () => {
+  const h = await catalogIdentityHarness();
+  await h.claim();
+  h.browse({ kind: "invalid" });
+  const result = await h.event("before_agent_start");
+  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.match(JSON.stringify(result), /The exact owned mission/);
+  assert.equal(h.scope().kind, "invalid");
+});
+
+test("a mismatched post-claim owner cannot project another task as confirmation", async () => {
+  const h = await catalogIdentityHarness();
+  h.setRows([h.row("jp-different", h.Q)]);
+  const before = structuredClone(h.entries);
+  const result = await h.claim();
+  assert.match(result.content[0].text, /jp-1: active/);
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
+  assert.deepEqual(h.entries, before);
+  assert.doesNotMatch(
+    JSON.stringify(h.sent),
+    /The exact owned mission|jp-different/,
+  );
+  assert.match(JSON.stringify(h.sent), /changed|unavailable/);
+});
+
+for (const [toolName, method, params] of [
+  ["task_wait", "waitOnExistingCondition", { taskId: "jp-1" }],
+  ["task_defer", "defer", { taskId: "jp-1", reason: "pause" }],
+  [
+    "task_close",
+    "close",
+    { taskId: "jp-1", kind: "cancelled", reason: "stop" },
+  ],
+] as const) {
+  test(`${toolName} resets identity after successful release, never after rejection`, async () => {
+    const h = await catalogIdentityHarness();
+    await h.claim();
+    h.browse({ kind: "project", projectId: h.Q });
+    const original = h.service[method];
+    const before = structuredClone(h.entries);
+    Object.assign(h.service, {
+      [method]: async () => {
+        throw new Error("release rejected");
+      },
+    });
+    await assert.rejects(
+      h.tools.get(toolName)!.execute("release", params, null, null, h.context),
+      /release rejected/,
+    );
+    assert.deepEqual(h.entries, before);
+    assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+    Object.assign(h.service, {
+      [method]: async (...args: any[]) => {
+        const result = await (original as any)(...args);
+        h.setRows([]);
+        return result;
+      },
+    });
+    await h.tools
+      .get(toolName)!
+      .execute("release", params, null, null, h.context);
+    assert.equal(
+      h.context.sessionManager.getSessionName(),
+      "unassigned-session1",
+    );
+    assert.deepEqual(h.scope(), {
+      kind: "resolved",
+      scope: { kind: "global" },
+      source: "explicit",
+    });
+    assert.equal(h.reads(), 2);
+  });
+
+  for (const [catalogState, navigate] of [
+    ["absent", false],
+    ["prepared", false],
+    ["absent", true],
+    ["prepared", true],
+  ] as const) {
+    test(`${toolName} warns after committed release with ${catalogState} required catalog (navigation: ${navigate})`, async () => {
+      const h = await catalogIdentityHarness();
+      await h.claim();
+      const original = h.service[method];
+      let committed = false;
+      Object.assign(h.service, {
+        [method]: async (...args: any[]) => {
+          const result = await (original as any)(...args);
+          committed = true;
+          h.setRows([]);
+          h.setCatalog(
+            catalogState === "absent"
+              ? null
+              : { ...h.catalog, state: "prepared" },
+          );
+          if (navigate) h.browse({ kind: "project", projectId: h.Q });
+          return result;
+        },
+      });
+      const result = await h.tools
+        .get(toolName)!
+        .execute("release", params, null, null, h.context);
+      assert.equal(committed, true);
+      assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+      assert.deepEqual(h.scope(), {
+        kind: "resolved",
+        scope: { kind: "project", projectId: navigate ? h.Q : h.P },
+        source: "explicit",
+      });
+      assert.match(
+        JSON.stringify(result.content),
+        /succeeded.*identity.*not.*rolled back/i,
+      );
+      assert.equal(h.reads(), 2);
+    });
+  }
+}
+
+test("genuine legacy release does not require a catalog projection", async () => {
+  const h = harness({
+    readSessionFacts: async () => ({
+      kind: "available",
+      issues: [],
+      catalog: null,
+    }),
+  });
+  const result = await h.tools
+    .get("task_defer")!
+    .execute(
+      "release",
+      { taskId: "jp-1", reason: "pause" },
+      null,
+      null,
+      h.context,
+    );
+  assert.doesNotMatch(
+    JSON.stringify(result.content),
+    /working identity could not/,
+  );
+});
+
+test("normal snapshots recover external completion and preserve identity on read failure", async () => {
+  const h = await catalogIdentityHarness();
+  await h.claim();
+  h.browse({ kind: "project", projectId: h.Q });
+  h.setReader(async () => {
+    throw new Error("read failed");
+  });
+  await h.event("before_agent_start");
+  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  h.setReader(async () => []);
+  await h.event("before_agent_start");
+  assert.equal(
+    h.context.sessionManager.getSessionName(),
+    "unassigned-session1",
+  );
+  assert.deepEqual(h.scope(), {
+    kind: "resolved",
+    scope: { kind: "global" },
+    source: "explicit",
+  });
+});
+
+test("catalog fork seeds neutral identity before an unavailable recovery read", async () => {
+  const h = await catalogIdentityHarness();
+  await h.event("session_before_fork");
+  h.entries.length = 0;
+  h.context.sessionManager.getSessionId = () => "child-580c8e67";
+  h.setReader(async () => {
+    throw new Error("unavailable");
+  });
+  await h.event("session_start", { reason: "fork" });
+  assert.equal(
+    h.context.sessionManager.getSessionName(),
+    "unassigned-580c8e67",
+  );
+  assert.deepEqual(h.scope(), {
+    kind: "resolved",
+    scope: { kind: "global" },
+    source: "explicit",
+  });
+  assert.equal(
+    h.calls.filter((c) => ["claim", "defer", "close"].includes(c.name)).length,
+    0,
+  );
+});
+
+test("authoritative recovery supersedes the fresh catalog-session seed", async () => {
+  const h = await catalogIdentityHarness();
+  await h.event("session_before_fork");
+  h.context.sessionManager.getSessionId = () => "child-580c8e67";
+  const owned = h.row();
+  owned.metadata.piLifecycle!.execution!.sessionId = "child-580c8e67";
+  h.setRows([owned]);
+  await h.event("session_start", { reason: "fork" });
+  assert.equal(h.context.sessionManager.getSessionName(), "API-580c8e67");
+  assert.deepEqual(h.scope(), {
+    kind: "resolved",
+    scope: { kind: "project", projectId: h.P },
+    source: "explicit",
+  });
+});
+
+test("fresh startup reuses overview facts for identity without a second listing", async () => {
+  const h = await catalogIdentityHarness();
+  h.context.sessionManager.getBranch = () => h.entries;
+  await h.event("session_start", { reason: "startup" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.equal(h.reads(), 1);
+  assert.equal(
+    h.entries.filter((entry) => entry.customType === "jp-work-startup").length,
+    1,
+  );
+});
+
+test("compaction retains the owned mission despite an invalid browse filter", async () => {
+  const h = await catalogIdentityHarness();
+  await h.claim();
+  h.browse({ kind: "invalid" });
+  h.sent.length = 0;
+  await h.event("session_compact");
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].message.customType, "jp-work-compact");
+  assert.match(h.sent[0].message.content, /The exact owned mission/);
+  assert.match(h.sent[0].message.content, /Unavailable/);
+});
+
+test("resume and already-started startup recover identity with one bounded facts read", async () => {
+  for (const reason of ["resume", "startup", "fork", "new"]) {
+    const h = await catalogIdentityHarness();
+    await h.event("session_start", { reason });
+    assert.equal(
+      h.context.sessionManager.getSessionName(),
+      "API-session1",
+      reason,
+    );
+    assert.equal(h.reads(), 1, reason);
+  }
+});
+
+test("post-commit name failure preserves the claim and later browsing during recovery", async () => {
+  const h = await catalogIdentityHarness();
+  const setter = h.host.setSessionName;
+  h.host.setSessionName = () => {
+    throw new Error("name failed");
+  };
+  const result = await h.claim();
+  assert.equal(h.calls.filter((c) => c.name === "claim").length, 1);
+  assert.equal(result.isError, undefined);
+  assert.match(
+    JSON.stringify(result.content),
+    /succeeded.*identity|succeeded.*projection/i,
+  );
+  assert.match(JSON.stringify(h.sent), /The exact owned mission/);
+  h.browse({ kind: "project", projectId: h.Q });
+  h.host.setSessionName = setter;
+  await h.event("before_agent_start");
+  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.deepEqual(h.scope(), {
+    kind: "resolved",
+    scope: { kind: "project", projectId: h.Q },
+    source: "explicit",
+  });
+});
+
+test("a pre-claim observation cannot clear identity after the newer claim commits", async () => {
+  const h = await catalogIdentityHarness();
   let entered!: () => void;
-  let resolve!: (value: TaskContextResult) => void;
+  let finish!: (rows: ReturnType<typeof h.row>[]) => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const pending = new Promise<ReturnType<typeof h.row>[]>((resolve) => {
+    finish = resolve;
+  });
+  let first = true;
+  h.setReader(async () => {
+    if (!first) return [h.row()];
+    first = false;
+    entered();
+    return pending;
+  });
+  const old = h.event("before_agent_start");
+  await started;
+  await h.claim();
+  finish([]);
+  await old;
+  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.match(JSON.stringify(h.sent), /The exact owned mission/);
+});
+
+test("legacy claim context is suppressed when its required scope changes during lookup", async () => {
+  let entered!: () => void;
+  let resolve!: (value: SessionFactsResult) => void;
   const started = new Promise<void>((done) => {
     entered = done;
   });
-  const pendingContext = new Promise<TaskContextResult>((done) => {
+  const pendingContext = new Promise<SessionFactsResult>((done) => {
     resolve = done;
   });
   const h = harness({
-    readTaskContext: () => {
+    readSessionFacts: () => {
       entered();
       return pendingContext;
     },
@@ -1854,7 +2446,7 @@ test("claim context is suppressed when a catalog view changes during lookup", as
     .execute("claim", { taskId: "jp-1" }, null, null, h.context);
   await started;
   scope = { kind: "area", areaId: "11111111-1111-4111-8111-111111111111" };
-  resolve(claimedContext());
+  resolve(claimedFacts());
   await pending;
   assert.equal(h.sent.length, 0);
 });
