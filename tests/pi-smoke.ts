@@ -1032,9 +1032,18 @@ async function verifyContractHarness(
     action: "select",
     scope: { kind: "project", projectId: P },
   });
+  await assert.rejects(
+    invokeTool(harness, "task_create", {
+      title: "Missing placement fixture",
+      why: "Browsing must not select task placement",
+      needs_jp: false,
+    }),
+    /explicit project/i,
+  );
   const scoped = await invokeTool(harness, "task_create", {
     title: "Scoped fixture",
-    why: "Verify project inheritance",
+    why: "Verify explicit project placement",
+    projectId: P,
     needs_jp: false,
   });
   assert.deepEqual(scoped.details.metadata.piProject, {
