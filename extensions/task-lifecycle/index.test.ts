@@ -1949,8 +1949,9 @@ async function catalogIdentityHarness() {
     "../../lib/session-project.js"
   );
   const catalog = catalogFixture();
+  let catalogResult: typeof catalog | null = catalog;
   const h = harness({
-    readCatalog: async () => catalog,
+    readCatalog: async () => catalogResult,
     workStateHealth: async () => ({
       state: "unavailable",
       reason: "fixture daemon",
@@ -1986,7 +1987,11 @@ async function catalogIdentityHarness() {
     const args = command === "env" ? originalArgs.slice(2) : originalArgs;
     if (args[0] === "list") {
       reads++;
-      return { code: 0, stdout: JSON.stringify(await readRows()), stderr: "" };
+      const statuses = args[args.indexOf("-s") + 1].split(",");
+      const listed = (await readRows()).filter((row) =>
+        statuses.includes(row.status),
+      );
+      return { code: 0, stdout: JSON.stringify(listed), stderr: "" };
     }
     return { code: 0, stdout: "[]", stderr: "" };
   };
@@ -2018,6 +2023,9 @@ async function catalogIdentityHarness() {
     claim,
     event,
     reads: () => reads,
+    setCatalog(value: typeof catalog | null) {
+      catalogResult = value;
+    },
     setRows(value: typeof rows) {
       rows = value;
     },
@@ -2039,6 +2047,49 @@ test("cross-project claim derives identity and queues its exact mission from one
   assert.equal(h.reads(), 1);
   assert.equal(h.sent.length, 1);
   assert.match(h.sent[0].message.content, /The exact owned mission/);
+});
+
+for (const conflict of ["deferred status", "non-active execution"] as const) {
+  test(`decoded ${conflict} cannot clear identity or deliver a mission`, async () => {
+    const h = await catalogIdentityHarness();
+    await h.claim();
+    h.browse({ kind: "project", projectId: h.Q });
+    const row = h.row();
+    if (conflict === "deferred status") row.status = "deferred";
+    else row.metadata.piLifecycle!.phase = "actionable";
+    h.setRows([row]);
+    const projection = () =>
+      h.entries.filter((entry) =>
+        ["jp-project-scope", "jp-working-identity"].includes(entry.customType),
+      );
+    const before = structuredClone(projection());
+    const result = await h.event("before_agent_start");
+    assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+    assert.deepEqual(projection(), before);
+    assert.match(JSON.stringify(result), /unavailable/i);
+    assert.doesNotMatch(JSON.stringify(result), /The exact owned mission/);
+    assert.equal(h.reads(), 2);
+  });
+}
+
+test("deferred ownership facts do not broaden the model work overview", async () => {
+  const h = await catalogIdentityHarness();
+  await h.claim();
+  const row = h.row();
+  row.status = "deferred";
+  row.metadata.piLifecycle!.phase = "deferred";
+  row.metadata.piLifecycle!.execution = null;
+  h.setRows([row]);
+  const result = await h.event("before_agent_start");
+  assert.equal(
+    h.context.sessionManager.getSessionName(),
+    "unassigned-session1",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    /Owned task|The exact owned mission/,
+  );
+  assert.equal(h.reads(), 2);
 });
 
 test("failed claim leaves identity and browsing untouched without a projection read", async () => {
@@ -2148,7 +2199,73 @@ for (const [toolName, method, params] of [
     });
     assert.equal(h.reads(), 2);
   });
+
+  for (const [catalogState, navigate] of [
+    ["absent", false],
+    ["prepared", false],
+    ["absent", true],
+    ["prepared", true],
+  ] as const) {
+    test(`${toolName} warns after committed release with ${catalogState} required catalog (navigation: ${navigate})`, async () => {
+      const h = await catalogIdentityHarness();
+      await h.claim();
+      const original = h.service[method];
+      let committed = false;
+      Object.assign(h.service, {
+        [method]: async (...args: any[]) => {
+          const result = await (original as any)(...args);
+          committed = true;
+          h.setRows([]);
+          h.setCatalog(
+            catalogState === "absent"
+              ? null
+              : { ...h.catalog, state: "prepared" },
+          );
+          if (navigate) h.browse({ kind: "project", projectId: h.Q });
+          return result;
+        },
+      });
+      const result = await h.tools
+        .get(toolName)!
+        .execute("release", params, null, null, h.context);
+      assert.equal(committed, true);
+      assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+      assert.deepEqual(h.scope(), {
+        kind: "resolved",
+        scope: { kind: "project", projectId: navigate ? h.Q : h.P },
+        source: "explicit",
+      });
+      assert.match(
+        JSON.stringify(result.content),
+        /succeeded.*identity.*not.*rolled back/i,
+      );
+      assert.equal(h.reads(), 2);
+    });
+  }
 }
+
+test("genuine legacy release does not require a catalog projection", async () => {
+  const h = harness({
+    readSessionFacts: async () => ({
+      kind: "available",
+      issues: [],
+      catalog: null,
+    }),
+  });
+  const result = await h.tools
+    .get("task_defer")!
+    .execute(
+      "release",
+      { taskId: "jp-1", reason: "pause" },
+      null,
+      null,
+      h.context,
+    );
+  assert.doesNotMatch(
+    JSON.stringify(result.content),
+    /working identity could not/,
+  );
+});
 
 test("normal snapshots recover external completion and preserve identity on read failure", async () => {
   const h = await catalogIdentityHarness();

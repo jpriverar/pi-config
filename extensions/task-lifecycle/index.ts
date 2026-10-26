@@ -433,12 +433,20 @@ export function createTaskLifecycleExtension(
         };
       }
       if (!observation.current()) return result;
+      const requiresCatalog = hasCatalogSessionScope(context.sessionManager);
+      const warnProjection = () =>
+        result.content.push({
+          type: "text",
+          text: "Task operation succeeded, but working identity could not be updated. Ownership was not rolled back; revalidate before continuing.",
+        });
       if (
         facts.kind === "available" &&
         facts.catalog?.state !== "active" &&
         !before.legacyCurrent()
-      )
+      ) {
+        if (requiresCatalog) warnProjection();
         return result;
+      }
       let taskContext = contextFromFacts(facts, context.sessionManager);
       const mismatch =
         claimed &&
@@ -463,12 +471,11 @@ export function createTaskLifecycleExtension(
         }
         if (
           !projected &&
-          (facts.kind === "unavailable" || facts.catalog?.state === "active")
+          (facts.kind === "unavailable" ||
+            facts.catalog?.state === "active" ||
+            requiresCatalog)
         )
-          result.content.push({
-            type: "text",
-            text: "Task operation succeeded, but working identity could not be updated. Ownership was not rolled back; revalidate before continuing.",
-          });
+          warnProjection();
       }
       if (!observation.current()) return result;
       if (!mismatch)

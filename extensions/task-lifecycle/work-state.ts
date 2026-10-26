@@ -483,12 +483,13 @@ export function registerTaskWorkState(
     selection: SessionWorkSelection,
     context: TaskWorkStateContext,
     classified: ClassifiedIssue[],
+    ownershipIssues: readonly BeadsIssue[],
   ): State {
     const project = workSelectionLabel(selection);
     const workingIdentity =
       selection.kind === "catalog"
         ? resolveWorkingIdentity(
-            classified,
+            ownershipIssues,
             selection.catalog,
             context.sessionManager.getSessionId?.() ?? "",
           )
@@ -501,7 +502,7 @@ export function registerTaskWorkState(
         ? undefined
         : renderTaskContext(
             selectOwnedTaskContext(
-              classified,
+              ownershipIssues,
               context.sessionManager,
               selection.kind === "catalog" ? selection.catalog : null,
             ),
@@ -670,12 +671,20 @@ export function registerTaskWorkState(
         }
         const priorSerialized = JSON.stringify(cursor);
         const [classified, health] = await Promise.all([
-          classifyListedIssues(client, facts.issues),
+          classifyListedIssues(
+            client,
+            facts.issues.filter((issue) => issue.status !== "deferred"),
+          ),
           readHealth(),
         ]);
         assertCurrent();
         if (!classified.ok) throw new Error(formatBeadsError(classified.error));
-        const state = queryState(selection, context, classified.value);
+        const state = queryState(
+          selection,
+          context,
+          classified.value,
+          facts.issues,
+        );
         const rows: BeadsIssue[] = [...(state.active ?? [])];
         const visible = new Set(rows.map((issue) => issue.id));
         const listed = new Set(state.listedTaskIds ?? visible);

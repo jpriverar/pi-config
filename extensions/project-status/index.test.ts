@@ -149,7 +149,9 @@ function createHarness(
           ? (options.closed ?? [])
           : query === "ready"
             ? issues.filter((item) => readyIds.has(item.id))
-            : issues;
+            : issues.filter((item) =>
+                args[args.indexOf("-s") + 1].split(",").includes(item.status),
+              );
       return {
         code: 0,
         stdout: JSON.stringify(result.map(rawIssue)),
@@ -935,6 +937,44 @@ test("unknown catalog ownership is unavailable rather than unassigned", async ()
   assert.match(h.renderHeader(), /identity unavailable/);
   assert.doesNotMatch(h.renderHeader(), /unassigned|Product/);
   assert.equal(h.calls.length, 1);
+});
+
+for (const conflict of ["deferred status", "non-active execution"] as const) {
+  test(`catalog header reports ${conflict} as unavailable, not unassigned`, async () => {
+    const row = ownedCatalogIssue();
+    if (conflict === "deferred status") row.status = "deferred";
+    else row.lifecycle!.phase = "actionable";
+    const h = createHarness({
+      ...catalogViewFixture(),
+      issues: [row],
+      entries: [projectEntry("api")],
+      sessionName: "API-session1",
+    });
+    await start(h);
+    assert.match(h.renderHeader(), /API-session1.*identity unavailable/);
+    assert.doesNotMatch(h.renderHeader(), /unassigned/);
+    assert.equal(h.calls.length, 1);
+  });
+}
+
+test("deferred ownership facts do not broaden visible task counts", async () => {
+  const deferred = {
+    ...issue("zz-deferred", "deferred", ["workstream:api"]),
+    lifecycle: {
+      ...activeLifecycle("session-1"),
+      phase: "deferred" as const,
+      execution: null,
+    },
+  };
+  const h = createHarness({
+    ...catalogViewFixture(),
+    issues: [deferred],
+    entries: [projectEntry("api")],
+    readyIds: [deferred.id],
+  });
+  await start(h);
+  assert.match(h.renderHeader(), /unassigned-session1/);
+  assert.doesNotMatch(h.renderHeader(), /1 ready|1 waiting|1 in-progress/);
 });
 
 test("a malformed browse filter cannot hide valid working identity", async () => {

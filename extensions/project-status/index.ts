@@ -224,7 +224,11 @@ export default function projectStatus(
       catalog?.state === "active"
         ? undefined
         : resolveSessionSelection(ctx.sessionManager, catalog);
-    const listed = await client.listIssues();
+    const listed = await client.listIssues(
+      catalog?.state === "active"
+        ? ["open", "in_progress", "blocked", "deferred"]
+        : undefined,
+    );
     if (!current()) return;
     const identity =
       catalog?.state === "active"
@@ -266,7 +270,7 @@ export default function projectStatus(
       return;
     }
     const taskState = await getCounts(
-      listed.value,
+      listed.value.filter((issue) => issue.status !== "deferred"),
       selection,
       sessionId,
       current,

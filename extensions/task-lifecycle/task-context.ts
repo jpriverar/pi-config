@@ -26,7 +26,7 @@ export async function readSessionFacts(
 ): Promise<SessionFactsResult> {
   try {
     const [listed, catalog] = await Promise.all([
-      client.listIssues(),
+      client.listIssues(["open", "in_progress", "blocked", "deferred"]),
       readCatalog(),
     ]);
     if (!listed.ok)

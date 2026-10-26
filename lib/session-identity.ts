@@ -40,7 +40,14 @@ export function resolveOwnedTask(
         kind: "unavailable",
         reason: "Task ownership is unavailable; inspect lifecycle metadata",
       };
-    if (issue.lifecycle?.phase !== "active") continue;
+    if (issue.lifecycle?.phase !== "active") {
+      if (issue.lifecycle?.execution)
+        return {
+          kind: "unavailable",
+          reason: "Task execution conflicts with its non-active lifecycle",
+        };
+      continue;
+    }
     const owner = issue.lifecycle.execution?.sessionId;
     if (!owner)
       return {
