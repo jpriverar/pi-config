@@ -97,15 +97,35 @@ without tasks. Tasks remain the unit of execution and ownership.
 
 After reviewed activation, `/area` and `/project` select global/area/project
 views and manage descriptions, names, moves, policies, archive, and restore.
-`/project` retains its legacy picker before activation. Selection changes only
-the view, never ownership or claims. A session-owned task outside the view stays
-visible in status with an outside-current-view marker. Fork, clone, and clear
-preserve explicit session-wide scope, including global scope.
+`/project` retains its legacy picker before activation. Catalog selection changes
+only browsing, never session identity, ownership or new-task placement. A
+session-owned task outside the view stays visible with an outside-current-view
+marker. Filtered counts and model context label the browse view separately from
+working identity.
 
-Compatibility remains for sessions without scope metadata: an exact registered
-display name or alias resolves to that project; unmatched names require explicit
-selection, and generated suffixes are not guessed. Explicit scope always takes
-precedence. Select `/area` or `/project` to remove this legacy ambiguity.
+A unique active task owned by the stable session ID supplies the working project
+and area. Its automatic name is `<project-name>-<session-suffix>`; the suffix uses
+the existing normalized last eight session-ID characters. Successful claim adopts
+that project view once. Wait, defer or close that relinquishes ownership produces
+`unassigned-<session-suffix>` and a global view. Creating another task does neither.
+
+Startup/resume reconstructs identity from ownership. Later explicit browsing is
+preserved during ordinary refreshes, name corrections and catalog renames/moves.
+Manual names are replaced during reconciliation. Failed/ambiguous reads or invalid
+membership are unavailable, not proof of no owner; they do not clear the name or
+release work. A post-commit display failure reports partial success and remains
+recoverable without undoing ownership.
+
+Catalog-backed fork, clone and clear initialize a new ID as unassigned/global,
+without transferring or releasing parent ownership. Their setup does not change
+cwd or allocate a worktree. The session-bound `jp-working-identity` entry is only
+rebuildable presentation bookkeeping; it is never an ownership or placement
+source. Legacy/no-catalog name and scope behavior remains separate.
+
+For browse compatibility only, a session without scope metadata can resolve an
+exact registered display name or alias. Generated suffixes are not guessed, and
+explicit browse scope takes precedence. Neither compatibility path supplies
+working identity or a default for catalog-backed creation.
 
 The `work_catalog` tool provides bounded `list_areas`, `list_projects`, `get_area`,
 `get_project`, and `select` actions plus catalog mutations. Lists expose summaries,
@@ -153,19 +173,21 @@ task_claim -> worktree_pool acquire -> worktree_pool release -> task_wait/task_d
 
 ### `task_create`
 
-Required: `title`, `why`, and `needs_jp`. Optional selectors: `projectId` and
-`workstream` (an immutable compatibility key or registered alias).
+Required: `title`, `why`, and `needs_jp`. Catalog-backed creation also requires
+an explicit `projectId` or `workstream` (a registered project name, immutable
+compatibility key or alias). If both selectors are supplied, they must agree.
 
 Creates an explicitly approved Actionable task. With an active catalog, every
 new task belongs to exactly one project and inherits its area's explicit
 local-only or Datadog publication policy. There is no default destination.
 
-- A project-scoped session may omit the selector to inherit that project.
-- An area-scoped session must name a project in that area.
-- A global session must name a project explicitly.
-- Conflicting selectors/scope, archived parents, and unclassified projects fail
-  before creation. Catalog and configuration are checked again under the shared
-  mutation lock.
+- Every creation explicitly chooses a project. There is no default from a claim,
+  session name, browser filter or board.
+- The selected project may differ from both current work and browsing. Creation
+  records the task without claiming it or changing the session.
+- Conflicting ID/name selectors, archived parents and unclassified projects fail
+  before creation. Catalog availability and publication policy are checked again
+  under the shared mutation lock. Browse scope is not part of that validation.
 
 Creation records `piProject: { version: 1, projectId }`, the immutable workstream
 label, lifecycle metadata, and any captured publication target atomically.

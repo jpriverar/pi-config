@@ -30,6 +30,16 @@ import {
 const testsDirectory = dirname(fileURLToPath(import.meta.url));
 const scenariosDirectory = join(testsDirectory, "skill-scenarios");
 
+test("unrelated task placement does not require switching the session or browse view", async () => {
+  const scenario = await loadScenario(
+    "project-selection/unrelated",
+    scenariosDirectory,
+  );
+  const proposal =
+    "Approve task 'Fix lost acknowledgements' in Queue Reliability, Product, published to Platform Work? Current work and browsing will stay unchanged.";
+  assert.equal(evaluateScenario(scenario, proposal).passed, true);
+});
+
 test("correctness review can be selected independently of structural review", async () => {
   const options = runner.parseArguments([
     "--mode",
