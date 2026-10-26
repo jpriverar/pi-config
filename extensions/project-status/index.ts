@@ -49,7 +49,7 @@ type TaskState =
 function browseLabel(selection: SessionWorkSelection): string | undefined {
   if (selection.kind !== "catalog") return undefined;
   const { catalog, scope } = selection;
-  if (scope.kind === "global") return "All areas";
+  if (scope.kind === "global") return undefined;
   return scope.kind === "area"
     ? `${catalog.areas[scope.areaId].name} (area)`
     : catalog.projects[scope.projectId].name;
@@ -236,6 +236,9 @@ export default function projectStatus(
           ? resolveWorkingIdentity(listed.value, catalog, sessionId)
           : { kind: "unavailable" as const, reason: "Task lookup failed" }
         : undefined;
+    currentSessionName = identity
+      ? (workingIdentityName(identity, ctx.sessionManager) ?? sessionName)
+      : sessionName;
     reporter?.updateTask(
       selectTaskAssignment(
         !listed.ok || identity?.kind === "unavailable"
@@ -245,10 +248,8 @@ export default function projectStatus(
             : listed.value,
         sessionId,
       ),
+      currentSessionName,
     );
-    currentSessionName = identity
-      ? (workingIdentityName(identity, ctx.sessionManager) ?? sessionName)
-      : sessionName;
     const area =
       identity?.kind === "assigned"
         ? identity.areaName

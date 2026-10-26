@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { createHerdrMetadataSender } from "./herdr-transport.js";
-import type { PaneTokens } from "./herdr-values.js";
+import type { PaneMetadata } from "./herdr-values.js";
 
 const environment = {
   HERDR_ENV: "1",
@@ -13,7 +13,8 @@ const environment = {
   HERDR_SOCKET_PATH: "/tmp/test.sock",
   HERDR_BIN_PATH: "/test/herdr",
 };
-const values: PaneTokens = {
+const values: PaneMetadata = {
+  displayAgent: "jp-one • Review auth; stay safe",
   pi_waiting: null,
   pi_model: "Model $(touch nope)",
   pi_task: "Review auth; stay safe",
@@ -71,8 +72,12 @@ test("publishes only owned keys with argv, sequence and finite execution limits"
     "w1:p2",
     "--source",
     "jp:pi-sidebar",
+    "--agent",
+    "pi",
     "--seq",
     "12",
+    "--display-agent",
+    "jp-one • Review auth; stay safe",
     "--token",
     "pi_model=Model $(touch nope)",
     "--token",
@@ -218,6 +223,60 @@ test("failed refresh is retried only on the next delivery, after metadata acknow
   fail = false;
   assert.equal(await send(values, 2, signal), true);
   assert.equal(calls.length, 6);
+});
+
+test("display labels use only fallback metadata and clear only their own field", async () => {
+  const calls: string[][] = [];
+  const send = createHerdrMetadataSender(environment, async (_file, args) => {
+    calls.push([...args]);
+    return replyFor(args);
+  })!;
+  const signal = new AbortController().signal;
+  await send(
+    { ...values, displayAgent: " jp-one • Fix\n \u001b[31m$(touch nope) " },
+    1,
+    signal,
+  );
+  const args = calls[0];
+  assert.equal(
+    args[args.indexOf("--display-agent") + 1],
+    "jp-one • Fix $(touch nope)",
+  );
+  assert.ok(!args.includes("--title") && !args.includes("--clear-title"));
+  for (const displayAgent of [null, "\n "]) {
+    calls.length = 0;
+    await send({ ...values, displayAgent }, 2, signal);
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].includes("--clear-display-agent"));
+    assert.ok(
+      !calls[0].includes("--clear-title") &&
+        !calls[0].includes("--display-agent"),
+    );
+    assert.deepEqual(calls[0].slice(0, 5), [
+      "pane",
+      "report-metadata",
+      "w1:p2",
+      "--source",
+      "jp:pi-sidebar",
+    ]);
+  }
+});
+
+test("display metadata is scoped to Pi without claiming lifecycle authority", async () => {
+  const calls: string[][] = [];
+  const send = createHerdrMetadataSender(environment, async (_file, args) => {
+    calls.push([...args]);
+    return replyFor(args);
+  })!;
+  await send(values, 1, new AbortController().signal);
+  assert.deepEqual(calls[0].slice(0, 3), ["pane", "report-metadata", "w1:p2"]);
+  assert.equal(calls[0][calls[0].indexOf("--agent") + 1], "pi");
+  assert.ok(
+    calls.every(
+      (args) =>
+        !args.includes("report-agent") && !args.includes("release-agent"),
+    ),
+  );
 });
 
 test("a rejected metadata write never triggers count refresh", async () => {

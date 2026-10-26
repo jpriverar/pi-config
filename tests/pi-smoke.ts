@@ -1054,6 +1054,10 @@ async function verifyContractHarness(
 }
 
 async function main() {
+  // The fake TUI must never publish fixture state into the caller's live pane.
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("HERDR_")) delete process.env[key];
+  }
   const packagePath = packageArgument(process.argv.slice(2));
   const manifest = JSON.parse(
     readFileSync(join(packagePath, "package.json"), "utf8"),

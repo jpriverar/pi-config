@@ -14,9 +14,22 @@ export type PaneTokens = Record<
   string | null
 >;
 
+export type PaneMetadata = PaneTokens & { displayAgent: string | null };
+
 export type TaskAssignment =
   | { state: "assigned"; label: string; taskId: string }
   | { state: "unassigned" | "unavailable"; label: string };
+
+export function taskPaneLabel(
+  assignment: TaskAssignment,
+  sessionName: string | undefined,
+): string {
+  if (assignment.state === "assigned")
+    return normalizeMetadata(`${assignment.taskId} • ${assignment.label}`);
+  if (assignment.state === "unassigned")
+    return normalizeMetadata(sessionName ?? "") || "Unassigned";
+  return "Task unavailable";
+}
 
 export function taskTokens(
   assignment: TaskAssignment,

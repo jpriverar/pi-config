@@ -527,6 +527,40 @@ not retry or delete anything automatically: a timed-out request may have
 succeeded. Inspect Herdr before retrying. To recover a saved clone manually,
 run `pi --session <reported-session-file>` from the intended working directory.
 
+## Herdr pane task labels
+
+Interactive Pi sessions inside Herdr mirror their owned task into the pane
+frame, for example `jp-example • Review auth`. Pi's full project-status row
+remains visible: session name, area and task/counts are intentionally retained
+near the prompt. The default global view omits `Browse: All areas`; narrowed
+project/area views still identify their filter.
+
+The reporter uses native **display-agent metadata**, not a primary title or a
+pane rename. Explicit Herdr titles and manual pane names keep priority, and
+neither Pi's session name nor Herdr's detected agent/lifecycle authority changes.
+A native Pi guard keeps the display label from applying to a shell or another
+agent in the pane. With no owned task, the label uses the current session name (normally
+`unassigned-<suffix>`), or `Unassigned` if unnamed. Failed or ambiguous task
+lookups show `Task unavailable` rather than pretending no task is owned.
+
+To keep the name-bearing frame visible even for a lone pane, merge these values
+into the existing Herdr configuration's `[ui]` section and apply them through
+Herdr's supported configuration reload:
+
+```toml
+[ui]
+pane_borders = "always"
+pane_outer_borders = true
+show_agent_labels_on_pane_borders = true
+```
+
+These settings affect all Herdr panes; legacy `pane_borders = true` means Auto,
+not Always. The package does not edit configuration or restart Herdr. Metadata
+delivery is bounded and best-effort, with retries on normal updates, and never
+hides Pi's status row. A successful metadata write alone does not prove that a
+frame is visible. Orderly shutdown clears this integration's display-agent
+field; explicit titles/manual names and unrelated metadata are left alone.
+
 ## Herdr sidebar metadata
 
 Interactive Pi sessions inside Herdr display tab and space, claimed task,
