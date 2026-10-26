@@ -102,11 +102,11 @@ function harness(
 }
 
 describe("/clear", () => {
-  test("registers the project-preserving command", () => {
+  test("registers the neutral-session command", () => {
     const h = harness([]);
 
     assert.deepEqual([...h.commands.keys()], ["clear"]);
-    assert.match(h.commands.get("clear")!.description, /current workstream/);
+    assert.match(h.commands.get("clear")!.description, /unassigned|neutral/i);
   });
 
   test("transfers only the latest project scope and derives a fresh name", async () => {
@@ -116,7 +116,7 @@ describe("/clear", () => {
       nested: { keep: false },
     };
     const latestScope = {
-      version: 2,
+      version: 1,
       workstream: "payments",
       nested: { keep: true },
     };
@@ -222,7 +222,7 @@ for (const scope of [
   { kind: "area", areaId: A },
   { kind: "project", projectId: P },
 ] as WorkScope[]) {
-  test(`clear preserves v2 ${scope.kind} selection and refreshes only the display suffix`, async () => {
+  test(`clear replaces v2 ${scope.kind} selection with a neutral new session`, async () => {
     const base = scope.kind === "area" ? "Area: Product" : "API";
     const data = { version: 2, scope };
     const h = harness(
@@ -232,8 +232,12 @@ for (const scope of [
     );
     await h.clear();
     assert.deepEqual(h.sessions[0], [
-      { type: "custom", customType: "jp-project-scope", data },
-      { type: "session_info", name: `${base}-00000000` },
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "global" } },
+      },
+      { type: "session_info", name: "unassigned-00000000" },
     ]);
   });
 }
@@ -247,5 +251,6 @@ test("clear preserves explicit v2 global without deriving project scope from a d
   await h.clear();
   assert.deepEqual(h.sessions[0], [
     { type: "custom", customType: "jp-project-scope", data },
+    { type: "session_info", name: "unassigned-00000000" },
   ]);
 });

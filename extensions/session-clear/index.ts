@@ -1,9 +1,11 @@
 import {
   SESSION_PROJECT_ENTRY_TYPE,
   latestSessionScopeEntry,
-  sessionDisplayNameBase,
-  generateSessionProjectName,
+  hasCatalogSessionScope,
+  persistSessionWorkScope,
 } from "../../lib/session-project.js";
+
+import { workingIdentityName } from "../../lib/session-identity.js";
 
 type SessionEntry = {
   type: string;
@@ -47,8 +49,19 @@ function scopeWorkstream(data: unknown): string | undefined {
 export default function sessionClearExtension(pi: ExtensionAPI): void {
   pi.registerCommand("clear", {
     description:
-      "Start an empty session while preserving the current workstream",
+      "Start an empty, unassigned catalog session; preserve legacy workstream behavior",
     async handler(_args, ctx) {
+      if (hasCatalogSessionScope(ctx.sessionManager)) {
+        await ctx.newSession({
+          async setup(sessionManager) {
+            persistSessionWorkScope(sessionManager, { kind: "global" });
+            sessionManager.appendSessionInfo(
+              workingIdentityName({ kind: "unassigned" }, sessionManager)!,
+            );
+          },
+        });
+        return;
+      }
       const scope = latestSessionScopeEntry(ctx.sessionManager);
       if (!scope) {
         await ctx.newSession();
@@ -56,19 +69,6 @@ export default function sessionClearExtension(pi: ExtensionAPI): void {
       }
 
       const data = structuredClone(scope.data);
-      const value = data as
-        | { version?: unknown; scope?: { kind?: unknown } }
-        | null
-        | undefined;
-      const scoped =
-        value?.version === 2 &&
-        (value.scope?.kind === "area" || value.scope?.kind === "project");
-      const base = scoped
-        ? sessionDisplayNameBase({
-            getSessionId: () => ctx.sessionManager.getSessionId(),
-            getSessionName: () => ctx.sessionManager.getSessionName?.(),
-          })
-        : undefined;
       await ctx.newSession({
         async setup(sessionManager) {
           sessionManager.appendCustomEntry(SESSION_PROJECT_ENTRY_TYPE, data);
@@ -77,10 +77,6 @@ export default function sessionClearExtension(pi: ExtensionAPI): void {
           if (workstream) {
             sessionManager.appendSessionInfo(
               `${workstream}-${sessionManager.getSessionId().slice(0, 8)}`,
-            );
-          } else if (base) {
-            sessionManager.appendSessionInfo(
-              generateSessionProjectName(sessionManager, base),
             );
           }
         },

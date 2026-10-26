@@ -19,7 +19,7 @@ import {
   type ClassifiedIssue,
 } from "../../lib/beads.js";
 import {
-  generateSessionProjectName,
+  hasCatalogSessionScope,
   persistSessionWorkScope,
   resolveSessionSelection,
   sessionScopeFingerprint,
@@ -37,10 +37,7 @@ import {
   type CatalogStore,
 } from "../../lib/work-catalog/store.js";
 import { createCatalogService } from "../../lib/work-catalog/service.js";
-import {
-  workSelectionLabel,
-  workScopeLabel,
-} from "../../lib/work-catalog/membership.js";
+import { workSelectionLabel } from "../../lib/work-catalog/membership.js";
 import { presentWorkIssues } from "../../lib/work-catalog/presentation.js";
 import { registerProjectCommands, selectWorkEntity } from "./projects.js";
 import { createLegacyProjectCommands } from "./legacy-projects.js";
@@ -229,11 +226,11 @@ export default function tasksOverlay(
       host: hostname(),
       started: Date.now(),
     }),
-    select: (scope, current, ctx) => {
+    select: (scope, _current, ctx) => {
       persistSessionWorkScope(projectWriter, scope);
-      const name = workScopeLabel(current, scope);
-      pi.setSessionName(
-        name ? generateSessionProjectName(ctx.sessionManager, name) : "",
+      pi.events.emit(
+        "pi:work-scope-changed",
+        ctx.sessionManager.getSessionId(),
       );
     },
     choose: selectWorkEntity,
@@ -247,6 +244,10 @@ export default function tasksOverlay(
 
   let pendingForkScope: { data: unknown } | undefined;
   pi.on("session_before_fork", (_event, ctx) => {
+    if (hasCatalogSessionScope(ctx.sessionManager)) {
+      pendingForkScope = undefined;
+      return;
+    }
     const entry = latestSessionScopeEntry(ctx.sessionManager);
     const legacy = resolveSessionProject(ctx.sessionManager);
     pendingForkScope = entry
@@ -272,15 +273,7 @@ export default function tasksOverlay(
     if (event.reason === "new") return;
     try {
       const current = await catalog.read();
-      if (current?.state === "active") {
-        const selection = resolveSessionSelection(ctx.sessionManager, current);
-        const name = workSelectionLabel(selection);
-        if (event.reason === "fork" && name)
-          pi.setSessionName(
-            generateSessionProjectName(ctx.sessionManager, name),
-          );
-        return;
-      }
+      if (current?.state === "active") return;
       resolveSessionSelection(ctx.sessionManager, current);
     } catch (error) {
       ctx.ui.notify(

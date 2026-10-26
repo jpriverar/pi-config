@@ -79,6 +79,14 @@ function activeLifecycle(
   };
 }
 
+function ownedCatalogIssue(projectId = P): BeadsIssue {
+  return {
+    ...issue("zz-owned", "in_progress", []),
+    lifecycle: activeLifecycle("session-1"),
+    projectReference: { kind: "valid", projectId },
+  };
+}
+
 function createHarness(
   options: {
     catalog?: WorkCatalog | null;
@@ -731,25 +739,25 @@ for (const { scope, name, expected } of [
   {
     scope: { kind: "global" },
     name: "api-580c8e67",
-    expected: "api-580c8e67 • All areas │ 3 ready",
+    expected: "unassigned-session1 │ Browse: All areas • 3 ready",
   },
   {
     scope: { kind: "area", areaId: B },
     name: "api-580c8e67",
-    expected: "api-580c8e67 • Tooling │ 1 ready",
+    expected: "unassigned-session1 │ Browse: Tooling (area) • 1 ready",
   },
   {
     scope: { kind: "project", projectId: P },
     name: "api-580c8e67",
-    expected: "api-580c8e67 • Product │ 1 ready",
+    expected: "unassigned-session1 │ Browse: API • 1 ready",
   },
   {
     scope: { kind: "global" },
     name: "",
-    expected: "All areas │ 3 ready",
+    expected: "unassigned-session1 │ Browse: All areas • 3 ready",
   },
 ] satisfies { scope: WorkScope; name: string; expected: string }[]) {
-  test(`catalog ${scope.kind} header preserves name ${JSON.stringify(name)} and shows its area with scoped counts`, async () => {
+  test(`unassigned catalog ${scope.kind} header separates identity from browsing despite display ${JSON.stringify(name)}`, async () => {
     const h = createHarness({
       ...catalogViewFixture(),
       sessionName: name,
@@ -778,30 +786,33 @@ test("unclassified projects do not display an invented area", async () => {
   await start(h);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "api-580c8e67 • Unclassified │ 1 ready",
+    "unassigned-session1 │ Browse: API • 1 ready",
   );
 });
 
 for (const failure of ["catalog", "scope"] as const) {
-  test(`${failure} failure removes the previously displayed area`, async () => {
+  test(`${failure} failure distinguishes identity availability from browse availability`, async () => {
     const options = {
       ...catalogViewFixture(),
       catalogError: undefined as string | undefined,
       sessionName: "api-580c8e67",
+      issues: [ownedCatalogIssue()],
       entries: [projectEntry("api")],
     };
     const h = createHarness(options);
     await start(h);
     assert.equal(
       h.renderHeader().trimEnd(),
-      "api-580c8e67 • Product │ 1 ready",
+      "API-session1 • Product │ zz-owned • Task zz-owned",
     );
     if (failure === "catalog") options.catalogError = "Catalog unavailable";
     else options.entries.push(projectEntry("missing-project"));
     await h.handlers.get("session_info_changed")!({}, h.context);
     assert.equal(
       h.renderHeader().trimEnd(),
-      "api-580c8e67 │ tasks unavailable",
+      failure === "catalog"
+        ? "api-580c8e67 • identity unavailable │ tasks unavailable"
+        : "API-session1 • Product │ tasks unavailable",
     );
   });
 }
@@ -811,19 +822,20 @@ test("a project's changed area appears on the next refresh without renaming the 
   const h = createHarness({
     ...fixture,
     sessionName: "custom-580c8e67",
+    issues: [ownedCatalogIssue()],
     entries: [projectEntry("api")],
   });
   await start(h);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "custom-580c8e67 • Product │ 1 ready",
+    "API-session1 • Product │ zz-owned • Task zz-owned",
   );
   fixture.catalog.projects[P].areaId = B;
   fixture.catalog.revision += 1;
   await h.handlers.get("turn_end")!({}, h.context);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "custom-580c8e67 • Tooling │ 1 ready",
+    "API-session1 • Tooling │ zz-owned • Task zz-owned",
   );
 });
 
@@ -833,12 +845,13 @@ test("area headers retain Unicode and fit narrow terminal widths", async () => {
   const h = createHarness({
     ...fixture,
     sessionName: "session-580c8e67",
+    issues: [ownedCatalogIssue()],
     entries: [projectEntry("api")],
   });
   await start(h);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "session-580c8e67 • 開発🧰 │ 1 ready",
+    "API-session1 • 開発🧰 │ zz-owned • Task zz-owned",
   );
   for (const width of [0, 1, 12, 24, 60]) {
     assert.ok(visibleWidth(h.renderHeader(width)) <= width);
@@ -869,7 +882,10 @@ test("scope changes during status refresh discard the old projection", async () 
   await h.handlers.get("session_start")!({}, h.context);
   assert.equal(h.renderHeader(), "");
   await h.handlers.get("session_info_changed")!({}, h.context);
-  assert.equal(h.renderHeader().trimEnd(), "pi-setup • Tooling");
+  assert.equal(
+    h.renderHeader().trimEnd(),
+    "unassigned-session1 │ Browse: Maintenance",
+  );
 });
 
 test("corrupt catalog reports unavailable rather than global counts", async () => {
@@ -904,8 +920,60 @@ test("catalog view changes keep the session-owned task visible with an outside-v
   await h.handlers.get("session_start")!({}, h.context);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "pi-setup • Product │ zz-owned • Task zz-owned (outside current view)",
+    "Maintenance-session1 • Tooling │ zz-owned • Task zz-owned (outside current view)",
   );
+});
+
+test("unknown catalog ownership is unavailable rather than unassigned", async () => {
+  const fixture = catalogViewFixture();
+  const h = createHarness({
+    ...fixture,
+    issues: [{ ...ownedCatalogIssue(), lifecycle: null }],
+    entries: [projectEntry("api")],
+  });
+  await start(h);
+  assert.match(h.renderHeader(), /identity unavailable/);
+  assert.doesNotMatch(h.renderHeader(), /unassigned|Product/);
+  assert.equal(h.calls.length, 1);
+});
+
+test("a malformed browse filter cannot hide valid working identity", async () => {
+  const h = createHarness({
+    ...catalogViewFixture(),
+    issues: [ownedCatalogIssue()],
+    entries: [projectEntry("unknown")],
+  });
+  await start(h);
+  assert.match(h.renderHeader(), /API-session1 • Product/);
+  assert.match(h.renderHeader(), /tasks unavailable/);
+  assert.equal(h.calls.length, 1);
+});
+
+test("browse changes refresh counts without a session rename and ignore retired sessions", async () => {
+  const entries = [projectEntry("api")];
+  const h = createHarness({ ...catalogViewFixture(), entries });
+  await start(h);
+  entries.push(projectEntry("maintenance"));
+  h.events.emit(
+    "pi:work-scope-changed",
+    h.context.sessionManager.getSessionId(),
+  );
+  await setImmediate();
+  assert.equal(
+    h.renderHeader().trimEnd(),
+    "unassigned-session1 │ Browse: Maintenance • 1 ready",
+  );
+  assert.equal(h.context.sessionManager.getSessionName(), "pi-setup");
+  const calls = h.calls.length;
+  h.events.emit("pi:work-scope-changed", "another-session");
+  await setImmediate();
+  assert.equal(h.calls.length, calls);
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+  h.markStale();
+  h.events.emit("pi:work-scope-changed", "session-1");
+  await setImmediate();
+  assert.equal(h.calls.length, calls);
+  assert.deepEqual(h.staleAccesses, []);
 });
 
 test("waiting events publish and clear an independent sidebar label", async () => {

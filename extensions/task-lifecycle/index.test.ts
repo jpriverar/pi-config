@@ -316,6 +316,7 @@ test("registers strict lifecycle tools and lifecycle hooks", () => {
     [...h.handlers.keys()].sort(),
     [
       "session_shutdown",
+      "session_before_fork",
       "agent_before_settle",
       "turn_start",
       "tool_execution_start",
@@ -2167,6 +2168,46 @@ test("normal snapshots recover external completion and preserve identity on read
   assert.deepEqual(h.scope(), {
     kind: "resolved",
     scope: { kind: "global" },
+    source: "explicit",
+  });
+});
+
+test("catalog fork seeds neutral identity before an unavailable recovery read", async () => {
+  const h = await catalogIdentityHarness();
+  await h.event("session_before_fork");
+  h.entries.length = 0;
+  h.context.sessionManager.getSessionId = () => "child-580c8e67";
+  h.setReader(async () => {
+    throw new Error("unavailable");
+  });
+  await h.event("session_start", { reason: "fork" });
+  assert.equal(
+    h.context.sessionManager.getSessionName(),
+    "unassigned-580c8e67",
+  );
+  assert.deepEqual(h.scope(), {
+    kind: "resolved",
+    scope: { kind: "global" },
+    source: "explicit",
+  });
+  assert.equal(
+    h.calls.filter((c) => ["claim", "defer", "close"].includes(c.name)).length,
+    0,
+  );
+});
+
+test("authoritative recovery supersedes the fresh catalog-session seed", async () => {
+  const h = await catalogIdentityHarness();
+  await h.event("session_before_fork");
+  h.context.sessionManager.getSessionId = () => "child-580c8e67";
+  const owned = h.row();
+  owned.metadata.piLifecycle!.execution!.sessionId = "child-580c8e67";
+  h.setRows([owned]);
+  await h.event("session_start", { reason: "fork" });
+  assert.equal(h.context.sessionManager.getSessionName(), "API-580c8e67");
+  assert.deepEqual(h.scope(), {
+    kind: "resolved",
+    scope: { kind: "project", projectId: h.P },
     source: "explicit",
   });
 });

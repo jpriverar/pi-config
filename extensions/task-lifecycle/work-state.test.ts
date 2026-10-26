@@ -1506,6 +1506,23 @@ test("startup snapshots retain only the bounded owned-context representation", a
   assert.match(serialized, /omitted/);
 });
 
+test("catalog model context separates unassigned identity from a selected view", async () => {
+  const h = createHarness({
+    ...catalogViewFixture(),
+    sessionId: "session-1",
+    entries: [
+      {
+        type: "custom",
+        customType: SESSION_PROJECT_ENTRY_TYPE,
+        data: { version: 2, scope: { kind: "project", projectId: P } },
+      },
+    ],
+  });
+  const result = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.match(result.message.content, /## Browse view — API/);
+  assert.match(result.message.content, /Working identity:.*Unassigned/);
+});
+
 test("catalog snapshots and compaction retain owned mission outside the view without foreign text", async () => {
   const catalog = catalogFixture();
   catalog.projects[Q].areaId = B;
@@ -1539,6 +1556,8 @@ test("catalog snapshots and compaction retain owned mission outside the view wit
   });
   const hidden = await h.handlers.get("before_agent_start")!({}, h.context);
   assert.match(hidden.message.content, /CATALOG OWNED MISSION/);
+  assert.match(hidden.message.content, /## Browse view — Area: Tooling/);
+  assert.match(hidden.message.content, /API • Product \(jp-owned\)/);
   assert.match(hidden.message.content, /outside.*view/i);
   assert.doesNotMatch(
     hidden.message.content,

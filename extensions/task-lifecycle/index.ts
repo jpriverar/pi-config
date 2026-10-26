@@ -4,7 +4,7 @@ import type { DaemonHealth } from "../../lib/task-reconciler/health.js";
 import {
   resolveSessionProject,
   persistSessionWorkScope,
-  generateSessionProjectName,
+  hasCatalogSessionScope,
   type SessionProjectReader,
 } from "../../lib/session-project.js";
 import { summarizeWorkManagement } from "../../lib/work-management/model.js";
@@ -13,7 +13,7 @@ import type { WorkCatalog } from "../../lib/work-catalog/model.js";
 import { resolveCreateProject } from "../../lib/work-catalog/routing.js";
 import { createCatalogStore } from "../../lib/work-catalog/store.js";
 import { createCatalogService } from "../../lib/work-catalog/service.js";
-import { workScopeLabel } from "../../lib/work-catalog/membership.js";
+import { workingIdentityName } from "../../lib/session-identity.js";
 import { ALL_PROJECT_ISSUE_STATUSES } from "../../lib/project-management.js";
 import { registerWorkCatalogTools } from "./catalog-tools.js";
 import { randomUUID } from "node:crypto";
@@ -371,9 +371,37 @@ export function createTaskLifecycleExtension(
         pi.setSessionName(name);
       },
     });
-    pi.on("session_start", (_event, context) =>
-      identity.start(context.sessionManager.getSessionId()),
-    );
+    let forkFromCatalog = false;
+    pi.on("session_before_fork", (_event, context) => {
+      forkFromCatalog = hasCatalogSessionScope(context.sessionManager);
+    });
+    pi.on("session_start", (event, context) => {
+      const freshCatalog =
+        (event.reason === "fork" || event.reason === "new") &&
+        (hasCatalogSessionScope(context.sessionManager) ||
+          (event.reason === "fork" && forkFromCatalog));
+      forkFromCatalog = false;
+      identity.start(context.sessionManager.getSessionId());
+      if (freshCatalog) {
+        try {
+          persistSessionWorkScope(
+            { appendCustomEntry: (type, data) => pi.appendEntry(type, data) },
+            { kind: "global" },
+          );
+          const name = workingIdentityName(
+            { kind: "unassigned" },
+            context.sessionManager,
+          )!;
+          if (context.sessionManager.getSessionName() !== name)
+            pi.setSessionName?.(name);
+        } catch {
+          context.ui?.notify(
+            "New session identity could not be initialized; authoritative recovery will retry.",
+            "warning",
+          );
+        }
+      }
+    });
     pi.on("session_shutdown", () => identity.shutdown());
 
     async function changeOwnership(
@@ -1491,14 +1519,10 @@ export default function taskLifecycle(
       host: readHostname(),
       started: Date.now(),
     }),
-    select: (scope, current, context) => {
+    select: (scope) => {
       persistSessionWorkScope(
         { appendCustomEntry: (type, data) => pi.appendEntry(type, data) },
         scope,
-      );
-      const name = workScopeLabel(current, scope);
-      pi.setSessionName?.(
-        name ? generateSessionProjectName(context.sessionManager, name) : "",
       );
     },
   });

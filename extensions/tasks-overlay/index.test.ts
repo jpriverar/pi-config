@@ -101,6 +101,7 @@ function createHarness(
   const notifications: Array<{ message: string; type: string }> = [];
   const calls: string[][] = [];
   const renamedSessions: string[] = [];
+  const emittedEvents: unknown[][] = [];
   const appendedEntries: Entry[] = [];
   const entries = [...(options.entries ?? [])];
   const selections: Array<{ title: string; items: string[] }> = [];
@@ -123,6 +124,7 @@ function createHarness(
   const archivesGetResults = [...(options.archivesGetResults ?? [])];
 
   const pi = {
+    events: { emit: (...args: unknown[]) => emittedEvents.push(args) },
     async exec(_command: string, args: string[]) {
       if (_command === "env") {
         assert.deepEqual(args.slice(0, 2), ["BD_BACKUP_ENABLED=false", "bd"]);
@@ -391,6 +393,7 @@ function createHarness(
     handlers,
     notifications,
     renamedSessions,
+    emittedEvents,
     render: () => rendered,
     renders,
     selections,
@@ -2002,6 +2005,25 @@ for (const scope of [
     if (scope.kind === "area") assert.match(h.render(), /Area: Product/);
   });
 }
+for (const [command, scope] of [
+  ["project", { kind: "project", projectId: P }],
+  ["area", { kind: "area", areaId: A }],
+] as const) {
+  test(`catalog /${command} changes browsing without renaming and signals a display refresh`, async () => {
+    const h = createHarness({
+      catalog: catalogFixture(),
+      sessionName: "current-owned-580c8e67",
+      select: (items) => items[1],
+    });
+    await h.commands.get(command)!.handler("", h.context);
+    assert.deepEqual(h.appendedEntries.at(-1)?.data, { version: 2, scope });
+    assert.deepEqual(h.renamedSessions, []);
+    assert.deepEqual(h.emittedEvents, [
+      ["pi:work-scope-changed", h.context.sessionManager.getSessionId()],
+    ]);
+  });
+}
+
 test("active catalog startup does not rewrite scopes through the legacy rename registry", async () => {
   const h = createHarness({
     catalog: catalogFixture(),
@@ -2013,7 +2035,7 @@ test("active catalog startup does not rewrite scopes through the legacy rename r
   assert.equal(h.appendedEntries.length, 0);
 });
 
-test("native fork preserves the latest session-wide scope over an older branch scope", async () => {
+test("catalog fork leaves initialization to the lifecycle writer rather than copying parent scope", async () => {
   const latest: Entry = {
     type: "custom",
     customType: "jp-project-scope",
@@ -2030,7 +2052,8 @@ test("native fork preserves the latest session-wide scope over an older branch s
     data: { version: 2, scope: { kind: "project", projectId: Q } },
   });
   await startSession(h, "fork");
-  assert.deepEqual(h.appendedEntries.at(-1), latest);
+  assert.deepEqual(h.appendedEntries, []);
+  assert.deepEqual(h.renamedSessions, []);
   assert.equal(h.calls.length, 0);
 });
 
