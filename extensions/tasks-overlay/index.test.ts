@@ -2066,3 +2066,32 @@ test("corrupt catalog never opens a global task overlay", async () => {
   assert.equal(h.render(), "");
   assert.ok(h.notifications.some((n) => n.message.includes("Corrupt catalog")));
 });
+
+for (const selection of ["project", "global"] as const) {
+  test(`legacy ${selection} selection refreshes status without changing the name`, async () => {
+    const h = createHarness({
+      sessionName: "My notes",
+      issues: [issue("one", "open", ["workstream:Alpha"])],
+      select:
+        selection === "project" ? selectProject("Alpha") : (items) => items[0],
+    });
+    await switchProject(h);
+    assert.deepEqual(h.emittedEvents, [
+      ["pi:work-scope-changed", h.context.sessionManager.getSessionId()],
+    ]);
+    assert.deepEqual(h.renamedSessions, []);
+  });
+}
+test("legacy alias recovery refreshes status and no-op recovery stays quiet", async () => {
+  const h = createHarness({
+    entries: [projectEntry("alpha")],
+    registryValue: '{"version":1,"aliases":{"alpha":"Beta"}}',
+  });
+  await startSession(h, "resume");
+  assert.deepEqual(h.emittedEvents, [
+    ["pi:work-scope-changed", h.context.sessionManager.getSessionId()],
+  ]);
+  await startSession(h, "resume");
+  assert.equal(h.emittedEvents.length, 1);
+  assert.deepEqual(h.renamedSessions, []);
+});

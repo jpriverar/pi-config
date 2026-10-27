@@ -208,6 +208,7 @@ export interface ToolDefinition {
 }
 
 export interface ExtensionApi {
+  events?: { emit(event: string, payload: unknown): void };
   on(
     event: string,
     handler: (event: any, context: ExtensionContext) => unknown,
@@ -363,6 +364,8 @@ export function createTaskLifecycleExtension(
         : facts;
     const identity = createSessionIdentityController({
       appendEntry: (type, data) => pi.appendEntry(type, data),
+      notifyChange: (sessionId) =>
+        pi.events?.emit("pi:work-scope-changed", sessionId),
     });
     let forkFromCatalog = false;
     pi.on("session_before_fork", (_event, context) => {

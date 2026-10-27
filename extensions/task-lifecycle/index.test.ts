@@ -2435,3 +2435,16 @@ test("legacy claim context is suppressed when its required scope changes during 
   await pending;
   assert.equal(h.sent.length, 0);
 });
+
+test("catalog ownership projection publishes the existing display-refresh event", async () => {
+  const h = await catalogIdentityHarness();
+  const events: unknown[][] = [];
+  Object.assign(h.pi, {
+    events: { emit: (...args: unknown[]) => events.push(args) },
+  });
+  await h.claim();
+  assert.deepEqual(events, [["pi:work-scope-changed", "session-1"]]);
+  await h.event("before_agent_start");
+  assert.equal(events.length, 1);
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
+});

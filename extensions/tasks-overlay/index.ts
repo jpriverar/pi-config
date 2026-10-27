@@ -46,6 +46,23 @@ export default function tasksOverlay(
   pi: ExtensionAPI,
   deps: { catalog?: CatalogStore } = {},
 ) {
+  async function refreshAfterScopeChange(
+    ctx: ExtensionContext,
+    operation: () => Promise<void>,
+  ) {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const before = sessionScopeFingerprint(ctx.sessionManager);
+    try {
+      await operation();
+    } finally {
+      if (
+        sessionId === ctx.sessionManager.getSessionId() &&
+        before !== sessionScopeFingerprint(ctx.sessionManager)
+      )
+        pi.events.emit("pi:work-scope-changed", sessionId);
+    }
+  }
+
   const projectWriter = {
     appendCustomEntry(customType: string, data: unknown): unknown {
       pi.appendEntry(customType, data);
@@ -233,7 +250,8 @@ export default function tasksOverlay(
       );
     },
     choose: selectWorkEntity,
-    legacy: legacy.handle,
+    legacy: (args, ctx) =>
+      refreshAfterScopeChange(ctx, () => legacy.handle(args, ctx)),
   });
 
   pi.registerShortcut(Key.ctrlAlt("t"), {
@@ -255,33 +273,35 @@ export default function tasksOverlay(
         ? { data: { version: 1, workstream: legacy.workstream } }
         : undefined;
   });
-  pi.on("session_start", async (event, ctx) => {
-    const pending = pendingForkScope;
-    pendingForkScope = undefined;
-    if (event.reason === "fork" && pending) {
-      const current = latestSessionScopeEntry(ctx.sessionManager);
-      if (
-        !current ||
-        JSON.stringify(current.data) !== JSON.stringify(pending.data)
-      )
-        projectWriter.appendCustomEntry(
-          SESSION_PROJECT_ENTRY_TYPE,
-          pending.data,
+  pi.on("session_start", (event, ctx) =>
+    refreshAfterScopeChange(ctx, async () => {
+      const pending = pendingForkScope;
+      pendingForkScope = undefined;
+      if (event.reason === "fork" && pending) {
+        const current = latestSessionScopeEntry(ctx.sessionManager);
+        if (
+          !current ||
+          JSON.stringify(current.data) !== JSON.stringify(pending.data)
+        )
+          projectWriter.appendCustomEntry(
+            SESSION_PROJECT_ENTRY_TYPE,
+            pending.data,
+          );
+      }
+      if (event.reason === "new") return;
+      try {
+        const current = await catalog.read();
+        if (current?.state === "active") return;
+        resolveSessionSelection(ctx.sessionManager, current);
+      } catch (error) {
+        ctx.ui.notify(
+          error instanceof Error ? error.message : "Work scope unavailable",
+          "warning",
         );
-    }
-    if (event.reason === "new") return;
-    try {
-      const current = await catalog.read();
-      if (current?.state === "active") return;
-      resolveSessionSelection(ctx.sessionManager, current);
-    } catch (error) {
-      ctx.ui.notify(
-        error instanceof Error ? error.message : "Work scope unavailable",
-        "warning",
-      );
-      return;
-    }
+        return;
+      }
 
-    await legacy.resume(ctx);
-  });
+      await legacy.resume(ctx);
+    }),
+  );
 }

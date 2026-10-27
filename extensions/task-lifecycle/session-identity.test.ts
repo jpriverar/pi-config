@@ -30,7 +30,11 @@ function fixture() {
   const entries: Array<{ type: string; customType: string; data: unknown }> =
     [];
   const writes: unknown[] = [];
+  const changes: string[] = [];
   const host = {
+    notifyChange(sessionId: string) {
+      changes.push(sessionId);
+    },
     appendEntry(customType: string, data: unknown) {
       entries.push({ type: "custom", customType, data });
       writes.push({ customType, data });
@@ -67,7 +71,7 @@ function fixture() {
       },
       host,
     );
-  return { session, host, entries, writes, browse, scope, apply };
+  return { session, host, entries, writes, changes, browse, scope, apply };
 }
 
 test("claim and relinquishment apply one project/global transition without changing the session name", () => {
@@ -381,4 +385,18 @@ test("unnamed sessions stay unnamed across claim and release projections", () =>
     scope: { kind: "global" },
     source: "explicit",
   });
+});
+
+test("identity transitions signal display refresh without a name write or repeat notification", () => {
+  const f = fixture();
+  f.apply();
+  assert.deepEqual(f.changes, [SESSION]);
+  f.apply();
+  assert.deepEqual(f.changes, [SESSION]);
+  f.browse({ kind: "global" });
+  f.apply({ kind: "unassigned" });
+  assert.deepEqual(f.changes, [SESSION, SESSION]);
+  f.apply({ kind: "unavailable", reason: "failed" });
+  assert.deepEqual(f.changes, [SESSION, SESSION]);
+  assert.equal(f.session.getSessionName(), "manual name");
 });

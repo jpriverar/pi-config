@@ -30,6 +30,7 @@ export interface IdentityProjectionInput {
   current(): boolean;
 }
 export interface IdentityProjectionHost {
+  notifyChange(sessionId: string): void;
   appendEntry(type: string, data: unknown): void;
 }
 interface TransitionMarker {
@@ -145,6 +146,8 @@ export function applySessionIdentity(
   if (!input.current()) return { applied: false, browseChanged };
   // Consume the ownership transition even when explicit browsing is preserved.
   if (changed) host.appendEntry(WORKING_IDENTITY_ENTRY_TYPE, marker);
+  if (input.current() && (changed || browseChanged))
+    host.notifyChange(session.getSessionId());
   return { applied: input.current(), browseChanged };
 }
 
