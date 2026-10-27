@@ -57,7 +57,6 @@ export default function tasksOverlay(
   );
 
   const legacy = createLegacyProjectCommands(
-    pi,
     client,
     projectWriter,
     selectWorkEntity,

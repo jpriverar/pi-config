@@ -26,7 +26,7 @@ const assigned: WorkingIdentity = {
   areaName: "Product",
 };
 function fixture() {
-  let name = "manual name";
+  let name: string | undefined = "manual name";
   const entries: Array<{ type: string; customType: string; data: unknown }> =
     [];
   const writes: unknown[] = [];
@@ -70,11 +70,11 @@ function fixture() {
   return { session, host, entries, writes, browse, scope, apply };
 }
 
-test("claim and relinquishment apply one project/global transition with automatic names", () => {
+test("claim and relinquishment apply one project/global transition without changing the session name", () => {
   const f = fixture();
   f.browse({ kind: "area", areaId: B });
   assert.deepEqual(f.apply(), { applied: true, browseChanged: true });
-  assert.equal(f.session.getSessionName(), "api-580c8e67");
+  assert.equal(f.session.getSessionName(), "manual name");
   assert.deepEqual(f.scope(), {
     kind: "resolved",
     scope: { kind: "project", projectId: P },
@@ -84,7 +84,7 @@ test("claim and relinquishment apply one project/global transition with automati
     applied: true,
     browseChanged: true,
   });
-  assert.equal(f.session.getSessionName(), "unassigned-580c8e67");
+  assert.equal(f.session.getSessionName(), "manual name");
   assert.deepEqual(f.scope(), {
     kind: "resolved",
     scope: { kind: "global" },
@@ -92,7 +92,7 @@ test("claim and relinquishment apply one project/global transition with automati
   });
 });
 
-test("ordinary observations preserve browsing and avoid redundant name/marker writes", () => {
+test("ordinary observations preserve browsing and avoid redundant marker writes", () => {
   const f = fixture();
   f.apply();
   f.browse({ kind: "project", projectId: Q });
@@ -112,7 +112,7 @@ test("manual name edits and catalog renames do not reset browsing", () => {
   f.browse({ kind: "area", areaId: B });
   f.host.setSessionName("hand edited");
   assert.equal(f.apply().browseChanged, false);
-  assert.equal(f.session.getSessionName(), "api-580c8e67");
+  assert.equal(f.session.getSessionName(), "hand edited");
   assert.equal(
     f.apply({
       ...assigned,
@@ -122,7 +122,7 @@ test("manual name edits and catalog renames do not reset browsing", () => {
     }).browseChanged,
     false,
   );
-  assert.equal(f.session.getSessionName(), "Renamed-580c8e67");
+  assert.equal(f.session.getSessionName(), "hand edited");
   assert.deepEqual(f.scope(), {
     kind: "resolved",
     scope: { kind: "area", areaId: B },
@@ -153,7 +153,7 @@ test("newer explicit browsing consumes a transition without later reverting that
     f.apply(assigned, { allowBrowseReset: false }).browseChanged,
     false,
   );
-  assert.equal(f.session.getSessionName(), "api-580c8e67");
+  assert.equal(f.session.getSessionName(), "manual name");
   assert.equal(f.apply().browseChanged, false);
   assert.deepEqual(f.scope(), {
     kind: "resolved",
@@ -291,7 +291,7 @@ test("failed marker persistence cannot repeatedly overwrite later explicit brows
     scope: { kind: "project", projectId: Q },
     source: "explicit",
   });
-  assert.equal(f.session.getSessionName(), "unassigned-580c8e67");
+  assert.equal(f.session.getSessionName(), "manual name");
 });
 
 test("failed navigation is retried when no later user navigation superseded it", () => {
@@ -348,20 +348,37 @@ test("display edits do not become navigation but a repeated explicit selection d
   assert.equal(observation.browseCurrent(), false);
 });
 
-test("name-write failure does not cause retry to repeat a completed navigation transition", () => {
+test("projection does not require a writable session name", () => {
   const f = fixture();
   const setName = f.host.setSessionName;
   f.host.setSessionName = () => {
     throw new Error("name write failed");
   };
-  assert.throws(() => f.apply(), /name write failed/);
+  assert.deepEqual(f.apply(), { applied: true, browseChanged: true });
   f.browse({ kind: "project", projectId: Q });
   f.host.setSessionName = setName;
   assert.equal(f.apply().browseChanged, false);
-  assert.equal(f.session.getSessionName(), "api-580c8e67");
+  assert.equal(f.session.getSessionName(), "manual name");
   assert.deepEqual(f.scope(), {
     kind: "resolved",
     scope: { kind: "project", projectId: Q },
+    source: "explicit",
+  });
+});
+
+test("unnamed sessions stay unnamed across claim and release projections", () => {
+  const f = fixture();
+  f.session.getSessionName = () => undefined;
+  f.host.setSessionName = () => {
+    throw new Error("unexpected name write");
+  };
+  assert.equal(f.apply().applied, true);
+  assert.equal(f.session.getSessionName(), undefined);
+  assert.equal(f.apply({ kind: "unassigned" }).applied, true);
+  assert.equal(f.session.getSessionName(), undefined);
+  assert.deepEqual(f.scope(), {
+    kind: "resolved",
+    scope: { kind: "global" },
     source: "explicit",
   });
 });

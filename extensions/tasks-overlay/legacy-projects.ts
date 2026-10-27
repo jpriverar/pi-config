@@ -1,7 +1,4 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   listClassifiedIssues,
   type BeadsClient,
@@ -11,7 +8,6 @@ import {
 } from "../../lib/beads.js";
 import { resolveProjectRename } from "../../lib/project-renames.js";
 import {
-  generateSessionProjectName,
   persistSessionProject,
   resolveSessionProject,
   type SessionProjectWriter,
@@ -25,7 +21,6 @@ import {
 } from "../../lib/project-management.js";
 
 export function createLegacyProjectCommands(
-  pi: Pick<ExtensionAPI, "setSessionName">,
   client: BeadsClient,
   projectWriter: SessionProjectWriter,
   selectProject: (
@@ -86,9 +81,6 @@ export function createLegacyProjectCommands(
     const current = resolveSessionProject(ctx.sessionManager);
     if (current.workstream?.toLowerCase() === project.name.toLowerCase()) {
       persistSessionProject(projectWriter, plan.next);
-      pi.setSessionName(
-        generateSessionProjectName(ctx.sessionManager, plan.next),
-      );
     }
     ctx.ui.notify(
       result.warning
@@ -213,7 +205,6 @@ export function createLegacyProjectCommands(
         return;
 
       persistSessionProject(projectWriter, null);
-      pi.setSessionName("");
       return;
     }
 
@@ -227,7 +218,6 @@ export function createLegacyProjectCommands(
       return;
 
     persistSessionProject(projectWriter, next);
-    pi.setSessionName(generateSessionProjectName(ctx.sessionManager, next));
   }
 
   async function handle(args: string, ctx: ExtensionContext): Promise<void> {
@@ -241,7 +231,7 @@ export function createLegacyProjectCommands(
       );
     }
   }
-  async function resume(reason: string, ctx: ExtensionContext): Promise<void> {
+  async function resume(_reason: string, ctx: ExtensionContext): Promise<void> {
     const project = resolveSessionProject(ctx.sessionManager);
     if (project.workstream === undefined) return;
 
@@ -270,16 +260,8 @@ export function createLegacyProjectCommands(
 
     if (canonical !== undefined && canonical !== project.workstream) {
       persistSessionProject(projectWriter, canonical);
-      pi.setSessionName(
-        generateSessionProjectName(ctx.sessionManager, canonical),
-      );
       return;
     }
-
-    if (reason !== "fork" || project.source !== "explicit") return;
-    pi.setSessionName(
-      generateSessionProjectName(ctx.sessionManager, project.workstream),
-    );
   }
   return { handle, resume };
 }

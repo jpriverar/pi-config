@@ -109,7 +109,7 @@ describe("/clear", () => {
     assert.match(h.commands.get("clear")!.description, /unassigned|neutral/i);
   });
 
-  test("transfers only the latest project scope and derives a fresh name", async () => {
+  test("transfers only the latest project scope without setting a name", async () => {
     const oldScope = {
       version: 1,
       workstream: "old-project",
@@ -153,13 +153,12 @@ describe("/clear", () => {
           customType: "jp-project-scope",
           data: latestScope,
         },
-        { type: "session_info", name: "payments-12345678" },
       ],
     ]);
     assert.notEqual((h.sessions[0][0] as { data: unknown }).data, latestScope);
   });
 
-  test("uses each replacement session ID in the derived name", async () => {
+  test("keeps replacement sessions unnamed while preserving scope", async () => {
     const h = harness(
       [
         {
@@ -178,11 +177,10 @@ describe("/clear", () => {
     await h.clear();
 
     assert.deepEqual(
-      h.sessions.map((actions) => actions[1]),
-      [
-        { type: "session_info", name: "payments-11111111" },
-        { type: "session_info", name: "payments-22222222" },
-      ],
+      h.sessions.map((actions) =>
+        actions.filter((action) => action.type === "session_info"),
+      ),
+      [[], []],
     );
   });
 
@@ -237,7 +235,6 @@ for (const scope of [
         customType: "jp-project-scope",
         data: { version: 2, scope: { kind: "global" } },
       },
-      { type: "session_info", name: "unassigned-00000000" },
     ]);
   });
 }
@@ -251,6 +248,5 @@ test("clear preserves explicit v2 global without deriving project scope from a d
   await h.clear();
   assert.deepEqual(h.sessions[0], [
     { type: "custom", customType: "jp-project-scope", data },
-    { type: "session_info", name: "unassigned-00000000" },
   ]);
 });

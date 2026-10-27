@@ -1,5 +1,4 @@
 import {
-  workingIdentityName,
   resolveWorkingIdentity,
   type WorkingIdentity,
 } from "../../lib/session-identity.js";
@@ -31,7 +30,6 @@ export interface IdentityProjectionInput {
   current(): boolean;
 }
 export interface IdentityProjectionHost {
-  setSessionName(name: string): void;
   appendEntry(type: string, data: unknown): void;
 }
 interface TransitionMarker {
@@ -145,14 +143,8 @@ export function applySessionIdentity(
     browseChanged = true;
   }
   if (!input.current()) return { applied: false, browseChanged };
-  // Record navigation independently so a failed name write cannot undo later browsing.
+  // Consume the ownership transition even when explicit browsing is preserved.
   if (changed) host.appendEntry(WORKING_IDENTITY_ENTRY_TYPE, marker);
-  if (!input.current()) return { applied: false, browseChanged };
-  const name = workingIdentityName(identity, session)!;
-  if (session.getSessionName() !== name) {
-    if (!input.current()) return { applied: false, browseChanged };
-    host.setSessionName(name);
-  }
   return { applied: input.current(), browseChanged };
 }
 

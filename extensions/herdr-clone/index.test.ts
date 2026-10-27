@@ -235,7 +235,7 @@ for (const scenario of [
     expectedProject: undefined,
   },
 ]) {
-  test(`refreshes a ${scenario.label} clone name without changing its project or source`, async (t) => {
+  test(`preserves native naming for a ${scenario.label} clone without changing its project or source`, async (t) => {
     const h = harness(t);
     if (scenario.scope !== undefined) {
       h.sm.appendCustomEntry("jp-project-scope", {
@@ -248,7 +248,7 @@ for (const scenario of [
     const sourceBytes = readFileSync(sourceFile, "utf8");
     const sourceLeaf = h.sm.getLeafId();
     const sourceMessages = h.sm.buildSessionContext().messages;
-    const names: string[] = [];
+    const ids: string[] = [];
 
     for (let attempt = 0; attempt < 2; attempt++) {
       await h.clone();
@@ -257,20 +257,16 @@ for (const scenario of [
       const file = launch.args[launch.args.indexOf("--session") + 1];
       const clone = SessionManager.open(file);
       const name = clone.getSessionName()!;
-      assert.equal(
-        name,
-        `${scenario.baseName}-${clone.getSessionId().replaceAll("-", "").slice(-8)}`,
-      );
-      assert.notEqual(name, scenario.sourceName);
+      assert.equal(name, scenario.sourceName);
       assert.equal(
         resolveSessionProject(clone).workstream,
         scenario.expectedProject,
       );
       assert.deepEqual(clone.buildSessionContext().messages, sourceMessages);
       assert.equal(clone.getHeader()!.parentSession, sourceFile);
-      names.push(name);
+      ids.push(clone.getSessionId());
     }
-    assert.notEqual(names[0], names[1]);
+    assert.notEqual(ids[0], ids[1]);
     assert.equal(h.sm.getSessionName(), scenario.sourceName);
     assert.equal(h.sm.getLeafId(), sourceLeaf);
     assert.equal(readFileSync(sourceFile, "utf8"), sourceBytes);
@@ -522,7 +518,7 @@ test("a cloned working-identity marker remains historical, not inherited ownersh
     taskId: "zz-parent",
     projectId: P,
   });
-  h.sm.appendSessionInfo(generateSessionProjectName(h.sm, "API"));
+  h.sm.appendSessionInfo("Working notes");
   const original = readFileSync(h.sm.getSessionFile()!, "utf8");
   await h.clone();
   const launch = h.calls.at(-1)!;
@@ -530,10 +526,7 @@ test("a cloned working-identity marker remains historical, not inherited ownersh
     launch.args[launch.args.indexOf("--session") + 1],
   );
   assert.notEqual(cloned.getSessionId(), parentId);
-  assert.equal(
-    cloned.getSessionName(),
-    generateSessionProjectName(cloned, "unassigned"),
-  );
+  assert.equal(cloned.getSessionName(), "Working notes");
   assert.deepEqual(resolveSessionWorkScope(cloned, catalogFixture()), {
     kind: "resolved",
     scope: { kind: "global" },
@@ -578,10 +571,7 @@ for (const scope of [
     assert.equal(resolved.kind, "resolved");
     if (resolved.kind === "resolved")
       assert.deepEqual(resolved.scope, { kind: "global" });
-    assert.equal(
-      cloned.getSessionName(),
-      generateSessionProjectName(cloned, "unassigned"),
-    );
+    assert.equal(cloned.getSessionName(), undefined);
     assert.equal(readFileSync(h.sm.getSessionFile()!, "utf8"), original);
     assert.equal(
       h.calls.length,

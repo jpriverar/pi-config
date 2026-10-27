@@ -499,7 +499,7 @@ test("project picker groups primary workstreams and shows readiness counts", asy
   );
   assert.match(harness.selections[0].items[2], /Beta.*Active: 1/);
   assert.equal(harness.selections[0].items.length, 5);
-  assert.deepEqual(harness.renamedSessions, ["Alpha-580c8e67"]);
+  assert.deepEqual(harness.renamedSessions, []);
 });
 
 test("project picker sorts workstreams case-insensitively by canonical name", async () => {
@@ -527,10 +527,10 @@ test("project picker sorts workstreams case-insensitively by canonical name", as
       "Archived projects…",
     ],
   );
-  assert.deepEqual(harness.renamedSessions, ["aLPHa-580c8e67"]);
+  assert.deepEqual(harness.renamedSessions, []);
 });
 
-test("project selection persists canonical scope and generates a unique name", async () => {
+test("project selection persists canonical scope without renaming the session", async () => {
   const harness = createHarness({
     sessionName: "other",
     issues: [issue("one", "open", ["workstream:pi-setup"])],
@@ -540,7 +540,7 @@ test("project selection persists canonical scope and generates a unique name", a
   await switchProject(harness);
 
   assert.deepEqual(harness.appendedEntries, [projectEntry("pi-setup")]);
-  assert.deepEqual(harness.renamedSessions, ["pi-setup-580c8e67"]);
+  assert.deepEqual(harness.renamedSessions, []);
 });
 
 test("selecting Global clears the project scope", async () => {
@@ -552,7 +552,7 @@ test("selecting Global clears the project scope", async () => {
   await switchProject(harness);
 
   assert.deepEqual(harness.appendedEntries, [projectEntry(null)]);
-  assert.deepEqual(harness.renamedSessions, [""]);
+  assert.deepEqual(harness.renamedSessions, []);
 });
 
 test("selecting Global when already explicitly global is a no-op", async () => {
@@ -656,7 +656,7 @@ test("selecting a legacy exact-name project upgrades its scope", async () => {
   await switchProject(harness);
 
   assert.deepEqual(harness.appendedEntries, [projectEntry("Alpha")]);
-  assert.deepEqual(harness.renamedSessions, ["Alpha-580c8e67"]);
+  assert.deepEqual(harness.renamedSessions, []);
 });
 
 test("project rename preflights the registry before confirmation and update", async () => {
@@ -786,7 +786,7 @@ test("project rename updates matching workstreams across statuses, verifies the 
     ],
   );
   assert.deepEqual(harness.appendedEntries, [projectEntry("Renamed")]);
-  assert.deepEqual(harness.renamedSessions, ["Renamed-580c8e67"]);
+  assert.deepEqual(harness.renamedSessions, []);
   assert.deepEqual(harness.notifications, [
     {
       message: "Renamed project Alpha → Renamed across 3 tasks",
@@ -891,7 +891,7 @@ test("project rename partially succeeds when the registry write fails", async ()
   await renameProject(harness);
 
   assert.deepEqual(harness.appendedEntries, [projectEntry("Renamed")]);
-  assert.deepEqual(harness.renamedSessions, ["Renamed-580c8e67"]);
+  assert.deepEqual(harness.renamedSessions, []);
   assert.equal(
     harness.calls.some((args) => args[0] === "config" && args[1] === "set"),
     true,
@@ -918,7 +918,7 @@ test("project rename partially succeeds when registry read-back does not verify"
   await renameProject(harness);
 
   assert.deepEqual(harness.appendedEntries, [projectEntry("Renamed")]);
-  assert.deepEqual(harness.renamedSessions, ["Renamed-580c8e67"]);
+  assert.deepEqual(harness.renamedSessions, []);
   assert.deepEqual(harness.notifications, [
     {
       message:
@@ -991,7 +991,7 @@ test("project rename permits case-only canonicalization", async () => {
     ],
   );
   assert.deepEqual(harness.appendedEntries, [projectEntry("ALPHA")]);
-  assert.deepEqual(harness.renamedSessions, ["ALPHA-580c8e67"]);
+  assert.deepEqual(harness.renamedSessions, []);
 });
 
 test("project rename succeeds when verification matches after a non-zero update exit", async () => {
@@ -1019,7 +1019,7 @@ test("project rename succeeds when verification matches after a non-zero update 
     true,
   );
   assert.deepEqual(harness.appendedEntries, [projectEntry("Renamed")]);
-  assert.deepEqual(harness.renamedSessions, ["Renamed-580c8e67"]);
+  assert.deepEqual(harness.renamedSessions, []);
   assert.deepEqual(harness.notifications, [
     {
       message: "Renamed project Alpha → Renamed across 2 tasks",
@@ -1158,7 +1158,7 @@ for (const unavailable of ["all", "ready"] as const) {
   });
 }
 
-test("forking an explicitly scoped session regenerates its unique name", async () => {
+test("forking an explicitly scoped session preserves its name", async () => {
   const harness = createHarness({
     sessionName: "manual copied name",
     sessionId: "019ff29e-4652-7c2d-90c5-123456789abc",
@@ -1168,7 +1168,7 @@ test("forking an explicitly scoped session regenerates its unique name", async (
   await startSession(harness, "fork");
 
   assert.deepEqual(harness.appendedEntries, []);
-  assert.deepEqual(harness.renamedSessions, ["pi-setup-56789abc"]);
+  assert.deepEqual(harness.renamedSessions, []);
 });
 
 for (const reason of ["startup", "resume", "reload", "fork"] as const) {
@@ -1181,7 +1181,7 @@ for (const reason of ["startup", "resume", "reload", "fork"] as const) {
     await startSession(harness, reason);
 
     assert.deepEqual(harness.appendedEntries, [projectEntry("Beta")]);
-    assert.deepEqual(harness.renamedSessions, ["Beta-580c8e67"]);
+    assert.deepEqual(harness.renamedSessions, []);
     assert.deepEqual(harness.notifications, []);
   });
 }
@@ -1195,7 +1195,7 @@ test("session start migrates a legacy exact-name scope and makes it explicit", a
   await startSession(harness, "startup");
 
   assert.deepEqual(harness.appendedEntries, [projectEntry("Beta")]);
-  assert.deepEqual(harness.renamedSessions, ["Beta-580c8e67"]);
+  assert.deepEqual(harness.renamedSessions, []);
 });
 
 for (const [label, workstream] of [

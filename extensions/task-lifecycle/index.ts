@@ -13,7 +13,6 @@ import type { WorkCatalog } from "../../lib/work-catalog/model.js";
 import { resolveCreateProject } from "../../lib/work-catalog/routing.js";
 import { createCatalogStore } from "../../lib/work-catalog/store.js";
 import { createCatalogService } from "../../lib/work-catalog/service.js";
-import { workingIdentityName } from "../../lib/session-identity.js";
 import { ALL_PROJECT_ISSUE_STATUSES } from "../../lib/project-management.js";
 import { registerWorkCatalogTools } from "./catalog-tools.js";
 import { randomUUID } from "node:crypto";
@@ -209,7 +208,6 @@ export interface ToolDefinition {
 }
 
 export interface ExtensionApi {
-  setSessionName?(name: string): void;
   on(
     event: string,
     handler: (event: any, context: ExtensionContext) => unknown,
@@ -365,11 +363,6 @@ export function createTaskLifecycleExtension(
         : facts;
     const identity = createSessionIdentityController({
       appendEntry: (type, data) => pi.appendEntry(type, data),
-      setSessionName: (name) => {
-        if (!pi.setSessionName)
-          throw new Error("Session name writer is unavailable");
-        pi.setSessionName(name);
-      },
     });
     let forkFromCatalog = false;
     pi.on("session_before_fork", (_event, context) => {
@@ -388,12 +381,6 @@ export function createTaskLifecycleExtension(
             { appendCustomEntry: (type, data) => pi.appendEntry(type, data) },
             { kind: "global" },
           );
-          const name = workingIdentityName(
-            { kind: "unassigned" },
-            context.sessionManager,
-          )!;
-          if (context.sessionManager.getSessionName() !== name)
-            pi.setSessionName?.(name);
         } catch {
           context.ui?.notify(
             "New session identity could not be initialized; authoritative recovery will retry.",

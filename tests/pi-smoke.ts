@@ -24,10 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
-import {
-  generateSessionProjectName,
-  SESSION_PROJECT_ENTRY_TYPE,
-} from "../lib/session-project.js";
+import { SESSION_PROJECT_ENTRY_TYPE } from "../lib/session-project.js";
 
 const execFileAsync = promisify(execFile);
 const scriptRepository = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -549,18 +546,10 @@ async function runRpc(
         const nextEntries = await request({ type: "get_entries" });
         return { entries: nextEntries, state: nextState };
       },
-      ({ entries: nextEntries, state: nextState }) => {
-        const expectedName = generateSessionProjectName(
-          { getSessionId: () => nextState.data.sessionId },
-          "public",
-        );
-        return (
-          nextState.data.sessionName === expectedName &&
-          nextEntries.data.entries.some((entry: RpcRow) =>
-            isProjectEntryForWorkstream(entry, "public"),
-          )
-        );
-      },
+      ({ entries: nextEntries }) =>
+        nextEntries.data.entries.some((entry: RpcRow) =>
+          isProjectEntryForWorkstream(entry, "public"),
+        ),
       "persisted /project session state",
     );
 
@@ -573,14 +562,9 @@ async function runRpc(
         return { entries: nextEntries, state: nextState };
       },
       ({ entries: nextEntries, state: nextState }) => {
-        const expectedName = generateSessionProjectName(
-          { getSessionId: () => nextState.data.sessionId },
-          "public",
-        );
         return (
           nextState.data.sessionId !== scoped.state.data.sessionId &&
           nextState.data.sessionFile !== scoped.state.data.sessionFile &&
-          nextState.data.sessionName === expectedName &&
           nextEntries.data.entries.some((entry: RpcRow) =>
             isProjectEntryForWorkstream(entry, "public"),
           )
@@ -1168,10 +1152,8 @@ async function main() {
     );
     assert.equal(
       projectRpc.scopedState.data.sessionName,
-      generateSessionProjectName(
-        { getSessionId: () => projectRpc.scopedState.data.sessionId },
-        "public",
-      ),
+      projectRpc.state.data.sessionName,
+      "project selection must not rename the session",
     );
     assert.ok(
       projectRpc.scopedEntries.data.entries.some((entry: RpcRow) =>
@@ -1189,10 +1171,8 @@ async function main() {
     );
     assert.equal(
       projectRpc.forkedState.data.sessionName,
-      generateSessionProjectName(
-        { getSessionId: () => projectRpc.forkedState.data.sessionId },
-        "public",
-      ),
+      projectRpc.state.data.sessionName,
+      "project integration must not replace the native cloned name",
     );
     assert.ok(
       projectRpc.forkedEntries.data.entries.some((entry: RpcRow) =>
