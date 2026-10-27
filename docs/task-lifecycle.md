@@ -771,8 +771,11 @@ Completed, cancelled, and superseded outcomes have their own mappings.
 
 A target may set `assigneeId` to a Datadog user UUID for assignment on creation.
 It may also set `workstreamAttributeKey` to an existing, single-value TEXT custom
-attribute on its case type. New items then receive the canonical Pi workstream
-as that attribute's value. Tasks without a workstream omit the attribute.
+attribute on its case type. Catalog-backed tasks capture the project's current
+display name as that attribute's value, preserving case and spaces. Their project
+UUID, compatibility workstream key/aliases, and local workstream labels are
+unchanged. Legacy tasks still use the canonical Pi workstream; tasks without one
+omit the attribute.
 Provision the field separately with explicit approval: custom attributes belong
 to the shared case type, not just one project. Omit either option to retain its
 previous behavior. Workstream overrides are complete targets and do not inherit
@@ -780,10 +783,12 @@ these optional fields from `defaultTarget`.
 
 Assignment and workstream metadata are sent only on creation. Later remote
 reassignment or field edits are not overwritten by status/comment delivery;
-local workstream renames do not rewrite the captured value. Enabling these
-options does not update existing items.
+later project renames do not rewrite the captured value, even when initial
+delivery is still pending. Enabling these options does not update existing items.
+Correcting existing labels is a separately approved, field-only remote edit;
+it does not require recreating items or changing their captured destinations.
 
-The task snapshots its target, status mapping, and initial workstream at creation.
+The task snapshots its target, status mapping, and publication label at creation.
 Editing/removing the default, a mapping, or task labels does not reroute previously
 enrolled tasks.
 A later workstream opt-out does not stop delivery for tasks already enrolled.
