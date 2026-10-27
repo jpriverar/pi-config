@@ -17,10 +17,7 @@ import {
   type SessionWorkSelection,
 } from "../../lib/session-project.js";
 import { selectWorkIssues } from "../../lib/work-catalog/membership.js";
-import {
-  resolveWorkingIdentity,
-  workingIdentityName,
-} from "../../lib/session-identity.js";
+import { resolveWorkingIdentity } from "../../lib/session-identity.js";
 import { createCatalogStore } from "../../lib/work-catalog/store.js";
 import type { WorkCatalog } from "../../lib/work-catalog/model.js";
 import { createPaneReporter, type PaneReporter } from "./herdr-pane.js";
@@ -43,11 +40,18 @@ interface Counts {
 
 type TaskState =
   | Counts
-  | { sessionTask: { id: string; title: string; outsideView?: boolean } }
+  | {
+      sessionTask: {
+        id: string;
+        title: string;
+        outsideView?: boolean;
+        workstream?: string;
+      };
+    }
   | "unavailable";
 
 function browseLabel(selection: SessionWorkSelection): string | undefined {
-  if (selection.kind !== "catalog") return undefined;
+  if (selection.kind === "legacy") return selection.project;
   const { catalog, scope } = selection;
   if (scope.kind === "global") return undefined;
   return scope.kind === "area"
@@ -102,6 +106,10 @@ export default function projectStatus(
         sessionTask: {
           id: sessionTasks[0].id,
           title: sessionTasks[0].title,
+          workstream:
+            selection.kind === "legacy"
+              ? classifyReadiness(sessionTasks, new Set())[0].workstreams[0]
+              : undefined,
           outsideView:
             selection.kind === "catalog" &&
             selectWorkIssues(selection, sessionTasks).length === 0,
@@ -138,16 +146,16 @@ export default function projectStatus(
 
   function renderStatus(
     ctx: ExtensionContext,
-    project: string | undefined,
+    sessionName: string | undefined,
     taskState: TaskState,
-    area: string | undefined,
+    workContext: string | undefined,
     browse?: string,
   ): void {
     const theme = ctx.ui.theme;
     const leftParts: string[] = [];
     const identity: string[] = [];
-    if (project) identity.push(theme.fg("accent", project));
-    if (area) identity.push(theme.fg("muted", area));
+    if (sessionName) identity.push(theme.fg("accent", sessionName));
+    if (workContext) identity.push(theme.fg("muted", workContext));
     if (identity.length) leftParts.push(identity.join(theme.fg("dim", " • ")));
 
     if (taskState === "unavailable") {
@@ -236,9 +244,6 @@ export default function projectStatus(
           ? resolveWorkingIdentity(listed.value, catalog, sessionId)
           : { kind: "unavailable" as const, reason: "Task lookup failed" }
         : undefined;
-    currentSessionName = identity
-      ? (workingIdentityName(identity, ctx.sessionManager) ?? sessionName)
-      : sessionName;
     reporter?.updateTask(
       selectTaskAssignment(
         !listed.ok || identity?.kind === "unavailable"
@@ -250,15 +255,15 @@ export default function projectStatus(
       ),
       currentSessionName,
     );
-    const area =
+    const workContext =
       identity?.kind === "assigned"
-        ? identity.areaName
+        ? `${identity.projectName} • ${identity.areaName}`
         : identity?.kind === "unavailable"
           ? "identity unavailable"
           : undefined;
     if (!listed.ok || identity?.kind === "unavailable") {
       currentTaskState = "unavailable";
-      renderStatus(ctx, currentSessionName, currentTaskState, area);
+      renderStatus(ctx, currentSessionName, currentTaskState, workContext);
       return;
     }
     let selection: SessionWorkSelection;
@@ -267,7 +272,7 @@ export default function projectStatus(
         legacySelection ?? resolveSessionSelection(ctx.sessionManager, catalog);
     } catch {
       currentTaskState = "unavailable";
-      renderStatus(ctx, currentSessionName, currentTaskState, area);
+      renderStatus(ctx, currentSessionName, currentTaskState, workContext);
       return;
     }
     const taskState = await getCounts(
@@ -282,7 +287,10 @@ export default function projectStatus(
       ctx,
       currentSessionName,
       currentTaskState,
-      area,
+      workContext ??
+        (typeof taskState === "object" && "sessionTask" in taskState
+          ? taskState.sessionTask.workstream
+          : undefined),
       browseLabel(selection),
     );
   }

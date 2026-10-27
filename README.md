@@ -230,13 +230,16 @@ work, or choose placement for new tasks. Every catalog-backed creation supplies
 an explicit project ID or registered name, even when a task is already owned.
 Recording work elsewhere leaves the session unchanged.
 
-A claimed task supplies the working project/area and automatic
-`<project-name>-<session-suffix>` name. Relinquishing ownership produces
-`unassigned-<session-suffix>` and a global view. Later browsing remains independent;
-status labels filtered counts separately and keeps an outside-view owned task
-visible. Unknown ownership is unavailable, not unassigned. Manual names are
-replaced during reconciliation. Renames preserve stable identity and aliases;
-moves never retarget existing captured destinations.
+A claimed task supplies the working project/area, shown explicitly in Pi's status
+alongside the actual session name and active task. Relinquishing ownership makes
+the session unassigned and adopts a global view, without changing its name. Later
+browsing remains independent; status labels filtered counts separately and keeps
+an outside-view owned task visible. Unknown ownership is unavailable, not unassigned.
+
+Session naming is left to Pi and the user: task transitions, project operations,
+startup and child-session setup do not generate or repair names. Existing names,
+including previously generated names, remain untouched. Project renames preserve
+stable identity and aliases; moves never retarget existing captured destinations.
 
 Catalog data is private Beads data, not package content. Use the
 [reviewed prepare/activate runbook](docs/task-reconciler-operations.md#reviewed-area-and-project-activation)
@@ -247,7 +250,8 @@ Installation and startup do not activate a catalog.
 
 Use `/project` to switch the session's task scope. Projects are derived from
 `workstream:` labels on tasks, including closed tasks; there is no separate
-project creation command. Selecting a project does not claim a task.
+project creation command. Selecting a project does not claim a task or change the session name. Project
+selection and rename migrations persist their scope independently of the name.
 
 - **Manage projects…** → choose a project → **Rename** or **Archive**.
 - **Archived projects…** → choose a project → **Restore**.
@@ -508,9 +512,10 @@ The command copies the active conversation branch into a new session, opens
 and focuses the new pane, and starts Pi with the same working directory,
 model, and thinking level. The new agent waits for your next instruction;
 the original session is unchanged. Catalog-backed clones start unassigned with
-a global browse view and a new session-ID suffix; they never inherit or transfer
+a global browse view and a new session ID; they never inherit or transfer
 the parent’s ownership. Fork and `/clear` use the same neutral catalog behavior.
-Without a catalog, legacy name/scope preservation remains. Compaction records are
+Without a catalog, legacy scope preservation remains. Neither mode overrides
+Pi's native session naming. Compaction records are
 preserved, so this
 separates future conversation growth but does not shrink inherited context.
 The new process loads its normal Pi configuration, not the source process's
@@ -531,7 +536,7 @@ run `pi --session <reported-session-file>` from the intended working directory.
 
 Interactive Pi sessions inside Herdr mirror their owned task into the pane
 frame, for example `jp-example • Review auth`. Pi's full project-status row
-remains visible: session name, area and task/counts are intentionally retained
+remains visible: actual session name, owned project/area and task/counts are retained
 near the prompt. The default global view omits `Browse: All areas`; narrowed
 project/area views still identify their filter.
 
@@ -539,8 +544,8 @@ The reporter uses native **display-agent metadata**, not a primary title or a
 pane rename. Explicit Herdr titles and manual pane names keep priority, and
 neither Pi's session name nor Herdr's detected agent/lifecycle authority changes.
 A native Pi guard keeps the display label from applying to a shell or another
-agent in the pane. With no owned task, the label uses the current session name (normally
-`unassigned-<suffix>`), or `Unassigned` if unnamed. Failed or ambiguous task
+agent in the pane. With no owned task, the label uses the actual session name,
+or `Unassigned` if unnamed. Failed or ambiguous task
 lookups show `Task unavailable` rather than pretending no task is owned.
 
 To keep the name-bearing frame visible even for a lone pane, merge these values

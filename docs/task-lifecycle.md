@@ -104,23 +104,27 @@ marker. Filtered counts and model context label the browse view separately from
 working identity.
 
 A unique active task owned by the stable session ID supplies the working project
-and area. Its automatic name is `<project-name>-<session-suffix>`; the suffix uses
-the existing normalized last eight session-ID characters. Successful claim adopts
-that project view once. Wait, defer or close that relinquishes ownership produces
-`unassigned-<session-suffix>` and a global view. Creating another task does neither.
+and area. Pi's status shows that context explicitly beside the actual session name
+and active task. Successful claim adopts that project view once. Wait, defer or
+close that relinquishes ownership makes the session unassigned and adopts a global
+view. Creating another task does neither.
 
-Startup/resume reconstructs identity from ownership. Later explicit browsing is
-preserved during ordinary refreshes, name corrections and catalog renames/moves.
-Manual names are replaced during reconciliation. Failed/ambiguous reads or invalid
-membership are unavailable, not proof of no owner; they do not clear the name or
-release work. A post-commit display failure reports partial success and remains
-recoverable without undoing ownership.
+Session names are independent: lifecycle, project operations and session setup do
+not generate, repair or clear them. Pi's native naming and explicit user names are
+preserved; existing generated names are not migrated or rewritten.
+
+Startup/resume reconstructs working identity from ownership. Later explicit browsing
+is preserved during ordinary refreshes, manual name changes and catalog renames/moves.
+Failed/ambiguous reads or invalid membership are unavailable, not proof of no owner;
+they do not release work. A post-commit scope/marker projection failure reports
+partial success and remains recoverable without undoing ownership.
 
 Catalog-backed fork, clone and clear initialize a new ID as unassigned/global,
 without transferring or releasing parent ownership. Their setup does not change
 cwd or allocate a worktree. The session-bound `jp-working-identity` entry is only
 rebuildable presentation bookkeeping; it is never an ownership or placement
-source. Legacy/no-catalog name and scope behavior remains separate.
+source. Legacy/no-catalog scope behavior remains separate; it likewise persists
+project selections and migrations without changing session names.
 
 For browse compatibility only, a session without scope metadata can resolve an
 exact registered display name or alias. Generated suffixes are not guessed, and

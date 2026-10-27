@@ -409,7 +409,7 @@ for (const [name, scope, outside] of [
       scope,
       source: "explicit",
     });
-    assert.equal(r.sessionName, `API-${r.sessionId.slice(-8)}`);
+    assert.equal(r.sessionName, undefined);
     if (outside) assert.match(reviewed, /outside the selected view/);
     else assert.doesNotMatch(reviewed, /outside the selected view/);
   });
@@ -434,7 +434,7 @@ test("native catalog claim outside the view delivers context after the same batc
     scope: { kind: "project", projectId: P },
     source: "explicit",
   });
-  assert.equal(r.sessionName, `API-${r.sessionId.slice(-8)}`);
+  assert.equal(r.sessionName, undefined);
   assert.equal(r.record.metadata.piLifecycle.execution?.sessionId, r.sessionId);
   assert.ok(
     r.events.indexOf("marker-executed") < r.events.indexOf("provider-2"),

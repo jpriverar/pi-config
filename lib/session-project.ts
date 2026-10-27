@@ -105,18 +105,6 @@ export function persistSessionProject(
   } satisfies SessionProjectData);
 }
 
-export function generateSessionProjectName(
-  session: SessionProjectIdentity,
-  workstream: string,
-): string {
-  const normalizedId = session
-    .getSessionId()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-  const suffix = normalizedId.slice(-8);
-  return suffix ? `${workstream}-${suffix}` : workstream;
-}
-
 export type ScopeResolution =
   | { kind: "resolved"; scope: WorkScope; source: SessionProjectSource }
   | { kind: "invalid"; reason: string };
@@ -245,16 +233,4 @@ export function resolveSessionSelection(
     );
   const project = resolveSessionProject(session).workstream;
   return { kind: "legacy", project, key: project?.toLowerCase() ?? null };
-}
-
-export function sessionDisplayNameBase(
-  session: SessionProjectIdentity &
-    Pick<SessionProjectReader, "getSessionName">,
-): string | undefined {
-  const name = session.getSessionName();
-  const suffix = generateSessionProjectName(session, "");
-  // A display suffix is cosmetic; it must never determine work scope.
-  return name && suffix && name.endsWith(suffix)
-    ? name.slice(0, -suffix.length)
-    : name;
 }

@@ -5,8 +5,6 @@ import {
   persistSessionWorkScope,
 } from "../../lib/session-project.js";
 
-import { workingIdentityName } from "../../lib/session-identity.js";
-
 type SessionEntry = {
   type: string;
   customType?: string;
@@ -15,10 +13,7 @@ type SessionEntry = {
 
 type SessionManager = {
   getEntries(): SessionEntry[];
-  getSessionId(): string;
-  getSessionName?(): string | undefined;
   appendCustomEntry(customType: string, data?: unknown): string;
-  appendSessionInfo(name: string): string;
 };
 
 type CommandContext = {
@@ -38,14 +33,6 @@ type ExtensionAPI = {
   ): void;
 };
 
-function scopeWorkstream(data: unknown): string | undefined {
-  if (typeof data !== "object" || data === null) return undefined;
-  const workstream = (data as Record<string, unknown>).workstream;
-  return typeof workstream === "string" && workstream.length > 0
-    ? workstream
-    : undefined;
-}
-
 export default function sessionClearExtension(pi: ExtensionAPI): void {
   pi.registerCommand("clear", {
     description:
@@ -55,9 +42,6 @@ export default function sessionClearExtension(pi: ExtensionAPI): void {
         await ctx.newSession({
           async setup(sessionManager) {
             persistSessionWorkScope(sessionManager, { kind: "global" });
-            sessionManager.appendSessionInfo(
-              workingIdentityName({ kind: "unassigned" }, sessionManager)!,
-            );
           },
         });
         return;
@@ -72,13 +56,6 @@ export default function sessionClearExtension(pi: ExtensionAPI): void {
       await ctx.newSession({
         async setup(sessionManager) {
           sessionManager.appendCustomEntry(SESSION_PROJECT_ENTRY_TYPE, data);
-
-          const workstream = scopeWorkstream(data);
-          if (workstream) {
-            sessionManager.appendSessionInfo(
-              `${workstream}-${sessionManager.getSessionId().slice(0, 8)}`,
-            );
-          }
         },
       });
     },

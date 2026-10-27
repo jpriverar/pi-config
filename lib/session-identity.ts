@@ -1,8 +1,4 @@
 import type { BeadsIssue } from "./beads.js";
-import {
-  generateSessionProjectName,
-  type SessionProjectIdentity,
-} from "./session-project.js";
 import { resolveTaskMembership } from "./work-catalog/membership.js";
 import type { WorkCatalog } from "./work-catalog/model.js";
 
@@ -112,15 +108,4 @@ export function resolveWorkingIdentity(
     areaId: area.id,
     areaName: area.name,
   };
-}
-
-export function workingIdentityName(
-  identity: WorkingIdentity,
-  session: SessionProjectIdentity,
-): string | undefined {
-  if (identity.kind === "unavailable") return undefined;
-  return generateSessionProjectName(
-    session,
-    identity.kind === "assigned" ? identity.projectName : "unassigned",
-  );
 }

@@ -231,7 +231,7 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
     registerCommand(name: string, command: unknown) {
       commands.set(name, command);
     },
-    appendEntry() {},
+    appendEntry(_customType: string, _data: unknown) {},
     sendMessage(message: any, options: any) {
       sent.push({ message, options });
     },
@@ -2038,7 +2038,7 @@ async function catalogIdentityHarness() {
 test("cross-project claim derives identity and queues its exact mission from one read", async () => {
   const h = await catalogIdentityHarness();
   await h.claim();
-  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   assert.deepEqual(h.scope(), {
     kind: "resolved",
     scope: { kind: "project", projectId: h.P },
@@ -2064,7 +2064,7 @@ for (const conflict of ["deferred status", "non-active execution"] as const) {
       );
     const before = structuredClone(projection());
     const result = await h.event("before_agent_start");
-    assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+    assert.equal(h.context.sessionManager.getSessionName(), "before");
     assert.deepEqual(projection(), before);
     assert.match(JSON.stringify(result), /unavailable/i);
     assert.doesNotMatch(JSON.stringify(result), /The exact owned mission/);
@@ -2081,10 +2081,7 @@ test("deferred ownership facts do not broaden the model work overview", async ()
   row.metadata.piLifecycle!.execution = null;
   h.setRows([row]);
   const result = await h.event("before_agent_start");
-  assert.equal(
-    h.context.sessionManager.getSessionName(),
-    "unassigned-session1",
-  );
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   assert.doesNotMatch(
     JSON.stringify(result),
     /Owned task|The exact owned mission/,
@@ -2111,7 +2108,7 @@ test("navigation during claim lookup is preserved without suppressing its owned 
     return [h.row()];
   });
   await h.claim();
-  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   assert.deepEqual(h.scope(), {
     kind: "resolved",
     scope: { kind: "global" },
@@ -2132,7 +2129,7 @@ test("malformed browsing cannot hide a valid owned mission or identity", async (
   await h.claim();
   h.browse({ kind: "invalid" });
   const result = await h.event("before_agent_start");
-  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   assert.match(JSON.stringify(result), /The exact owned mission/);
   assert.equal(h.scope().kind, "invalid");
 });
@@ -2177,7 +2174,7 @@ for (const [toolName, method, params] of [
       /release rejected/,
     );
     assert.deepEqual(h.entries, before);
-    assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+    assert.equal(h.context.sessionManager.getSessionName(), "before");
     Object.assign(h.service, {
       [method]: async (...args: any[]) => {
         const result = await (original as any)(...args);
@@ -2188,10 +2185,7 @@ for (const [toolName, method, params] of [
     await h.tools
       .get(toolName)!
       .execute("release", params, null, null, h.context);
-    assert.equal(
-      h.context.sessionManager.getSessionName(),
-      "unassigned-session1",
-    );
+    assert.equal(h.context.sessionManager.getSessionName(), "before");
     assert.deepEqual(h.scope(), {
       kind: "resolved",
       scope: { kind: "global" },
@@ -2229,7 +2223,7 @@ for (const [toolName, method, params] of [
         .get(toolName)!
         .execute("release", params, null, null, h.context);
       assert.equal(committed, true);
-      assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+      assert.equal(h.context.sessionManager.getSessionName(), "before");
       assert.deepEqual(h.scope(), {
         kind: "resolved",
         scope: { kind: "project", projectId: navigate ? h.Q : h.P },
@@ -2275,13 +2269,10 @@ test("normal snapshots recover external completion and preserve identity on read
     throw new Error("read failed");
   });
   await h.event("before_agent_start");
-  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   h.setReader(async () => []);
   await h.event("before_agent_start");
-  assert.equal(
-    h.context.sessionManager.getSessionName(),
-    "unassigned-session1",
-  );
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   assert.deepEqual(h.scope(), {
     kind: "resolved",
     scope: { kind: "global" },
@@ -2298,10 +2289,7 @@ test("catalog fork seeds neutral identity before an unavailable recovery read", 
     throw new Error("unavailable");
   });
   await h.event("session_start", { reason: "fork" });
-  assert.equal(
-    h.context.sessionManager.getSessionName(),
-    "unassigned-580c8e67",
-  );
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   assert.deepEqual(h.scope(), {
     kind: "resolved",
     scope: { kind: "global" },
@@ -2321,7 +2309,7 @@ test("authoritative recovery supersedes the fresh catalog-session seed", async (
   owned.metadata.piLifecycle!.execution!.sessionId = "child-580c8e67";
   h.setRows([owned]);
   await h.event("session_start", { reason: "fork" });
-  assert.equal(h.context.sessionManager.getSessionName(), "API-580c8e67");
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   assert.deepEqual(h.scope(), {
     kind: "resolved",
     scope: { kind: "project", projectId: h.P },
@@ -2334,7 +2322,7 @@ test("fresh startup reuses overview facts for identity without a second listing"
   h.context.sessionManager.getBranch = () => h.entries;
   await h.event("session_start", { reason: "startup" });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   assert.equal(h.reads(), 1);
   assert.equal(
     h.entries.filter((entry) => entry.customType === "jp-work-startup").length,
@@ -2358,20 +2346,17 @@ test("resume and already-started startup recover identity with one bounded facts
   for (const reason of ["resume", "startup", "fork", "new"]) {
     const h = await catalogIdentityHarness();
     await h.event("session_start", { reason });
-    assert.equal(
-      h.context.sessionManager.getSessionName(),
-      "API-session1",
-      reason,
-    );
+    assert.equal(h.context.sessionManager.getSessionName(), "before", reason);
     assert.equal(h.reads(), 1, reason);
   }
 });
 
-test("post-commit name failure preserves the claim and later browsing during recovery", async () => {
+test("post-commit marker failure preserves the claim and later browsing during recovery", async () => {
   const h = await catalogIdentityHarness();
-  const setter = h.host.setSessionName;
-  h.host.setSessionName = () => {
-    throw new Error("name failed");
+  const append = h.host.appendEntry;
+  h.host.appendEntry = (type, data) => {
+    if (type === "jp-working-identity") throw new Error("marker failed");
+    append(type, data);
   };
   const result = await h.claim();
   assert.equal(h.calls.filter((c) => c.name === "claim").length, 1);
@@ -2382,9 +2367,9 @@ test("post-commit name failure preserves the claim and later browsing during rec
   );
   assert.match(JSON.stringify(h.sent), /The exact owned mission/);
   h.browse({ kind: "project", projectId: h.Q });
-  h.host.setSessionName = setter;
+  h.host.appendEntry = append;
   await h.event("before_agent_start");
-  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   assert.deepEqual(h.scope(), {
     kind: "resolved",
     scope: { kind: "project", projectId: h.Q },
@@ -2414,7 +2399,7 @@ test("a pre-claim observation cannot clear identity after the newer claim commit
   await h.claim();
   finish([]);
   await old;
-  assert.equal(h.context.sessionManager.getSessionName(), "API-session1");
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
   assert.match(JSON.stringify(h.sent), /The exact owned mission/);
 });
 
@@ -2449,4 +2434,17 @@ test("legacy claim context is suppressed when its required scope changes during 
   resolve(claimedFacts());
   await pending;
   assert.equal(h.sent.length, 0);
+});
+
+test("catalog ownership projection publishes the existing display-refresh event", async () => {
+  const h = await catalogIdentityHarness();
+  const events: unknown[][] = [];
+  Object.assign(h.pi, {
+    events: { emit: (...args: unknown[]) => events.push(args) },
+  });
+  await h.claim();
+  assert.deepEqual(events, [["pi:work-scope-changed", "session-1"]]);
+  await h.event("before_agent_start");
+  assert.equal(events.length, 1);
+  assert.equal(h.context.sessionManager.getSessionName(), "before");
 });

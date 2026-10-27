@@ -494,6 +494,7 @@ async function verifyTaskDrivenSessions(input: {
     const messages: any[] = [];
     const notifications: string[] = [];
     let reads = 0;
+    let nameWrites = 0;
     const pi = {
       events: new EventEmitter(),
       on: (name: string, handler: Handler) =>
@@ -505,7 +506,10 @@ async function verifyTaskDrivenSessions(input: {
       registerEntryRenderer() {},
       appendEntry: (type: string, data: unknown) =>
         current.appendCustomEntry(type, data),
-      setSessionName: (name: string) => current.appendSessionInfo(name),
+      setSessionName: (name: string) => {
+        nameWrites++;
+        current.appendSessionInfo(name);
+      },
       getSessionName: () => current.getSessionName(),
       sendMessage: (message: unknown) => messages.push(message),
       exec: async (command: string, argv: readonly string[]) => {
@@ -581,8 +585,6 @@ async function verifyTaskDrivenSessions(input: {
         throw new Error("Fixture catalog selection missing");
       return selection.scope;
     };
-    const named = (project: string, manager = current) =>
-      `${project}-${manager.getSessionId().replaceAll("-", "").slice(-8)}`;
     const bindings = (row: Awaited<ReturnType<typeof store.show>>) => ({
       project: row.metadata.piProject,
       publication: row.metadata.piWorkManagement,
@@ -590,7 +592,7 @@ async function verifyTaskDrivenSessions(input: {
     const original = await store.show(taskId);
     const originalBinding = structuredClone(bindings(original));
     await emit("session_start", { reason: "startup" });
-    assert.equal(current.getSessionName(), named("unassigned"));
+    assert.equal(current.getSessionName(), undefined);
     const beforeClaimReads = reads;
     await call("task_claim", { taskId });
     assert.equal(
@@ -598,14 +600,14 @@ async function verifyTaskDrivenSessions(input: {
       1,
       "claim identity and mission share one snapshot",
     );
-    assert.equal(current.getSessionName(), named("Renamed Published Work"));
+    assert.equal(current.getSessionName(), undefined);
     assert.deepEqual(await view(), { kind: "project", projectId });
     await commands.get("project").handler("", context());
     assert.deepEqual(await view(), {
       kind: "project",
       projectId: otherProjectId,
     });
-    assert.equal(current.getSessionName(), named("Renamed Published Work"));
+    assert.equal(current.getSessionName(), undefined);
     const recorded = await call("task_create", {
       title: "Independent recorded work",
       why: "Record independent work",
@@ -618,7 +620,7 @@ async function verifyTaskDrivenSessions(input: {
       version: 1,
       projectId: otherProjectId,
     });
-    assert.equal(current.getSessionName(), named("Renamed Published Work"));
+    assert.equal(current.getSessionName(), undefined);
     assert.deepEqual(await view(), {
       kind: "project",
       projectId: otherProjectId,
@@ -651,7 +653,7 @@ async function verifyTaskDrivenSessions(input: {
       name: "Runtime Operations",
     });
     const refreshed = await emit("before_agent_start");
-    assert.equal(current.getSessionName(), named("Session-owned project"));
+    assert.equal(current.getSessionName(), undefined);
     assert.deepEqual(await view(), {
       kind: "project",
       projectId: otherProjectId,
@@ -662,10 +664,10 @@ async function verifyTaskDrivenSessions(input: {
     );
     assert.deepEqual(bindings(await store.show(taskId)), originalBinding);
     await call("task_defer", { taskId, reason: "Yield the fixture task" });
-    assert.equal(current.getSessionName(), named("unassigned"));
+    assert.equal(current.getSessionName(), undefined);
     assert.deepEqual(await view(), { kind: "global" });
     await call("task_claim", { taskId: recordedId });
-    assert.equal(current.getSessionName(), named("Local Work"));
+    assert.equal(current.getSessionName(), undefined);
     assert.deepEqual(await view(), {
       kind: "project",
       projectId: otherProjectId,
@@ -676,7 +678,7 @@ async function verifyTaskDrivenSessions(input: {
     current.appendSessionInfo("Manual name is not authority");
     persistSessionWorkScope(current, { kind: "project", projectId });
     await emit("session_start", { reason: "resume" });
-    assert.equal(current.getSessionName(), named("Local Work"));
+    assert.equal(current.getSessionName(), "Manual name is not authority");
     assert.deepEqual(await view(), {
       kind: "project",
       projectId: otherProjectId,
@@ -688,7 +690,7 @@ async function verifyTaskDrivenSessions(input: {
     current.createBranchedSession(leaf);
     assert.notEqual(current.getSessionId(), parentId);
     await emit("session_start", { reason: "fork" });
-    assert.equal(current.getSessionName(), named("unassigned"));
+    assert.equal(current.getSessionName(), undefined);
     assert.deepEqual(await view(), { kind: "global" });
     assert.equal(
       (await store.show(recordedId)).lifecycle!.execution!.sessionId,
@@ -767,7 +769,12 @@ async function verifyTaskDrivenSessions(input: {
         root,
       );
       assert.notEqual(clone.getSessionId(), parentId);
-      assert.equal(clone.getSessionName(), named("unassigned", clone));
+      assert.equal(clone.getSessionName(), "Manual name is not authority");
+      assert.equal(
+        nameWrites,
+        0,
+        "task/project integration must never write a session name",
+      );
       assert.deepEqual(await view(clone), { kind: "global" });
       assert.equal(await readFile(parentFile, "utf8"), parentBeforeClone);
       assert.equal(
