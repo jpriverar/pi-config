@@ -103,6 +103,8 @@ export function createPaneReporter(options: {
               pi_task_state: null,
               pi_task_id: null,
               pi_task_expires_at: null,
+              pi_project: null,
+              pi_area: null,
               pi_context_warning: null,
               pi_context_critical: null,
               pi_waiting: null,

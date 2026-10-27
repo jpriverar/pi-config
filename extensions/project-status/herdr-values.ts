@@ -8,6 +8,8 @@ export type PaneTokens = Record<
   | "pi_task_state"
   | "pi_task_id"
   | "pi_task_expires_at"
+  | "pi_project"
+  | "pi_area"
   | "pi_context_warning"
   | "pi_context_critical"
   | "pi_waiting",
@@ -17,7 +19,13 @@ export type PaneTokens = Record<
 export type PaneMetadata = PaneTokens & { displayAgent: string | null };
 
 export type TaskAssignment =
-  | { state: "assigned"; label: string; taskId: string }
+  | {
+      state: "assigned";
+      label: string;
+      taskId: string;
+      project?: string;
+      area?: string;
+    }
   | { state: "unassigned" | "unavailable"; label: string };
 
 export function taskPaneLabel(
@@ -35,7 +43,12 @@ export function taskTokens(
   assignment: TaskAssignment,
 ): Pick<
   PaneTokens,
-  "pi_task" | "pi_task_state" | "pi_task_id" | "pi_task_expires_at"
+  | "pi_task"
+  | "pi_task_state"
+  | "pi_task_id"
+  | "pi_task_expires_at"
+  | "pi_project"
+  | "pi_area"
 > {
   return {
     pi_task: assignment.label,
@@ -43,6 +56,14 @@ export function taskTokens(
     pi_task_id: assignment.state === "assigned" ? assignment.taskId : null,
     // Clear the obsolete deadline left by pre-durable-ownership clients.
     pi_task_expires_at: null,
+    pi_project:
+      assignment.state === "assigned"
+        ? normalizeMetadata(assignment.project ?? "") || null
+        : null,
+    pi_area:
+      assignment.state === "assigned"
+        ? normalizeMetadata(assignment.area ?? "") || null
+        : null,
   };
 }
 

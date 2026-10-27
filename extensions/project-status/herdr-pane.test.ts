@@ -54,6 +54,8 @@ test("initializes current runtime without falsely claiming Unassigned", async ()
     pi_task_state: "unavailable",
     pi_task_id: null,
     pi_task_expires_at: null,
+    pi_project: null,
+    pi_area: null,
     pi_context_warning: null,
     pi_context_critical: null,
   });
@@ -113,6 +115,8 @@ test("suppresses unchanged data and serializes bursts to the latest value", asyn
     pi_task_state: "assigned",
     pi_task_id: "jp-task",
     pi_task_expires_at: null,
+    pi_project: null,
+    pi_area: null,
     pi_context_warning: null,
     pi_context_critical: "Context 91%",
   });
@@ -146,9 +150,13 @@ test("shutdown clears owned metadata and suppresses later updates", async () => 
     state: "assigned",
     taskId: "jp-one",
     label: "Owned",
+    project: "API",
+    area: "Product",
   });
   await setImmediate();
   assert.equal(h.sent.at(-1)!.values.pi_task, "Owned");
+  assert.equal(h.sent.at(-1)!.values.pi_project, "API");
+  assert.equal(h.sent.at(-1)!.values.pi_area, "Product");
   await h.reporter!.stop();
   h.reporter!.updateTask({
     state: "assigned",
@@ -165,6 +173,8 @@ test("shutdown clears owned metadata and suppresses later updates", async () => 
     pi_task_state: null,
     pi_task_id: null,
     pi_task_expires_at: null,
+    pi_project: null,
+    pi_area: null,
     pi_context_warning: null,
     pi_context_critical: null,
   });
@@ -185,9 +195,11 @@ test("stop cancels an in-flight send before clearing only owned keys", async () 
   assert.equal(h.sent.length, 2);
   assert.deepEqual(Object.keys(h.sent[1].values).sort(), [
     "displayAgent",
+    "pi_area",
     "pi_context_critical",
     "pi_context_warning",
     "pi_model",
+    "pi_project",
     "pi_task",
     "pi_task_expires_at",
     "pi_task_id",
@@ -207,6 +219,8 @@ test("clears claim identity whenever ownership becomes non-assigned", async () =
       state: "assigned",
       label: "Unassigned",
       taskId: "jp-owned",
+      project: "API",
+      area: "Product",
     });
     await setImmediate();
     assert.equal(h.sent.at(-1)!.values.pi_task_id, "jp-owned");
@@ -215,6 +229,8 @@ test("clears claim identity whenever ownership becomes non-assigned", async () =
     await setImmediate();
     assert.equal(h.sent.at(-1)!.values.pi_task_state, state);
     assert.equal(h.sent.at(-1)!.values.pi_task_id, null);
+    assert.equal(h.sent.at(-1)!.values.pi_project, null);
+    assert.equal(h.sent.at(-1)!.values.pi_area, null);
     assert.equal(h.sent.at(-1)!.values.pi_task_expires_at, null);
   }
   await h.reporter!.stop();

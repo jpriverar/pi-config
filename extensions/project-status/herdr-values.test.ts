@@ -271,6 +271,21 @@ test("native pane label strips controls and bounds the whole ID/title without br
   );
 });
 
+test("task placement tokens normalize labels and clear absent catalog identity", () => {
+  const assignment = {
+    state: "assigned" as const,
+    label: "Owned",
+    taskId: "jp-one",
+    project: "\u001b[31mAPI\n v2\u001b[0m",
+    area: "🧰".repeat(90),
+  };
+  assert.equal(taskTokens(assignment).pi_project, "API v2");
+  assert.equal(taskTokens(assignment).pi_area, "🧰".repeat(80));
+  const missing = taskTokens({ ...assignment, project: " ", area: undefined });
+  assert.equal(missing.pi_project, null);
+  assert.equal(missing.pi_area, null);
+});
+
 test("durable task tokens clear obsolete deadline metadata", () => {
   const assignment = {
     state: "assigned" as const,

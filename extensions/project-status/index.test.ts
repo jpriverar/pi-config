@@ -795,6 +795,69 @@ test("empty global view keeps identity without a redundant browse label", async 
   assert.equal(h.calls.length, 3);
 });
 
+test("Herdr publishes owned project and area independently of the browse view", async () => {
+  const fixture = catalogViewFixture();
+  const h = createHarness({
+    ...fixture,
+    herdr: true,
+    issues: [ownedCatalogIssue()],
+    entries: [projectEntry("maintenance")],
+  });
+  await start(h);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.pi_project, "API");
+  assert.equal(h.metadata.at(-1)!.pi_area, "Product");
+  assert.equal(h.calls.length, 1, "reuse the existing owned-task lookup");
+
+  fixture.catalog.projects[P].name = "API v2";
+  fixture.catalog.projects[P].areaId = B;
+  fixture.catalog.areas[B].name = "Developer Tools";
+  await h.handlers.get("turn_end")!({}, h.context);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.pi_project, "API v2");
+  assert.equal(h.metadata.at(-1)!.pi_area, "Developer Tools");
+  assert.equal(h.calls.length, 2);
+  await h.handlers.get("session_shutdown")!({}, h.context);
+  assert.equal(h.metadata.at(-1)!.pi_project, null);
+  assert.equal(h.metadata.at(-1)!.pi_area, null);
+});
+
+for (const transition of [
+  "release",
+  "task failure",
+  "catalog failure",
+  "missing area",
+  "legacy",
+] as const) {
+  test(`Herdr clears stale project and area after ${transition}`, async () => {
+    const fixture = catalogViewFixture();
+    const options = {
+      ...fixture,
+      catalog: fixture.catalog as WorkCatalog | null,
+      catalogError: undefined as string | undefined,
+      herdr: true,
+      issues: [ownedCatalogIssue()],
+      entries: [projectEntry("maintenance")],
+    };
+    const h = createHarness(options);
+    await start(h);
+    await setImmediate();
+    assert.equal(h.metadata.at(-1)!.pi_area, "Product");
+    if (transition === "release") h.setIssues([]);
+    else if (transition === "task failure") h.setUnavailable("active");
+    else if (transition === "catalog failure")
+      options.catalogError = "Unavailable";
+    else if (transition === "missing area")
+      fixture.catalog.projects[P].areaId = null;
+    else options.catalog = null;
+    await h.handlers.get("turn_end")!({}, h.context);
+    await setImmediate();
+    assert.equal(h.metadata.at(-1)!.pi_project, null);
+    assert.equal(h.metadata.at(-1)!.pi_area, null);
+    await h.handlers.get("session_shutdown")!({}, h.context);
+  });
+}
+
 test("unclassified projects do not display an invented area", async () => {
   const fixture = catalogViewFixture();
   fixture.catalog.projects[P].areaId = null;

@@ -244,17 +244,23 @@ export default function projectStatus(
           ? resolveWorkingIdentity(listed.value, catalog, sessionId)
           : { kind: "unavailable" as const, reason: "Task lookup failed" }
         : undefined;
-    reporter?.updateTask(
-      selectTaskAssignment(
-        !listed.ok || identity?.kind === "unavailable"
-          ? undefined
-          : identity?.kind === "unassigned"
-            ? []
-            : listed.value,
-        sessionId,
-      ),
-      currentSessionName,
+    const assignment = selectTaskAssignment(
+      !listed.ok || identity?.kind === "unavailable"
+        ? undefined
+        : identity?.kind === "unassigned"
+          ? []
+          : listed.value,
+      sessionId,
     );
+    if (
+      assignment.state === "assigned" &&
+      identity?.kind === "assigned" &&
+      identity.taskId === assignment.taskId
+    ) {
+      assignment.project = identity.projectName;
+      assignment.area = identity.areaName;
+    }
+    reporter?.updateTask(assignment, currentSessionName);
     const workContext =
       identity?.kind === "assigned"
         ? `${identity.projectName} • ${identity.areaName}`
