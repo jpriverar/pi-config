@@ -165,7 +165,7 @@ test("identical journal text and timestamps retain distinct stable native identi
   assert.ok(bodies[2].endsWith("/jp-test/comment/c2"));
 });
 
-test("assignment and workstream are sent only in the create payload", async () => {
+test("assignment and display-name metadata are sent only in the create payload", async () => {
   const bodies: Array<{
     data: {
       attributes: Record<string, unknown>;
@@ -190,7 +190,7 @@ test("assignment and workstream are sent only in the create payload", async () =
         {
           ...request,
           target: configured,
-          initial: { ...request.initial!, workstream: "pi-setup" },
+          initial: { ...request.initial!, workstream: "New API" },
         },
         { ...runtime, run },
       )
@@ -204,7 +204,7 @@ test("assignment and workstream are sent only in the create payload", async () =
     },
   });
   assert.deepEqual(bodies[0].data.attributes.custom_attributes, {
-    pi_workstream: { type: "TEXT", is_multi: false, value: "pi-setup" },
+    pi_workstream: { type: "TEXT", is_multi: false, value: "New API" },
   });
   await sendDatadogOperation(
     {
@@ -246,7 +246,7 @@ test("assignment and workstream are sent only in the create payload", async () =
 
 test("create omits workstream metadata without both a field mapping and a value", async () => {
   for (const input of [
-    { ...request, initial: { ...request.initial!, workstream: "pi-setup" } },
+    { ...request, initial: { ...request.initial!, workstream: "New API" } },
     {
       ...request,
       target: { ...target, workstreamAttributeKey: "pi_workstream" },

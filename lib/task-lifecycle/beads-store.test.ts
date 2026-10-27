@@ -8,6 +8,7 @@ import type { BeadsExec, BeadsExecResult } from "../beads.js";
 import type { LifecycleMetadataV1, LockOwner, Mutation } from "./types.js";
 import { createLifecycleStore } from "./beads-store.js";
 import type { WorkManagementState } from "../work-management/model.js";
+import { createCatalogService } from "../work-catalog/service.js";
 
 const NOW = "2026-09-17T10:00:00.000Z";
 const STORE = "/tmp/task-lifecycle-test/.beads";
@@ -1166,8 +1167,20 @@ async function catalogStoreFixture(t: {
     readCatalog: async () => catalog,
     readWorkManagementConfig: () => config,
   };
+  const catalogService = createCatalogService({
+    client: { listIssues: async () => ({ ok: true, value: [] }) },
+    store: {
+      read: async () => structuredClone(catalog),
+      write: async (value) => {
+        Object.assign(catalog, value);
+      },
+    },
+    storePath: path,
+    lockDependencies: settings.lockDependencies,
+  });
   return {
     catalog,
+    catalogService,
     config,
     calls,
     settings,
@@ -1199,6 +1212,63 @@ test("catalog task creation atomically records project, compatibility label and 
   assert.deepEqual(wm.target, area.publication.target);
   assert.equal(f.calls.filter((c) => c[0] === "create").length, 1);
 });
+test("catalog creation publishes the renamed display name without changing identity or routing", async (t) => {
+  const { A, P } = await import("../work-catalog/test-fixtures.js");
+  for (const selection of [
+    { projectId: P },
+    { workstream: "api" },
+    { workstream: "New API" },
+  ]) {
+    await t.test(JSON.stringify(selection), async (t) => {
+      const f = await catalogStoreFixture(t);
+      const publication = structuredClone(f.catalog.areas[A].publication);
+      assert.equal(publication.mode, "datadog");
+      if (publication.mode !== "datadog") return;
+      await f.catalogService.apply(
+        { kind: "rename", entity: "project", id: P, name: "New API" },
+        0,
+        OWNER,
+      );
+      const created = await f.store.create(
+        { title: "task", why: "goal", ...selection, needsJp: false },
+        lifecycle(),
+        OWNER,
+      );
+      const wm = created.metadata.piWorkManagement as WorkManagementState;
+      assert.equal(wm.initial.workstream, "New API");
+      assert.deepEqual(created.metadata.piProject, {
+        version: 1,
+        projectId: P,
+      });
+      assert.deepEqual(f.raw.labels, ["workstream:api"]);
+      assert.equal(f.catalog.projects[P].workstreamKey, "api");
+      assert.deepEqual(wm.target, publication.target);
+    });
+  }
+});
+
+test("a later catalog rename preserves the pending publication snapshot", async (t) => {
+  const { P } = await import("../work-catalog/test-fixtures.js");
+  const f = await catalogStoreFixture(t);
+  const created = await f.store.create(
+    { title: "task", why: "goal", projectId: P, needsJp: false },
+    lifecycle(),
+    OWNER,
+  );
+  const captured = created.metadata.piWorkManagement as WorkManagementState;
+  assert.equal(captured.initial.workstream, "API");
+  assert.equal(captured.remote, null);
+  await f.catalogService.apply(
+    { kind: "rename", entity: "project", id: P, name: "New API" },
+    0,
+    OWNER,
+  );
+  const pending = await f.store.show(created.id);
+  assert.deepEqual(pending.metadata.piWorkManagement, captured);
+  assert.deepEqual(pending.metadata.piProject, { version: 1, projectId: P });
+  assert.deepEqual(f.raw.labels, ["workstream:api"]);
+});
+
 test("locked catalog creation refuses missing placement even with stale scope input", async (t) => {
   const { P } = await import("../work-catalog/test-fixtures.js");
   const f = await catalogStoreFixture(t);
