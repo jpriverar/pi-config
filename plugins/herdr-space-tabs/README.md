@@ -16,8 +16,11 @@ The plugin runs from Herdr events, with no daemon or database polling.
 
 ## Display semantics
 
-The example layout shows Pi panes in three rows: state icon, tab, and space;
-task; then state text, Pi, and model. A conditional fourth row shows
+The example layout shows Pi panes in three rows: state icon and bold task
+title; project (the Herdr tab label) and space; then state text and model.
+The pane/display-agent label is omitted so it does not repeat the task title.
+Tab and space labels describe Herdr placement, not a separate catalog lookup.
+A conditional fourth row shows
 `pi_waiting` in warm amber while a session-local wakeup is waiting. The row disappears
 when the token is absent, keeping existing task/model rows intact. Spaces show their state icon and name,
 then `N tabs` and `M in-progress` on the next row. Sidebar context and active-tab
@@ -70,6 +73,20 @@ sessions need `/reload` at an idle boundary to publish these fields. Non-Pi pane
 do not count. Missing or inconsistent active-tab evidence clears its label rather
 than guessing. Existing state icons remain visible.
 
+## Resizing the sidebar
+
+Herdr already supports resizing the expanded desktop sidebar: drag its
+right-hand divider horizontally. This changes both the spaces and agents
+sections, not just the agents list. The client remembers the dragged width;
+double-click the divider to return to `[ui].sidebar_width`. Mouse capture must
+be enabled for dragging.
+
+The example raises `[ui].sidebar_max_width` to 100 columns while leaving the
+initial width and minimum unchanged. Merge that key into your existing `[ui]`
+section rather than adding a second table. Choose a smaller maximum if needed;
+long titles still truncate to the available width. This configuration was
+validated with Herdr 0.9.5; custom rows are for the expanded desktop sidebar.
+
 ## Explicit activation
 
 Package installation does not install or enable this Herdr plugin. Review the
@@ -79,8 +96,9 @@ those fields are invisible until included in the row configuration.
 
 1. Back up `~/.config/herdr/config.toml` (or the explicit `HERDR_CONFIG_PATH`).
 2. Merge the blocks from [`sidebar.example.toml`](sidebar.example.toml) into
-   the existing config. Preserve existing theme, token styling, sidebar width,
-   spacing, and other agent overrides. Do not append duplicate TOML tables.
+   the existing config. Preserve existing theme, token styling, initial sidebar
+   width, spacing, and other agent overrides. The example changes the maximum
+   width, not the initial width. Do not append duplicate TOML tables.
 3. Validate the merged candidate with `herdr config check` before reloading.
 4. Link the reviewed plugin:
 

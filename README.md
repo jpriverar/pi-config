@@ -568,8 +568,10 @@ field; explicit titles/manual names and unrelated metadata are left alone.
 
 ## Herdr sidebar metadata
 
-Interactive Pi sessions inside Herdr display tab and space, claimed task,
-then state and model. An optional event-driven Herdr plugin shows each space's
+Interactive Pi sessions inside Herdr display the claimed task as the main
+title, project/tab and space underneath, then only state and model. The
+example allows dragging the sidebar up to 100 columns wide. An optional
+event-driven Herdr plugin shows each space's
 tab count and distinct tasks claimed by its Pi sessions, without Git information
 or an active-tab row. Context usage stays
 in Pi's footer, with `Context ?` while its estimate is unknown. Configuration and
