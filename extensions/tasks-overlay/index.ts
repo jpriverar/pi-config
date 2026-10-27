@@ -282,6 +282,6 @@ export default function tasksOverlay(
       return;
     }
 
-    await legacy.resume(event.reason, ctx);
+    await legacy.resume(ctx);
   });
 }

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  generateSessionProjectName,
   persistSessionProject,
   resolveSessionProject,
   resolveSessionWorkScope,
@@ -134,32 +133,6 @@ test("persists project and global entries with the versioned payload", () => {
       data: { version: 1, workstream: null },
     },
   ]);
-});
-
-test("generates a stable eight-character suffix from the session ID", () => {
-  const manager = {
-    getSessionId: () => "019ff29e-4652-7c2d-90c5-bdf1580c8e67",
-  };
-
-  assert.equal(
-    generateSessionProjectName(manager, "pi-setup"),
-    "pi-setup-580c8e67",
-  );
-  assert.equal(
-    generateSessionProjectName(manager, "pi-setup"),
-    "pi-setup-580c8e67",
-  );
-});
-
-test("uses short and non-hyphen session IDs without a dangling separator", () => {
-  assert.equal(
-    generateSessionProjectName({ getSessionId: () => "AB.cd-12" }, "core"),
-    "core-abcd12",
-  );
-  assert.equal(
-    generateSessionProjectName({ getSessionId: () => "---" }, "core"),
-    "core",
-  );
 });
 
 test("catalog scopes resolve v2 entries, legacy aliases and fresh global sessions", () => {

@@ -15,7 +15,6 @@ import {
 import {
   resolveSessionProject,
   resolveSessionWorkScope,
-  generateSessionProjectName,
 } from "../../lib/session-project.js";
 import herdrCloneExtension from "./index.js";
 
@@ -217,21 +216,18 @@ for (const scenario of [
     label: "project-scoped",
     scope: "pi-setup",
     sourceName: "pi-setup-parent123",
-    baseName: "pi-setup",
     expectedProject: "pi-setup",
   },
   {
     label: "legacy project",
     scope: undefined,
     sourceName: "legacy-project",
-    baseName: "legacy-project",
     expectedProject: "legacy-project",
   },
   {
     label: "explicitly global",
     scope: null,
     sourceName: "Investigation",
-    baseName: "Investigation",
     expectedProject: undefined,
   },
 ]) {
@@ -559,7 +555,7 @@ for (const scope of [
         : scope.kind === "project"
           ? "API"
           : "Investigation";
-    h.sm.appendSessionInfo(generateSessionProjectName(h.sm, base));
+    h.sm.appendSessionInfo(`${base} notes`);
     h.sm.branch(leaf);
     const original = readFileSync(h.sm.getSessionFile()!, "utf8");
     await h.clone();

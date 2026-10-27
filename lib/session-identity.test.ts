@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { BeadsIssue } from "./beads.js";
-import {
-  resolveWorkingIdentity,
-  workingIdentityName,
-} from "./session-identity.js";
+import { resolveWorkingIdentity } from "./session-identity.js";
 import {
   A,
   B,
@@ -179,28 +176,4 @@ test("catalog renames and area moves change display only, including archived own
   assert.equal(result.areaName, c.areas[B].name);
   assert.notEqual(result.areaId, A);
   assert.deepEqual(row, before);
-});
-
-test("automatic names reuse the normalized session suffix and preserve project spelling", () => {
-  const c = catalogFixture();
-  c.projects[P].name = "api";
-  const identity = resolveWorkingIdentity([owned()], c, SESSION);
-  const session = { getSessionId: () => SESSION.toUpperCase() };
-  assert.equal(workingIdentityName(identity, session), "api-580c8e67");
-  assert.equal(
-    workingIdentityName({ kind: "unassigned" }, session),
-    "unassigned-580c8e67",
-  );
-  assert.equal(
-    workingIdentityName(
-      { kind: "unavailable", reason: "lookup failed" },
-      session,
-    ),
-    undefined,
-  );
-  c.projects[P].name = "API";
-  assert.equal(
-    workingIdentityName(resolveWorkingIdentity([owned()], c, SESSION), session),
-    "API-580c8e67",
-  );
 });

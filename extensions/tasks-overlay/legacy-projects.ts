@@ -231,7 +231,7 @@ export function createLegacyProjectCommands(
       );
     }
   }
-  async function resume(_reason: string, ctx: ExtensionContext): Promise<void> {
+  async function resume(ctx: ExtensionContext): Promise<void> {
     const project = resolveSessionProject(ctx.sessionManager);
     if (project.workstream === undefined) return;
 
@@ -260,7 +260,6 @@ export function createLegacyProjectCommands(
 
     if (canonical !== undefined && canonical !== project.workstream) {
       persistSessionProject(projectWriter, canonical);
-      return;
     }
   }
   return { handle, resume };
