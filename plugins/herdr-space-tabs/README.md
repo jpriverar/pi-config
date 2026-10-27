@@ -3,7 +3,8 @@
 An optional Herdr 0.8.0+ integration for the expanded desktop sidebar:
 
 - The Pi package's existing `project-status` extension publishes the current
-  model, claimed task title, and context pressure for interactive Pi panes.
+  model, claimed task title, catalog project/area, and context pressure for
+  interactive Pi panes.
 - This Herdr plugin publishes each space's tab count, active-task count, and
   optional active-tab label, including spaces with no agents. It requires
   Python 3.9+ on macOS/Linux.
@@ -17,9 +18,14 @@ The plugin runs from Herdr events, with no daemon or database polling.
 ## Display semantics
 
 The example layout shows Pi panes in three rows: state icon and bold task
-title; project (the Herdr tab label) and space; then state text and model.
+title; the owned task’s catalog project and area; then state text and model.
 The pane/display-agent label is omitted so it does not repeat the task title.
-Tab and space labels describe Herdr placement, not a separate catalog lookup.
+`pi_project` and `pi_area` reuse the identity already resolved for Pi’s status
+line, independently of the browse filter and Herdr tab/space names. No extra
+catalog reads or polling are added. Renames and area moves appear on the next
+normal refresh. Unassigned, unavailable, and non-catalog sessions clear these
+tokens instead of falling back to unrelated location names; an empty row is
+hidden by Herdr.
 A conditional fourth row shows
 `pi_waiting` in warm amber while a session-local wakeup is waiting. The row disappears
 when the token is absent, keeping existing task/model rows intact. Spaces show their state icon and name,
@@ -110,6 +116,12 @@ those fields are invisible until included in the row configuration.
 
 5. At a safe idle boundary, use `/reload` in each interactive Pi session that
    should load the new package code. Do not send commands to busy agents.
+
+When updating only the Pi rows to use `$pi_project` and `$pi_area`, first load
+the updated Pi package with `/reload` at an idle boundary in each relevant
+session. Older sessions do not publish these tokens, so the project/area row
+will be absent until they reload. Then merge the new rows and reload the Herdr
+configuration; no Herdr binary update or plugin relink is needed.
 
 The initial refresh is explicit: Herdr 0.8.0 startup hooks run after server
 startup/restore, not when a plugin is linked, enabled, or config is reloaded.

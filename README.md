@@ -569,7 +569,8 @@ field; explicit titles/manual names and unrelated metadata are left alone.
 ## Herdr sidebar metadata
 
 Interactive Pi sessions inside Herdr display the claimed task as the main
-title, project/tab and space underneath, then only state and model. The
+title, the task’s catalog project and area underneath, then only state and
+model. Herdr tab/space names and browse filters do not replace task identity. The
 example allows dragging the sidebar up to 100 columns wide. An optional
 event-driven Herdr plugin shows each space's
 tab count and distinct tasks claimed by its Pi sessions, without Git information

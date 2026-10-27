@@ -4,7 +4,7 @@ sidebar_max_width = 100
 [ui.sidebar.agents.rows_by_agent]
 pi = [
   ["state_icon", { token = "$pi_task", bold = true, dim = false }],
-  ["tab", "workspace"],
+  ["$pi_project", "$pi_area"],
   ["state_text", "$pi_model"],
   [{ token = "$pi_waiting", fg = "#d9a35f", dim = false }],
 ]

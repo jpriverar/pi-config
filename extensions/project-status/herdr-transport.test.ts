@@ -21,6 +21,8 @@ const values: PaneMetadata = {
   pi_task_state: "assigned",
   pi_task_id: "jp-one",
   pi_task_expires_at: "2000000",
+  pi_project: "API",
+  pi_area: "Product",
   pi_context_warning: null,
   pi_context_critical: "Context 90%",
 };
@@ -88,6 +90,10 @@ test("publishes only owned keys with argv, sequence and finite execution limits"
     "pi_task_id=jp-one",
     "--token",
     "pi_task_expires_at=2000000",
+    "--token",
+    "pi_project=API",
+    "--token",
+    "pi_area=Product",
     "--clear-token",
     "pi_context_warning",
     "--token",
@@ -154,6 +160,29 @@ test("accepts the installed Herdr CLI's silent successful metadata write", async
     args[0] === "pane" ? { stdout: "" } : replyFor(args),
   )!;
   assert.equal(await send(values, 1, new AbortController().signal), true);
+});
+
+test("placement changes publish or clear tokens without refreshing space counts", async () => {
+  const calls: string[][] = [];
+  const send = createHerdrMetadataSender(environment, async (_file, args) => {
+    calls.push([...args]);
+    return replyFor(args);
+  })!;
+  const signal = new AbortController().signal;
+  assert.equal(await send(values, 1, signal), true);
+  assert.equal(await send({ ...values, pi_area: "Tools" }, 2, signal), true);
+  assert.equal(calls.length, 4);
+  assert.ok(calls[3].includes("pi_area=Tools"));
+  assert.equal(
+    await send({ ...values, pi_project: null, pi_area: null }, 3, signal),
+    true,
+  );
+  assert.equal(calls.length, 5);
+  for (const key of ["pi_project", "pi_area"]) {
+    const index = calls[4].indexOf(key);
+    assert.ok(index > 0);
+    assert.equal(calls[4][index - 1], "--clear-token");
+  }
 });
 
 test("refreshes space counts after ownership changes but not model-only writes", async () => {
