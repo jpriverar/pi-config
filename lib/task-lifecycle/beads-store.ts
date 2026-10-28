@@ -418,6 +418,16 @@ export function createLifecycleStore(
       owner,
       async () => {
         let current = await readOne(id, `read issue ${id}`);
+        if (
+          current.issue.lifecycle === null &&
+          Object.hasOwn(current.rawMetadata, "piLifecycle")
+        ) {
+          throw lifecycleStoreError(
+            `mutate issue ${id}`,
+            store,
+            "invalid or unsupported piLifecycle metadata",
+          );
+        }
         const mutation = await operation(current.issue, async (blockerIds) => {
           for (const blockerId of blockerIds)
             assertIdentifier(blockerId, "blocker issue id");

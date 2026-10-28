@@ -381,6 +381,82 @@ test("claims a legacy task into active ownership", async () => {
   );
 });
 
+for (const [name, rawLifecycle] of [
+  ["unsupported version", { ...lifecycle(), version: 99 }],
+  ["future version", { ...lifecycle(), version: 2 }],
+  ["malformed version one", { version: 1, phase: "actionable" }],
+  ["explicit null", null],
+] as const) {
+  test("does not adopt present " + name + " lifecycle metadata", async () => {
+    const initial = {
+      ...issue(null),
+      metadata: { piLifecycle: rawLifecycle, unrelated: "preserve-me" },
+    };
+    const before = structuredClone(initial);
+    const store = new FakeStore(initial);
+
+    await assert.rejects(
+      service(store).claim("jp-1", session("s1"), "claim-invalid"),
+      /jp-1.*invalid or unsupported.*piLifecycle/,
+    );
+
+    assert.equal(store.writes, 0);
+    assert.deepEqual(store.saved, before);
+  });
+}
+
+test("claim preserves unsupported metadata through the native store", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "task-invalid-adoption-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let current = {
+    ...issue(null),
+    metadata: {
+      unrelated: { keep: true },
+      piLifecycle: {
+        version: 99,
+        owner: { sessionId: "original-owner" },
+        activeCheck: { id: "existing-check" },
+        artifacts: [{ id: "existing-artifact" }],
+        resources: [{ claimId: "existing-resource" }],
+      },
+    } as Record<string, unknown>,
+  };
+  const before = structuredClone(current);
+  let writes = 0;
+  const store = createLifecycleStore(
+    async (_command, args) => {
+      assert.ok(["ready", "show", "update"].includes(args[0]));
+      if (args[0] === "update") {
+        writes++;
+        current = {
+          ...current,
+          status: args[args.indexOf("-s") + 1] as LifecycleStatus,
+          metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+        };
+      }
+      return { code: 0, stdout: JSON.stringify([current]), stderr: "" };
+    },
+    {
+      store: root,
+      lockDependencies: {
+        now: Date.now,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        isPidAlive: () => "live",
+        hostname: "host",
+        timeoutMs: 200,
+      },
+    },
+  );
+
+  await assert.rejects(
+    service(store).claim("jp-1", session("s1"), "claim-invalid"),
+    /jp-1.*invalid or unsupported.*piLifecycle/,
+  );
+
+  assert.equal(writes, 0);
+  assert.deepEqual(current, before);
+});
+
 test("claims a legacy blocked task without inventing a structured check", async () => {
   const store = new FakeStore({ ...issue(null), status: "blocked" });
 

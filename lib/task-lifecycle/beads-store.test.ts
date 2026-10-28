@@ -417,6 +417,54 @@ test("keeps unsupported lifecycle metadata uncoerced and unmanaged", async () =>
   assert.deepEqual(read.metadata.piLifecycle, { version: 2 });
 });
 
+for (const [name, rawLifecycle] of [
+  ["unsupported", { version: 99, privateMarker: "do-not-echo" }],
+  ["malformed", { version: 1, privateMarker: "do-not-echo" }],
+  ["null", null],
+] as const) {
+  test(
+    "refuses mutation of present " + name + " lifecycle metadata",
+    async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "task-invalid-mutation-"));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      let current = rawIssue(null);
+      current.metadata = {
+        piLifecycle: rawLifecycle,
+        unrelated: "preserve-me",
+      };
+      const before = structuredClone(current);
+      let writes = 0;
+      let operationCalled = false;
+      const store = createLifecycleStore(async (_command, args) => {
+        assert.ok(["show", "update"].includes(args[0]));
+        if (args[0] === "update") {
+          writes++;
+          current = {
+            ...current,
+            status: args[args.indexOf("-s") + 1],
+            metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+          };
+        }
+        return result(current);
+      }, options(root));
+
+      await assert.rejects(
+        store.mutate("jp-1", OWNER, () => {
+          operationCalled = true;
+          return claimedMutation();
+        }),
+        (error: Error) =>
+          /jp-1.*invalid or unsupported.*piLifecycle/.test(error.message) &&
+          !error.message.includes("do-not-echo"),
+      );
+
+      assert.equal(operationCalled, false);
+      assert.equal(writes, 0);
+      assert.deepEqual(current, before);
+    },
+  );
+}
+
 test("lists statuses and reads native ready IDs through the explicit store", async () => {
   const calls: Array<[string, readonly string[]]> = [];
   const exec: BeadsExec = async (command, args) => {

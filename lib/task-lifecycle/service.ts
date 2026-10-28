@@ -1547,9 +1547,13 @@ export class TaskLifecycleService {
     readyIds: ReadonlySet<string>,
     now: string,
   ): LifecycleMetadataV1 {
-    return (
-      issue.lifecycle ?? adoptLegacyLifecycle(issue, readyIds, now).lifecycle
-    );
+    if (issue.lifecycle !== null) return issue.lifecycle;
+    if (Object.hasOwn(issue.metadata, "piLifecycle")) {
+      throw new Error(
+        `task ${issue.id} has invalid or unsupported piLifecycle metadata`,
+      );
+    }
+    return adoptLegacyLifecycle(issue, readyIds, now).lifecycle;
   }
 
   private mutation(
