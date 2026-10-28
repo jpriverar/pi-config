@@ -181,6 +181,62 @@ export interface LifecycleMetadataV1 {
   disposition: Disposition | null;
 }
 
+export interface TaskOwner {
+  sessionId: string;
+  claimedAt: string;
+  lastActivityAt: string;
+}
+
+export interface TaskCondition {
+  id: string;
+  kind: WaitingKind;
+  purpose: "completion" | "continuation";
+}
+
+export interface TaskPause {
+  id: string;
+  conditionFingerprint: string;
+  blockedAt: string;
+  observationFingerprint: string | null;
+}
+
+export interface LifecycleMetadataV2
+  extends Omit<LifecycleMetadataV1, "version" | "waiting" | "execution"> {
+  version: 2;
+  owner: TaskOwner | null;
+  condition: TaskCondition | null;
+  pause: TaskPause | null;
+}
+
+export type LifecycleMetadata = LifecycleMetadataV1 | LifecycleMetadataV2;
+
+export type LifecycleIssueV2 = Omit<LifecycleIssue, "lifecycle"> & {
+  lifecycle: LifecycleMetadataV2;
+};
+
+export interface LifecycleV2Input {
+  operationId: string;
+  sessionId: string;
+  now: string;
+}
+
+export interface BlockInput extends LifecycleV2Input {
+  conditionFingerprint: string;
+  reason: string;
+}
+
+export interface ResumeInput extends LifecycleV2Input {
+  reason: string;
+}
+
+export interface ReleaseInput extends LifecycleV2Input {
+  reason: string;
+}
+
+export interface CloseInputV2 extends LifecycleV2Input {
+  disposition: Disposition;
+}
+
 export interface LifecycleIssue {
   id: string;
   title: string;

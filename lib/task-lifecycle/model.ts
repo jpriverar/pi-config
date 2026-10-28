@@ -213,9 +213,7 @@ export function validateLifecycle(
     );
   }
 
-  validateUniqueArtifacts(lifecycle.artifacts);
-  validateUniqueResources(lifecycle.resources);
-  validateCheckTargets(lifecycle);
+  validateCommonLifecycleReferences(lifecycle);
 }
 
 function validateActiveCondition(
@@ -672,15 +670,21 @@ function validateLifecycleShape(value: Record<string, unknown>): void {
     ],
     "piLifecycle",
   );
-  assertEnum(value.phase, PHASES, "phase");
   if (value.waiting !== null) {
     const waiting = assertRecord(value.waiting, "waiting");
     assertExactKeys(waiting, ["kind"], "waiting");
     assertEnum(waiting.kind, WAITING_KINDS, "waiting kind");
   }
+  if (value.execution !== null) validateExecution(value.execution, "execution");
+  validateCommonLifecycleFields(value);
+}
+
+export function validateCommonLifecycleFields(
+  value: Record<string, unknown>,
+): void {
+  assertEnum(value.phase, PHASES, "phase");
   assertTimestamp(value.stateEnteredAt, "stateEnteredAt");
   assertTimestamp(value.lastProgressAt, "lastProgressAt");
-  if (value.execution !== null) validateExecution(value.execution, "execution");
   for (const [index, artifact] of assertArray(
     value.artifacts,
     "artifacts",
@@ -928,6 +932,17 @@ function validateDisposition(
     assertText(item.supersedingTaskId, `${field}.supersedingTaskId`);
 }
 
+export function validateCommonLifecycleReferences(
+  lifecycle: Pick<
+    LifecycleMetadataV1,
+    "artifacts" | "resources" | "activeCheck" | "checkHistory" | "disposition"
+  >,
+): void {
+  validateUniqueArtifacts(lifecycle.artifacts);
+  validateUniqueResources(lifecycle.resources);
+  validateCheckTargets(lifecycle);
+}
+
 function validateUniqueArtifacts(artifacts: Artifact[]): void {
   const ids = new Set<string>();
   const identities = new Set<string>();
@@ -971,7 +986,12 @@ function validateUniqueResources(resources: WorktreeResource[]): void {
   }
 }
 
-function validateCheckTargets(lifecycle: LifecycleMetadataV1): void {
+function validateCheckTargets(
+  lifecycle: Pick<
+    LifecycleMetadataV1,
+    "artifacts" | "activeCheck" | "checkHistory" | "disposition"
+  >,
+): void {
   const artifactIds = new Set(
     lifecycle.artifacts.map((artifact) => artifact.id),
   );
@@ -1050,7 +1070,10 @@ function uniqueTexts(value: unknown, field: string): string[] {
   return result;
 }
 
-function assertRecord(value: unknown, field: string): Record<string, unknown> {
+export function assertRecord(
+  value: unknown,
+  field: string,
+): Record<string, unknown> {
   if (!isRecord(value)) throw new Error(`${field} must be an object`);
   return value;
 }
@@ -1060,12 +1083,15 @@ function assertArray(value: unknown, field: string): unknown[] {
   return value;
 }
 
-function assertText(value: unknown, field: string): asserts value is string {
+export function assertText(
+  value: unknown,
+  field: string,
+): asserts value is string {
   if (typeof value !== "string" || value.trim().length === 0)
     throw new Error(`${field} must be non-empty text`);
 }
 
-function assertTimestamp(
+export function assertTimestamp(
   value: unknown,
   field: string,
 ): asserts value is string {
@@ -1090,7 +1116,7 @@ function assertEnum<T extends string>(
     throw new Error(`${field} has unknown value ${JSON.stringify(value)}`);
 }
 
-function assertExactKeys(
+export function assertExactKeys(
   value: Record<string, unknown>,
   keys: readonly string[],
   field: string,
@@ -1118,7 +1144,7 @@ function requireField(
   if (!(key in value)) throw new Error(`${field} is missing ${key}`);
 }
 
-function requireInvariant(
+export function requireInvariant(
   condition: unknown,
   message: string,
 ): asserts condition {

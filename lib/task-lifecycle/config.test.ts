@@ -10,10 +10,35 @@ import {
 
 test("shared policy loader retains existing lifecycle values", async (t) => {
   const f = await configFixture(t);
-  assert.deepEqual(
-    loadLifecycleConfig(join(f.root, "lifecycle.json")),
-    fixturePolicy,
-  );
+  assert.deepEqual(loadLifecycleConfig(join(f.root, "lifecycle.json")), {
+    ...fixturePolicy,
+    lifecycleWriteVersion: 1,
+  });
+});
+
+for (const version of [1, 2] as const) {
+  test(`accepts explicit lifecycle write version ${version}`, async (t) => {
+    const f = await configFixture(t);
+    const path = join(f.root, "lifecycle.json");
+    await writeFile(
+      path,
+      JSON.stringify({ ...fixturePolicy, lifecycleWriteVersion: version }),
+    );
+
+    assert.equal(loadLifecycleConfig(path).lifecycleWriteVersion, version);
+  });
+}
+
+test("rejects unsupported lifecycle write versions", async (t) => {
+  const f = await configFixture(t);
+  const path = join(f.root, "lifecycle.json");
+  for (const lifecycleWriteVersion of [0, 3, "2", null]) {
+    await writeFile(
+      path,
+      JSON.stringify({ ...fixturePolicy, lifecycleWriteVersion }),
+    );
+    assert.throws(() => loadLifecycleConfig(path), /lifecycleWriteVersion/);
+  }
 });
 
 test("shared policy loader rejects unknown versions, fields, and nonpositive values", async (t) => {
