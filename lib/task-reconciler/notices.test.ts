@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../task-lifecycle/legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BeadsIssue } from "../beads.js";
@@ -27,7 +28,7 @@ function issue(id = "jp-1"): BeadsIssue {
     title: "untrusted title",
     status: "blocked",
     labels: [],
-    lifecycle: task.lifecycle,
+    lifecycle: legacyLifecycle(task.lifecycle),
   };
 }
 

@@ -1,6 +1,6 @@
 import type {
   LifecycleIssue,
-  LifecycleMetadataV1,
+  LifecycleMetadata,
   LockOwner,
 } from "../task-lifecycle/types.js";
 
@@ -260,11 +260,12 @@ export function decodeWorkManagement(
 
 export function desiredWorkManagementStatus(
   target: WorkManagementTarget,
-  lifecycle: LifecycleMetadataV1 | null,
+  lifecycle: LifecycleMetadata | null,
 ): string | null {
   if (
     lifecycle?.phase === "waiting" &&
-    lifecycle.waiting?.kind === "check" &&
+    (lifecycle.version === 1 ? lifecycle.waiting : lifecycle.condition)
+      ?.kind === "check" &&
     lifecycle.activeCheck?.kind === "github_pull_request"
   )
     return target.statuses.waitingOnPullRequest ?? target.statuses.waiting;
@@ -277,7 +278,7 @@ export function desiredWorkManagementStatus(
 
 export function summarizeWorkManagement(
   metadata: Record<string, unknown>,
-  lifecycle: LifecycleMetadataV1 | null,
+  lifecycle: LifecycleMetadata | null,
 ): {
   url?: string;
   text: string;

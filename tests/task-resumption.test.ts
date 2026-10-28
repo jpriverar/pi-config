@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../lib/task-lifecycle/legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -54,7 +55,9 @@ for (const obstacle of ["initialized-submodule", "dirty-work"] as const) {
         "submodule",
         "status",
       ]);
-      const original = (await store.show(h.task.id)).lifecycle!.execution!;
+      const original = legacyLifecycle(
+        (await store.show(h.task.id)).lifecycle!,
+      ).execution!;
       const now = Date.parse(original.expiresAt) + 1_000;
       const resumed = new TaskLifecycleService({
         store,
@@ -71,7 +74,10 @@ for (const obstacle of ["initialized-submodule", "dirty-work"] as const) {
         `execution-interrupted:${original.sessionId}:${original.expiresAt}:release:${h.acquired.claimId}`,
       );
       const observed = await resumed.reconcileTask(h.task.id, daemon);
-      assert.deepEqual(observed.lifecycle!.execution, original);
+      assert.deepEqual(
+        legacyLifecycle(observed.lifecycle!).execution,
+        original,
+      );
       const pending = (await store.show(h.task.id)).lifecycle!.resources;
       assert.deepEqual(
         pending.map((resource) => resource.cleanupState),
@@ -79,9 +85,18 @@ for (const obstacle of ["initialized-submodule", "dirty-work"] as const) {
       );
 
       const claimed = await resumed.claim(h.task.id, h.owner, "resume");
-      assert.equal(claimed.lifecycle!.execution!.sessionId, h.owner.sessionId);
-      assert.equal(claimed.lifecycle!.execution!.claimedAt, original.claimedAt);
-      assert.ok(Date.parse(claimed.lifecycle!.execution!.expiresAt) > now);
+      assert.equal(
+        legacyLifecycle(claimed.lifecycle!).execution!.sessionId,
+        h.owner.sessionId,
+      );
+      assert.equal(
+        legacyLifecycle(claimed.lifecycle!).execution!.claimedAt,
+        original.claimedAt,
+      );
+      assert.ok(
+        Date.parse(legacyLifecycle(claimed.lifecycle!).execution!.expiresAt) >
+          now,
+      );
       assert.deepEqual(claimed.lifecycle!.resources, pending);
       const acquired = await resumed.acquireWorktree(
         {
@@ -199,7 +214,7 @@ test(
       pool: h.runtime.pool,
       ...fixturePolicy,
       now: () =>
-        Date.parse(initial.lifecycle!.execution!.expiresAt) +
+        Date.parse(legacyLifecycle(initial.lifecycle!).execution!.expiresAt) +
         7 * 24 * 60 * 60_000,
       uuid: randomUUID,
     });
@@ -261,7 +276,9 @@ test(
         return h.runtimeDependencies.runGit!(cwd, args);
       },
     });
-    const now = Date.parse(initial.lifecycle!.execution!.expiresAt) + 1_000;
+    const now =
+      Date.parse(legacyLifecycle(initial.lifecycle!).execution!.expiresAt) +
+      1_000;
     const service = new TaskLifecycleService({
       store,
       pool: runtime.pool,
@@ -298,7 +315,10 @@ test(
       assert.equal(returned, false);
       finishRemoval.resolve();
       const [claimed] = await Promise.all([claim, cleanup]);
-      assert.ok(Date.parse(claimed.lifecycle!.execution!.expiresAt) > now);
+      assert.ok(
+        Date.parse(legacyLifecycle(claimed.lifecycle!).execution!.expiresAt) >
+          now,
+      );
       assert.equal(claimed.lifecycle!.resources[0].cleanupState, "released");
       await assert.rejects(fs.stat(h.acquired.path), { code: "ENOENT" });
       assert.equal(
@@ -393,7 +413,9 @@ test(
         return h.runtimeDependencies.runGit!(cwd, args);
       },
     });
-    const now = Date.parse(initial.lifecycle!.execution!.expiresAt) + 1000;
+    const now =
+      Date.parse(legacyLifecycle(initial.lifecycle!).execution!.expiresAt) +
+      1000;
     const service = new TaskLifecycleService({
       store,
       pool: runtime.pool,
@@ -484,7 +506,10 @@ test(
         renewed.lifecycle!.resources[0].cleanupState,
         "release_pending",
       );
-      assert.equal(renewed.lifecycle!.execution!.sessionId, h.owner.sessionId);
+      assert.equal(
+        legacyLifecycle(renewed.lifecycle!).execution!.sessionId,
+        h.owner.sessionId,
+      );
       await fs.access(h.acquired.path);
       finishRemoval.resolve();
       const result = await release;
@@ -498,7 +523,7 @@ test(
       const finalized = await store.show(h.task.id);
       assert.equal(finalized.lifecycle!.resources[0].cleanupState, "released");
       assert.equal(
-        finalized.lifecycle!.execution!.sessionId,
+        legacyLifecycle(finalized.lifecycle!).execution!.sessionId,
         h.owner.sessionId,
       );
       await assert.rejects(fs.stat(h.acquired.path), { code: "ENOENT" });

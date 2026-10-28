@@ -19,7 +19,7 @@ import {
   withFileOperationLock,
   type FileOperationLockDependencies,
 } from "../file-operation-lock.js";
-import { decodeLifecycle } from "./model.js";
+import { decodeLifecycleAny } from "./v2-model.js";
 import { NEXT_STEP_KEY, normalizeNextStep } from "./next-step.js";
 import {
   decodeWorkManagement,
@@ -32,7 +32,7 @@ import {
 import type {
   CreateTaskInput,
   LifecycleIssue,
-  LifecycleMetadataV1,
+  LifecycleMetadata,
   LifecycleStatus,
   LifecycleStore,
   LockOwner,
@@ -43,6 +43,7 @@ import type {
 
 export interface LifecycleStoreOptions {
   store: string;
+  lifecycleWriteVersion?: 1 | 2;
   lockDependencies?: FileOperationLockDependencies;
   readWorkManagementConfig?: () => WorkManagementConfig | null;
   readCatalog?: () => Promise<WorkCatalog | null>;
@@ -66,6 +67,17 @@ export function createLifecycleStore(
   options: LifecycleStoreOptions,
 ): LifecycleStore & WorkManagementStore {
   const store = options.store;
+  const writeVersion = options.lifecycleWriteVersion ?? 1;
+  if (writeVersion !== 1 && writeVersion !== 2)
+    throw new Error("lifecycle write version must be 1 or 2");
+  function assertWritable(version: number, operation: string): void {
+    if (version !== writeVersion)
+      throw lifecycleStoreError(
+        operation,
+        store,
+        `lifecycle write version ${writeVersion} cannot mutate version ${version}; reviewed conversion is required`,
+      );
+  }
   const lockDependencies =
     options.lockDependencies ?? defaultLockDependencies();
 
@@ -199,9 +211,10 @@ export function createLifecycleStore(
 
   async function create(
     input: CreateTaskInput,
-    lifecycle: LifecycleMetadataV1,
+    lifecycle: LifecycleMetadata,
     owner: LockOwner,
   ): Promise<LifecycleIssue> {
+    assertWritable(lifecycle.version, "create task");
     assertNonEmpty(input.title, "task title");
     assertNonEmpty(input.why, "task why");
     if (input.workstream?.includes(",")) {
@@ -428,6 +441,8 @@ export function createLifecycleStore(
             "invalid or unsupported piLifecycle metadata",
           );
         }
+        if (current.issue.lifecycle !== null)
+          assertWritable(current.issue.lifecycle.version, `mutate issue ${id}`);
         const mutation = await operation(current.issue, async (blockerIds) => {
           for (const blockerId of blockerIds)
             assertIdentifier(blockerId, "blocker issue id");
@@ -437,6 +452,7 @@ export function createLifecycleStore(
           return current.issue;
         });
         if (mutation === null) return current.issue;
+        assertWritable(mutation.lifecycle.version, `mutate issue ${id}`);
         validateMutation(mutation, id, store);
         const mergedMetadata = mergeLifecycleMetadata(
           current.rawMetadata,
@@ -659,7 +675,7 @@ function decodeIssue(
         : requireRecord(record.metadata, "issue metadata");
     const rawLifecycle = rawMetadata.piLifecycle;
     const decodedLifecycle =
-      rawLifecycle === undefined ? null : decodeLifecycle(rawLifecycle);
+      rawLifecycle === undefined ? null : decodeLifecycleAny(rawLifecycle);
     const lifecycle =
       decodedLifecycle === null || !decodedLifecycle.ok
         ? null
@@ -737,7 +753,7 @@ function validateMutation(
   try {
     assertIdentifier(mutation.operationId, "mutation operation id");
     assertStatus(mutation.status, "mutation status");
-    const decoded = decodeLifecycle(mutation.lifecycle);
+    const decoded = decodeLifecycleAny(mutation.lifecycle);
     if (!decoded.ok) throw new Error(decoded.warning);
     if (
       !mutation.lifecycle.transitionHistory.some(
@@ -759,7 +775,7 @@ function validateMutation(
 
 function mergeLifecycleMetadata(
   metadata: Record<string, unknown>,
-  lifecycle: LifecycleMetadataV1,
+  lifecycle: LifecycleMetadata,
 ): Record<string, unknown> {
   const merged: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(metadata)) {
@@ -826,9 +842,14 @@ function verifyMutation(
       "lifecycle did not match the requested mutation",
     );
   }
+  if (lifecycle.version !== expected.lifecycle.version) fail("version");
   if (lifecycle.phase !== expected.lifecycle.phase) fail("phase");
-  if (!isDeepStrictEqual(lifecycle.execution, expected.lifecycle.execution))
-    fail("execution");
+  if (lifecycle.version === 2 && expected.lifecycle.version === 2) {
+    if (!isDeepStrictEqual(lifecycle, expected.lifecycle)) fail("lifecycle");
+  } else if (lifecycle.version === 1 && expected.lifecycle.version === 1) {
+    if (!isDeepStrictEqual(lifecycle.execution, expected.lifecycle.execution))
+      fail("execution");
+  }
   if (
     !isDeepStrictEqual(
       lifecycle.artifacts.map((artifact) => artifact.id),

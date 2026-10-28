@@ -148,7 +148,7 @@ export interface LockOwner {
 export interface Mutation {
   operationId: string;
   status: LifecycleStatus;
-  lifecycle: LifecycleMetadataV1;
+  lifecycle: LifecycleMetadata;
 }
 
 export interface CreateTaskInput {
@@ -237,13 +237,26 @@ export interface CloseInputV2 extends LifecycleV2Input {
   disposition: Disposition;
 }
 
+export type ConditionDefinition =
+  | { kind: "check"; purpose: TaskCondition["purpose"]; check: LifecycleCheck }
+  | { kind: "dependency"; purpose: "completion"; blockerIds: string[] };
+
+export type ConditionUpdate = (ConditionDefinition | { kind: "clear" }) & {
+  reason: string;
+};
+
+export interface TaskBlockInput {
+  reason: string;
+  condition?: ConditionDefinition;
+}
+
 export interface LifecycleIssue {
   id: string;
   title: string;
   description?: string;
   status: LifecycleStatus;
   metadata: Record<string, unknown>;
-  lifecycle: LifecycleMetadataV1 | null;
+  lifecycle: LifecycleMetadata | null;
   dependencies: NativeDependency[];
 }
 
@@ -254,7 +267,7 @@ export interface LifecycleStore {
   readyIds(): Promise<ReadonlySet<string>>;
   create(
     input: CreateTaskInput,
-    lifecycle: LifecycleMetadataV1,
+    lifecycle: LifecycleMetadata,
     owner: LockOwner,
   ): Promise<LifecycleIssue>;
   updateTask(

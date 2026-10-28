@@ -82,6 +82,7 @@ function owner(pid: number, sessionId: string): OwnerIdentity {
 async function createHarness(
   options: {
     capacity?: number;
+    lockTimeoutMs?: number;
     afterNativeLock?: (path: string) => Promise<void>;
     interceptGit?: (
       args: string[],
@@ -123,10 +124,10 @@ async function createHarness(
     runGit: poolRunGit,
     operationLock: {
       now: Date.now,
-      sleep: async () => {},
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       isPidAlive: () => "live",
       hostname: "test-host",
-      timeoutMs: 1_000,
+      timeoutMs: options.lockTimeoutMs ?? 1_000,
     },
     uuid: () => UUIDS[next++] ?? crypto.randomUUID(),
     ...(options.removeLeaseRecord
@@ -408,7 +409,7 @@ describe("bounded allocation", () => {
   });
 
   test("serializes concurrent owners and creates nothing beyond exact capacity", async () => {
-    const h = await createHarness({ capacity: 3 });
+    const h = await createHarness({ capacity: 3, lockTimeoutMs: 5_000 });
     try {
       const results = await Promise.all(
         [1, 2, 3].map((pid) =>

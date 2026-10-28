@@ -1,6 +1,8 @@
 import { basename } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeNextStep } from "./next-step.js";
+import { listOwnedTasks, V2LifecycleOperations } from "./v2-service.js";
+import { ownerOf } from "./ownership.js";
 
 import type { OwnerIdentity } from "../../extensions/worktree-pool/operation-lock.js";
 import {
@@ -46,6 +48,8 @@ import {
 } from "./reconciliation.js";
 import type {
   ArtifactInput,
+  ConditionUpdate,
+  TaskBlockInput,
   CreateTaskInput,
   Disposition,
   LifecycleCheck,
@@ -101,6 +105,7 @@ export class WorktreeAssociationError extends Error {
 
 export interface TaskLifecycleServiceDependencies {
   store: LifecycleStore;
+  lifecycleWriteVersion?: 1 | 2;
   now: () => number;
   uuid: () => string;
   executionTimeoutMs: number;
@@ -157,12 +162,18 @@ export function normalizeTaskUpdate(input: UpdateTaskInput): UpdateTaskInput {
 }
 
 export class TaskLifecycleService {
-  constructor(private readonly deps: TaskLifecycleServiceDependencies) {}
+  private readonly v2: V2LifecycleOperations;
+
+  constructor(private readonly deps: TaskLifecycleServiceDependencies) {
+    this.v2 = new V2LifecycleOperations(deps);
+  }
 
   async create(
     input: CreateTaskInput,
     owner: LockOwner,
   ): Promise<LifecycleIssue> {
+    if (this.deps.lifecycleWriteVersion === 2)
+      return this.v2.create(input, owner);
     return this.deps.store.create(
       input,
       createActionableLifecycle(this.nowIso()),
@@ -210,8 +221,16 @@ export class TaskLifecycleService {
     owner: LockOwner,
     operationId: string = this.deps.uuid(),
   ): Promise<LifecycleIssue> {
+    if (this.deps.lifecycleWriteVersion === 2)
+      return this.v2.claim(taskId, owner, operationId);
     const readyIds = await this.deps.store.readyIds();
-    return this.deps.store.mutate(taskId, owner, (issue) => {
+    return this.deps.store.mutate(taskId, owner, async (issue) => {
+      const owned = await this.ownedTasksForSession(owner.sessionId);
+      const different = owned.find((candidate) => candidate.id !== taskId);
+      if (different)
+        throw new Error(
+          `session already owns task ${different.id}; release it before claiming ${taskId}`,
+        );
       const nowMs = this.deps.now();
       const now = new Date(nowMs).toISOString();
       const lifecycle = this.managedOrAdopted(issue, readyIds, now);
@@ -232,6 +251,46 @@ export class TaskLifecycleService {
       });
       return this.mutation(issue, operationId, "in_progress", next);
     });
+  }
+
+  ownedTasksForSession(sessionId: string): Promise<LifecycleIssue[]> {
+    return listOwnedTasks(this.deps.store, sessionId);
+  }
+
+  block(
+    taskId: string,
+    input: TaskBlockInput,
+    owner: LockOwner,
+    operationId?: string,
+  ): Promise<LifecycleIssue> {
+    return this.v2.block(taskId, input, owner, operationId);
+  }
+
+  resume(
+    taskId: string,
+    reason: string,
+    owner: LockOwner,
+    operationId?: string,
+  ): Promise<LifecycleIssue> {
+    return this.v2.resume(taskId, reason, owner, operationId);
+  }
+
+  release(
+    taskId: string,
+    reason: string,
+    owner: LockOwner,
+    operationId?: string,
+  ): Promise<LifecycleIssue> {
+    return this.v2.release(taskId, reason, owner, operationId);
+  }
+
+  updateCondition(
+    taskId: string,
+    change: ConditionUpdate,
+    owner: LockOwner,
+    operationId?: string,
+  ): Promise<LifecycleIssue> {
+    return this.v2.updateCondition(taskId, change, owner, operationId);
   }
 
   async attachArtifact(
@@ -400,6 +459,8 @@ export class TaskLifecycleService {
     owner: LockOwner,
     operationId: string = this.deps.uuid(),
   ): Promise<LifecycleIssue> {
+    if (this.deps.lifecycleWriteVersion === 2)
+      return this.v2.defer(taskId, reason, owner, operationId);
     const current = await this.deps.store.show(taskId);
     const lifecycle = requireManaged(current);
     if (hasOperation(lifecycle, operationId)) return current;
@@ -421,6 +482,8 @@ export class TaskLifecycleService {
     owner: LockOwner,
     operationId: string = this.deps.uuid(),
   ): Promise<LifecycleIssue> {
+    if (this.deps.lifecycleWriteVersion === 2)
+      return this.v2.close(taskId, disposition, owner, operationId);
     const current = await this.deps.store.show(taskId);
     const lifecycle = requireManaged(current);
     if (lifecycle.phase === "active") {
@@ -461,6 +524,8 @@ export class TaskLifecycleService {
     owner: LockOwner,
     operationId: string = this.deps.uuid(),
   ): Promise<LifecycleIssue> {
+    if (this.deps.lifecycleWriteVersion === 2)
+      return this.v2.reopen(taskId, reason, owner, operationId);
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
       const lifecycle = requireManaged(issue);
@@ -523,7 +588,8 @@ export class TaskLifecycleService {
     const validateManual = (issue: LifecycleIssue): void => {
       if (request.manualOutcome === undefined) return;
       if (
-        issue.lifecycle?.activeCheck?.kind !== "manual" ||
+        issue.lifecycle?.version !== 1 ||
+        issue.lifecycle.activeCheck?.kind !== "manual" ||
         issue.lifecycle.waiting?.kind !== "check"
       ) {
         throw new ReconciliationRequestError(
@@ -543,7 +609,7 @@ export class TaskLifecycleService {
         );
     };
     validateManual(current);
-    let lifecycle = current.lifecycle;
+    let lifecycle = current.lifecycle === null ? null : requireManaged(current);
     if (lifecycle === null) return complete(current);
     if (lifecycle.phase === "active") {
       if (
@@ -562,7 +628,7 @@ export class TaskLifecycleService {
         );
         didLocalWork = !isDeepStrictEqual(before.lifecycle, current.lifecycle);
       }
-      lifecycle = current.lifecycle;
+      lifecycle = current.lifecycle === null ? null : requireManaged(current);
       if (lifecycle === null) return complete(current, "stale");
     }
     if (
@@ -587,7 +653,7 @@ export class TaskLifecycleService {
         }
         const latest = issue.lifecycle;
         if (
-          latest === null ||
+          latest?.version !== 1 ||
           (latest.phase !== "waiting" && latest.phase !== "active") ||
           latest.waiting?.kind !== "dependency" ||
           issue.dependencies.some(
@@ -663,7 +729,7 @@ export class TaskLifecycleService {
       }
       const latest = issue.lifecycle;
       if (
-        latest === null ||
+        latest?.version !== 1 ||
         (latest.phase !== "waiting" && latest.phase !== "active") ||
         latest.waiting?.kind !== "check" ||
         latest.activeCheck === null ||
@@ -792,6 +858,7 @@ export class TaskLifecycleService {
     let checks = 0;
     for (const issue of issues) {
       if (results.length >= limits.taskLimit) break;
+      if (issue.lifecycle?.version !== 1) continue;
       if (
         (issue.lifecycle?.phase === "waiting" ||
           issue.lifecycle?.phase === "active") &&
@@ -811,7 +878,8 @@ export class TaskLifecycleService {
     const interval = this.deps.activityWriteIntervalMs ?? 300_000;
     const results: LifecycleIssue[] = [];
     for (const issue of issues) {
-      const execution = issue.lifecycle?.execution;
+      if (issue.lifecycle?.version !== 1) continue;
+      const execution = issue.lifecycle.execution;
       if (
         issue.lifecycle?.phase !== "active" ||
         execution?.sessionId !== owner.sessionId ||
@@ -1281,7 +1349,7 @@ export class TaskLifecycleService {
       .filter(
         (issue) =>
           issue.lifecycle?.phase === "active" &&
-          issue.lifecycle.execution?.sessionId === sessionId,
+          ownerOf(issue.lifecycle)?.sessionId === sessionId,
       )
       .sort((left, right) => left.id.localeCompare(right.id));
   }
@@ -1412,7 +1480,8 @@ export class TaskLifecycleService {
             return this.deps.store.mutate(taskId, owner, (issue) => {
               const latest = issue.lifecycle;
               if (
-                latest?.phase !== "active" ||
+                latest?.version !== 1 ||
+                latest.phase !== "active" ||
                 latest.execution?.sessionId !== expectedSessionId ||
                 latest.execution.claimedAt !== lifecycle.execution!.claimedAt
               )
@@ -1547,7 +1616,7 @@ export class TaskLifecycleService {
     readyIds: ReadonlySet<string>,
     now: string,
   ): LifecycleMetadataV1 {
-    if (issue.lifecycle !== null) return issue.lifecycle;
+    if (issue.lifecycle !== null) return requireManaged(issue);
     if (Object.hasOwn(issue.metadata, "piLifecycle")) {
       throw new Error(
         `task ${issue.id} has invalid or unsupported piLifecycle metadata`,
@@ -1611,6 +1680,10 @@ function requireManaged(issue: LifecycleIssue): LifecycleMetadataV1 {
   if (issue.lifecycle === null) {
     throw new Error(`task ${issue.id} has no valid piLifecycle metadata`);
   }
+  if (issue.lifecycle.version !== 1)
+    throw new Error(
+      `task ${issue.id} cannot use a lifecycle write version 1 operation on version ${issue.lifecycle.version}`,
+    );
   return issue.lifecycle;
 }
 

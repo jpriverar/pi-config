@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../lib/task-lifecycle/legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -112,7 +113,7 @@ test(
     const dirty = waitingTask("dirty");
     dirty.lifecycle!.phase = "actionable";
     dirty.lifecycle!.activeCheck = null;
-    dirty.lifecycle!.waiting = null;
+    legacyLifecycle(dirty.lifecycle!).waiting = null;
     dirty.status = "open";
     tasks.push(manual, merged, failed, retained, renewed, dirty);
     await fs.writeFile(join(db, "rows.json"), JSON.stringify(tasks));
@@ -287,7 +288,10 @@ test(
       "failed observations persisted",
     );
     const afterRenewal = await store.show("renewed");
-    assert.equal(afterRenewal.lifecycle!.execution!.expiresAt, renewedExpiry);
+    assert.equal(
+      legacyLifecycle(afterRenewal.lifecycle!).execution!.expiresAt,
+      renewedExpiry,
+    );
     assert.equal(afterRenewal.lifecycle!.phase, "active");
     assert.equal(afterRenewal.lifecycle!.resources[0].cleanupState, "active");
     await fs.access(renewalResource.path);

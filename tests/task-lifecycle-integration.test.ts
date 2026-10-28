@@ -515,6 +515,10 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
     );
 
     const recovery = await createTask("partial acquisition recovery");
+    const recoveryOwner = {
+      ...owner,
+      sessionId: `${owner.sessionId}-recovery`,
+    };
     const acquiredThenFailed = { value: false };
     const recoveryService = new TaskLifecycleService({
       store,
@@ -543,7 +547,7 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
       },
       checkAdapters: adapters,
     });
-    await recoveryService.claim(recovery, owner, "claim-recovery");
+    await recoveryService.claim(recovery, recoveryOwner, "claim-recovery");
     await assert.rejects(
       recoveryService.acquireWorktree(
         {
@@ -551,7 +555,7 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
           repository: "repo-b",
           branch: "integration/recovery",
         },
-        owner,
+        recoveryOwner,
         "recover-acquire",
       ),
       /simulated response loss/,
@@ -562,7 +566,7 @@ test("real Beads, Git, and pool adapters preserve lifecycle contracts", async ()
         repository: "repo-b",
         branch: "integration/recovery",
       },
-      owner,
+      recoveryOwner,
       "recover-acquire",
     );
     assert.equal(recovered.lifecycle?.resources.length, 1);

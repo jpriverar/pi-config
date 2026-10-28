@@ -4,6 +4,7 @@ import type {
   Artifact,
   LifecycleCheck,
   LifecycleIssue,
+  LifecycleMetadataV1,
   LifecycleStatus,
   LifecycleStore,
 } from "./types.js";
@@ -19,8 +20,11 @@ export interface ReconciliationScan {
   diagnostics: readonly { taskId?: string; code: string }[];
 }
 
-function canReconcile(issue: LifecycleIssue): boolean {
+function canReconcile(
+  issue: LifecycleIssue,
+): issue is LifecycleIssue & { lifecycle: LifecycleMetadataV1 } {
   return (
+    issue.lifecycle?.version === 1 &&
     (issue.status === "open" ||
       issue.status === "in_progress" ||
       issue.status === "blocked") &&

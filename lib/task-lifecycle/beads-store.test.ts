@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "./legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -230,9 +231,9 @@ test("updates labels in one command and rejects no-op or overlap", async () => {
 
 test("stores mission and next step without changing lifecycle metadata", async () => {
   const state = claimedMutation().lifecycle;
-  state.execution!.sessionId = OWNER.sessionId;
+  legacyLifecycle(state).execution!.sessionId = OWNER.sessionId;
   let current: Record<string, unknown> = {
-    ...rawIssue(state),
+    ...rawIssue(legacyLifecycle(state)),
     status: "in_progress",
     description: "Build the feature",
   };
@@ -261,7 +262,10 @@ test("stores mission and next step without changing lifecycle metadata", async (
     },
     OWNER,
     (issue) => {
-      assert.equal(issue.lifecycle?.execution?.sessionId, OWNER.sessionId);
+      assert.equal(
+        legacyLifecycle(issue.lifecycle)?.execution?.sessionId,
+        OWNER.sessionId,
+      );
       validations += 1;
     },
   );
@@ -313,7 +317,10 @@ test("revalidates ownership under lock before appending a comment", async () => 
     "progress",
     OWNER,
     (issue) => {
-      assert.equal(issue.lifecycle?.execution?.sessionId, OWNER.sessionId);
+      assert.equal(
+        legacyLifecycle(issue.lifecycle)?.execution?.sessionId,
+        OWNER.sessionId,
+      );
     },
   );
 
@@ -777,7 +784,7 @@ test("replayed identical metadata does not issue another Beads update", async (t
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls: string[] = [];
   const mutation = claimedMutation();
-  const raw = rawIssue(mutation.lifecycle);
+  const raw = rawIssue(legacyLifecycle(mutation.lifecycle));
   raw.status = mutation.status;
   raw.metadata = { unrelated: { keep: true }, piLifecycle: mutation.lifecycle };
   const store = createLifecycleStore(async (_command, args) => {
@@ -1131,7 +1138,10 @@ test("malformed sync state cannot block an owned native progress log", async () 
       return result(current);
     }, options());
     const validate = (issue: import("./types.js").LifecycleIssue) => {
-      if (issue.lifecycle?.execution?.sessionId !== OWNER.sessionId)
+      if (
+        legacyLifecycle(issue.lifecycle)?.execution?.sessionId !==
+        OWNER.sessionId
+      )
         throw new Error("foreign owner");
     };
     await store.appendComment("jp-1", "progress", OWNER, validate);
@@ -1423,7 +1433,7 @@ test("lifecycle and WM mutations preserve project identity and captured targets"
   ) as WorkManagementState;
   f.catalog.projects[P].areaId = B;
   const claimed = claimedMutation();
-  claimed.lifecycle.execution!.sessionId = OWNER.sessionId;
+  legacyLifecycle(claimed.lifecycle).execution!.sessionId = OWNER.sessionId;
   const mutated = await f.store.mutate("jp-1", OWNER, () => claimed);
   assert.deepEqual(mutated.metadata.piProject, { version: 1, projectId: P });
   assert.deepEqual(mutated.metadata.piWorkManagement, wm);
@@ -1437,7 +1447,10 @@ test("lifecycle and WM mutations preserve project identity and captured targets"
     OWNER,
     (issue) => {
       assert.equal(issue.lifecycle?.phase, "active");
-      assert.equal(issue.lifecycle?.execution?.sessionId, OWNER.sessionId);
+      assert.equal(
+        legacyLifecycle(issue.lifecycle)?.execution?.sessionId,
+        OWNER.sessionId,
+      );
     },
   );
   assert.equal(updated.metadata.next_step, "Verify the current candidate");

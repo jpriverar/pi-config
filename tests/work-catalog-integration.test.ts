@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../lib/task-lifecycle/legacy-test-fixtures.js";
 import {
   SessionManager,
   type ExtensionAPI,
@@ -693,7 +694,8 @@ async function verifyTaskDrivenSessions(input: {
     assert.equal(current.getSessionName(), undefined);
     assert.deepEqual(await view(), { kind: "global" });
     assert.equal(
-      (await store.show(recordedId)).lifecycle!.execution!.sessionId,
+      legacyLifecycle((await store.show(recordedId)).lifecycle!).execution!
+        .sessionId,
       parentId,
     );
     assert.deepEqual(bindings(await store.show(recordedId)), recordedBinding);
@@ -778,7 +780,8 @@ async function verifyTaskDrivenSessions(input: {
       assert.deepEqual(await view(clone), { kind: "global" });
       assert.equal(await readFile(parentFile, "utf8"), parentBeforeClone);
       assert.equal(
-        (await store.show(recordedId)).lifecycle!.execution!.sessionId,
+        legacyLifecycle((await store.show(recordedId)).lifecycle!).execution!
+          .sessionId,
         parentId,
       );
     } finally {

@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../../lib/task-lifecycle/legacy-test-fixtures.js";
 import { newWorkManagementState } from "../../lib/work-management/model.js";
 import { target as wmTarget } from "../../lib/work-management/test-fixtures.js";
 import assert from "node:assert/strict";
@@ -43,7 +44,7 @@ function normalizedIssue(phase = "active"): LifecycleIssue {
 function activeIssue(id: string): LifecycleIssue {
   const result = normalizedIssue();
   result.id = id;
-  result.lifecycle!.execution = {
+  legacyLifecycle(result.lifecycle!).execution = {
     sessionId: "session-1",
     claimedAt: new Date(NOW).toISOString(),
     lastActivityAt: new Date(NOW).toISOString(),
@@ -1796,7 +1797,7 @@ function claimedFacts(taskId = "jp-1"): SessionFactsResult {
         title: "Lifecycle task",
         status: "in_progress",
         labels: [],
-        lifecycle: activeIssue(taskId).lifecycle,
+        lifecycle: legacyLifecycle(activeIssue(taskId).lifecycle),
         description: "Build and verify the agreed outcome",
         nextStep: "Verify abc123 in staging",
       },
@@ -2078,7 +2079,7 @@ test("deferred ownership facts do not broaden the model work overview", async ()
   const row = h.row();
   row.status = "deferred";
   row.metadata.piLifecycle!.phase = "deferred";
-  row.metadata.piLifecycle!.execution = null;
+  legacyLifecycle(row.metadata.piLifecycle!).execution = null;
   h.setRows([row]);
   const result = await h.event("before_agent_start");
   assert.equal(h.context.sessionManager.getSessionName(), "before");
@@ -2306,7 +2307,8 @@ test("authoritative recovery supersedes the fresh catalog-session seed", async (
   await h.event("session_before_fork");
   h.context.sessionManager.getSessionId = () => "child-580c8e67";
   const owned = h.row();
-  owned.metadata.piLifecycle!.execution!.sessionId = "child-580c8e67";
+  legacyLifecycle(owned.metadata.piLifecycle!).execution!.sessionId =
+    "child-580c8e67";
   h.setRows([owned]);
   await h.event("session_start", { reason: "fork" });
   assert.equal(h.context.sessionManager.getSessionName(), "before");

@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../../lib/task-lifecycle/legacy-test-fixtures.js";
 import {
   A,
   B,
@@ -1026,7 +1027,7 @@ test("completed visible tasks are bulk-resolved and noticed once without model t
     title: task.title,
     status: "blocked",
     labels: [],
-    lifecycle: task.lifecycle,
+    lifecycle: legacyLifecycle(task.lifecycle),
   };
   const h = createHarness({
     exec: async (_command, args) => ({
@@ -1163,7 +1164,7 @@ test("closed tasks moved to another project leave the notice cursor without a co
     title: task.title,
     status: "blocked",
     labels: ["workstream:first"],
-    lifecycle: task.lifecycle,
+    lifecycle: legacyLifecycle(task.lifecycle),
   };
   let visible = true;
   const h = createHarness({
