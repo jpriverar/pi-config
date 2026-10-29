@@ -50,6 +50,7 @@ test("shows only the current session's authoritative active claim", () => {
     {
       label: "Improve sidebar identity",
       state: "assigned",
+      phase: "active",
       taskId: "jp-example",
     },
   );
@@ -104,6 +105,7 @@ test("validates legacy timestamps without expiring ownership", () => {
     {
       label: "Improve sidebar identity",
       state: "assigned",
+      phase: "active",
       taskId: "jp-example",
     },
   );
@@ -136,6 +138,7 @@ test("normalizes display text without terminal controls or broken Unicode", () =
     {
       label: "Fix auth",
       state: "assigned",
+      phase: "active",
       taskId: "jp-example",
     },
   );
@@ -191,6 +194,7 @@ test("carries claim identity independently of task-title sentinel text", () => {
       {
         label: title,
         state: "assigned",
+        phase: "active",
         taskId: "jp-example",
       },
     );
@@ -212,6 +216,7 @@ for (const legacyExpiry of ["2026-10-06T12:00:00Z", "2026-09-29T12:00:00Z"]) {
       selectTaskAssignment([owned("session-1", legacyExpiry)], "session-1"),
       {
         state: "assigned",
+        phase: "active",
         label: "Improve sidebar identity",
         taskId: "jp-example",
       },
@@ -221,12 +226,17 @@ for (const legacyExpiry of ["2026-10-06T12:00:00Z", "2026-09-29T12:00:00Z"]) {
 
 for (const [assignment, sessionName, expected] of [
   [
-    { state: "assigned", taskId: "jp-one", label: "Fix auth" },
+    { state: "assigned", phase: "active", taskId: "jp-one", label: "Fix auth" },
     "api-12345678",
     "jp-one • Fix auth",
   ],
   [
-    { state: "assigned", taskId: "jp-one", label: "Unassigned" },
+    {
+      state: "assigned",
+      phase: "active",
+      taskId: "jp-one",
+      label: "Unassigned",
+    },
     "api-12345678",
     "jp-one • Unassigned",
   ],
@@ -255,6 +265,7 @@ test("native pane label strips controls and bounds the whole ID/title without br
     values.taskPaneLabel(
       {
         state: "assigned",
+        phase: "active",
         taskId: "jp-one",
         label: "\u001b[31mFix\n auth\u001b[0m",
       },
@@ -264,7 +275,12 @@ test("native pane label strips controls and bounds the whole ID/title without br
   );
   assert.equal(
     values.taskPaneLabel(
-      { state: "assigned", taskId: "jp-one", label: "😀".repeat(90) },
+      {
+        state: "assigned",
+        phase: "active",
+        taskId: "jp-one",
+        label: "😀".repeat(90),
+      },
       undefined,
     ),
     "jp-one • " + "😀".repeat(71),
@@ -274,6 +290,7 @@ test("native pane label strips controls and bounds the whole ID/title without br
 test("task placement tokens normalize labels and clear absent catalog identity", () => {
   const assignment = {
     state: "assigned" as const,
+    phase: "active" as const,
     label: "Owned",
     taskId: "jp-one",
     project: "\u001b[31mAPI\n v2\u001b[0m",
@@ -289,6 +306,7 @@ test("task placement tokens normalize labels and clear absent catalog identity",
 test("durable task tokens clear obsolete deadline metadata", () => {
   const assignment = {
     state: "assigned" as const,
+    phase: "active" as const,
     label: "Owned",
     taskId: "jp-one",
     expiresAt: 2000,
@@ -296,7 +314,7 @@ test("durable task tokens clear obsolete deadline metadata", () => {
   assert.equal(taskTokens(assignment).pi_task_expires_at, null);
 });
 
-test("the legacy assignment projection cannot infer unassigned from v2 ownership", async () => {
+test("completed v2 work keeps its assignment until explicit release", async () => {
   const { state, OWNER, NOW } = await import(
     "../../lib/task-lifecycle/v2-test-fixtures.js"
   );
@@ -322,5 +340,80 @@ test("the legacy assignment projection cannot infer unassigned from v2 ownership
     ],
     OWNER.sessionId,
   );
-  assert.equal(result.state, "unavailable");
+  assert.equal(result.state, "assigned");
+  assert.equal(taskTokens(result).pi_task_phase, "done");
+  assert.equal(taskTokens(result).pi_task_status, "Done");
+});
+
+for (const [phase, status] of [
+  ["active", "In progress"],
+  ["actionable", "Ready to resume"],
+  ["waiting", "Blocked"],
+  ["deferred", "Deferred"],
+  ["done", "Done"],
+] as const) {
+  test(`v2 assignment and display phase are independent for ${phase}`, async () => {
+    const { state, withCheck, OWNER, NOW } = await import(
+      "../../lib/task-lifecycle/v2-test-fixtures.js"
+    );
+    const { blockLifecycleV2, fingerprintConditionV2, nativeStatusV2 } =
+      await import("../../lib/task-lifecycle/v2-model.js");
+    const current = withCheck();
+    const lifecycle =
+      phase === "waiting"
+        ? blockLifecycleV2(current, {
+            operationId: "pause",
+            sessionId: OWNER.sessionId,
+            now: NOW,
+            reason: "Wait",
+            conditionFingerprint: fingerprintConditionV2(current, [])!,
+          })
+        : state({
+            phase,
+            owner: OWNER,
+            disposition:
+              phase === "done"
+                ? {
+                    kind: "completed",
+                    reason: "Done",
+                    at: NOW,
+                    evidenceArtifactIds: [],
+                  }
+                : null,
+          });
+    const issue: BeadsIssue = {
+      id: "jp-held",
+      title: "Owned mission",
+      status: nativeStatusV2(lifecycle),
+      labels: [],
+      lifecycle,
+    };
+    const assignment = selectTaskAssignment([issue], OWNER.sessionId);
+    assert.equal(assignment.state, "assigned");
+    const tokens = taskTokens(assignment);
+    assert.equal(tokens.pi_task_id, "jp-held");
+    assert.equal(tokens.pi_task, "Owned mission");
+    assert.equal(tokens.pi_task_phase, phase);
+    assert.equal(tokens.pi_task_status, status);
+    if (phase !== "active") {
+      const released = selectTaskAssignment(
+        [{ ...issue, lifecycle: { ...lifecycle, owner: null } }],
+        OWNER.sessionId,
+      );
+      assert.equal(released.state, "unassigned");
+      assert.equal(taskTokens(released).pi_task_phase, null);
+      assert.equal(taskTokens(released).pi_task_status, null);
+    }
+  });
+}
+
+test("assignment availability alone does not invent a lifecycle phase", () => {
+  const tokens = taskTokens({
+    state: "assigned",
+    taskId: "jp-held",
+    label: "Known owner",
+  });
+  assert.equal(tokens.pi_task_state, "assigned");
+  assert.equal(tokens.pi_task_phase, null);
+  assert.equal(tokens.pi_task_status, null);
 });

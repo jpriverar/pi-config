@@ -1,3 +1,4 @@
+import { ownerOf } from "./task-lifecycle/ownership.js";
 import {
   summarizeWorkManagement,
   decodeWorkManagement,
@@ -747,6 +748,19 @@ export function classifyReadiness(
       warnings,
     };
   });
+}
+
+export function isClaimableIssue(issue: ClassifiedIssue): boolean {
+  return (
+    issue.readiness === "ready" &&
+    !issue.lifecycleWarning &&
+    issue.lifecycle !== null &&
+    ownerOf(issue.lifecycle) === null
+  );
+}
+
+export function isOwnedReadyIssue(issue: ClassifiedIssue): boolean {
+  return issue.readiness === "ready" && Boolean(ownerOf(issue.lifecycle));
 }
 
 export function lifecycleAnnotation(

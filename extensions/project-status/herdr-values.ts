@@ -1,11 +1,16 @@
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import type { BeadsIssue } from "../../lib/beads.js";
+import { resolveOwnedTask } from "../../lib/session-identity.js";
+import type { LifecyclePhase } from "../../lib/task-lifecycle/types.js";
+import { lifecycleStatusLabel } from "../../lib/task-lifecycle/presentation.js";
 
 export type PaneTokens = Record<
   | "pi_model"
   | "pi_task"
   | "pi_task_state"
+  | "pi_task_phase"
+  | "pi_task_status"
   | "pi_task_id"
   | "pi_task_expires_at"
   | "pi_project"
@@ -23,6 +28,7 @@ export type TaskAssignment =
       state: "assigned";
       label: string;
       taskId: string;
+      phase?: LifecyclePhase;
       project?: string;
       area?: string;
     }
@@ -45,6 +51,8 @@ export function taskTokens(
   PaneTokens,
   | "pi_task"
   | "pi_task_state"
+  | "pi_task_phase"
+  | "pi_task_status"
   | "pi_task_id"
   | "pi_task_expires_at"
   | "pi_project"
@@ -53,6 +61,12 @@ export function taskTokens(
   return {
     pi_task: assignment.label,
     pi_task_state: assignment.state,
+    pi_task_phase:
+      assignment.state === "assigned" ? (assignment.phase ?? null) : null,
+    pi_task_status:
+      assignment.state === "assigned"
+        ? lifecycleStatusLabel(assignment.phase, true)
+        : null,
     pi_task_id: assignment.state === "assigned" ? assignment.taskId : null,
     // Clear the obsolete deadline left by pre-durable-ownership clients.
     pi_task_expires_at: null,
@@ -87,37 +101,27 @@ export function selectTaskAssignment(
     label: "Task unavailable",
   };
   if (!issues || !sessionId) return unavailable;
-  if (issues.some((issue) => issue.lifecycle?.version === 2))
-    return unavailable;
-  // Invalid active metadata could conceal this session's ownership.
-  if (
-    issues.some(
-      (issue) => issue.status === "in_progress" && issue.lifecycleWarning,
-    )
-  )
-    return unavailable;
-  const matching = issues.filter(
-    (issue) =>
-      issue.lifecycle?.version === 1 &&
-      issue.lifecycle.phase === "active" &&
-      issue.lifecycle.execution?.sessionId === sessionId,
-  );
-  if (matching.length === 0)
+  const selected = resolveOwnedTask(issues, sessionId);
+  if (selected.kind === "unassigned")
     return { state: "unassigned", label: "Unassigned" };
-  if (matching.length !== 1) return unavailable;
-  const issue = matching[0];
-  if (issue.lifecycle?.version !== 1) return unavailable;
-  // The v1 timestamp must be valid, but it no longer expires ownership.
-  const expiresAt = Date.parse(issue.lifecycle!.execution!.expiresAt);
+  if (selected.kind !== "owned") return unavailable;
+  const issue = selected.issue;
+  const lifecycle = issue.lifecycle;
   if (
-    issue.status !== "in_progress" ||
-    !Number.isFinite(expiresAt) ||
+    lifecycle == null ||
     !issue.id ||
     normalizeMetadata(issue.id) !== issue.id
   )
     return unavailable;
+  if (
+    lifecycle.version === 1 &&
+    !Number.isFinite(Date.parse(lifecycle.execution!.expiresAt))
+  )
+    return unavailable;
   const label = normalizeMetadata(issue.title);
-  return label ? { state: "assigned", label, taskId: issue.id } : unavailable;
+  return label
+    ? { state: "assigned", label, taskId: issue.id, phase: lifecycle.phase }
+    : unavailable;
 }
 
 export function runtimeTokens(

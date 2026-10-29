@@ -1,3 +1,5 @@
+import { ALL_PROJECT_ISSUE_STATUSES } from "../../lib/project-management.js";
+import { lifecycleStatusLabel } from "../../lib/task-lifecycle/presentation.js";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -6,6 +8,8 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 
 import {
   classifyReadiness,
+  isClaimableIssue,
+  isOwnedReadyIssue,
   createBeadsClient,
   withBeadsEnvironment,
   type BeadsIssue,
@@ -17,7 +21,10 @@ import {
   type SessionWorkSelection,
 } from "../../lib/session-project.js";
 import { selectWorkIssues } from "../../lib/work-catalog/membership.js";
-import { resolveWorkingIdentity } from "../../lib/session-identity.js";
+import {
+  resolveOwnedTask,
+  resolveWorkingIdentity,
+} from "../../lib/session-identity.js";
 import { createCatalogStore } from "../../lib/work-catalog/store.js";
 import type { WorkCatalog } from "../../lib/work-catalog/model.js";
 import { createPaneReporter, type PaneReporter } from "./herdr-pane.js";
@@ -33,6 +40,7 @@ interface Counts {
   inProgress: number;
   blocked: number;
   ready: number;
+  ownedReady: number;
   waiting: number;
   needsJp: number;
   closed: number;
@@ -44,6 +52,7 @@ type TaskState =
       sessionTask: {
         id: string;
         title: string;
+        status?: string;
         outsideView?: boolean;
         workstream?: string;
       };
@@ -96,24 +105,26 @@ export default function projectStatus(
     sessionId: string,
     current: () => boolean,
   ): Promise<TaskState | undefined> {
-    const sessionTasks = issues.filter(
-      (issue) =>
-        issue.lifecycle?.version === 1 &&
-        issue.lifecycle.phase === "active" &&
-        issue.lifecycle.execution?.sessionId === sessionId,
-    );
-    if (sessionTasks.length === 1) {
+    const selected = resolveOwnedTask(issues, sessionId);
+    if (selected.kind === "unavailable" || selected.kind === "ambiguous")
+      return "unavailable";
+    if (selected.kind === "owned") {
+      const issue = selected.issue;
       return {
         sessionTask: {
-          id: sessionTasks[0].id,
-          title: sessionTasks[0].title,
+          id: issue.id,
+          title: issue.title,
+          status:
+            issue.lifecycle?.version === 2
+              ? (lifecycleStatusLabel(issue.lifecycle.phase, true) ?? undefined)
+              : undefined,
           workstream:
             selection.kind === "legacy"
-              ? classifyReadiness(sessionTasks, new Set())[0].workstreams[0]
+              ? classifyReadiness([issue], new Set())[0].workstreams[0]
               : undefined,
           outsideView:
             selection.kind === "catalog" &&
-            selectWorkIssues(selection, sessionTasks).length === 0,
+            selectWorkIssues(selection, [issue]).length === 0,
         },
       };
     }
@@ -122,23 +133,29 @@ export default function projectStatus(
     if (!current()) return undefined;
     if (!ready.ok) return "unavailable";
 
-    const closed = await client.listIssues(["closed"]);
-    if (!current()) return undefined;
-    if (!closed.ok) return "unavailable";
     const active = selectWorkIssues(
       selection,
-      classifyReadiness(issues, ready.value),
+      classifyReadiness(
+        issues.filter(
+          (issue) => issue.status !== "closed" && issue.status !== "deferred",
+        ),
+        ready.value,
+      ),
     );
     const historical = selectWorkIssues(
       selection,
-      classifyReadiness(closed.value, new Set()),
+      classifyReadiness(
+        issues.filter((issue) => issue.status === "closed"),
+        new Set(),
+      ),
     );
 
     return {
       inProgress: active.filter((issue) => issue.readiness === "in_progress")
         .length,
       blocked: active.filter((issue) => issue.readiness === "blocked").length,
-      ready: active.filter((issue) => issue.readiness === "ready").length,
+      ready: active.filter(isClaimableIssue).length,
+      ownedReady: active.filter(isOwnedReadyIssue).length,
       waiting: active.filter((issue) => issue.readiness === "waiting").length,
       needsJp: active.filter((issue) => issue.needsJp).length,
       closed: historical.length,
@@ -165,6 +182,9 @@ export default function projectStatus(
       leftParts.push(
         theme.fg("warning", taskState.sessionTask.id) +
           theme.fg("dim", " • ") +
+          (taskState.sessionTask.status
+            ? theme.fg("muted", `${taskState.sessionTask.status} • `)
+            : "") +
           theme.fg("dim", taskState.sessionTask.title) +
           (taskState.sessionTask.outsideView
             ? theme.fg("muted", " (outside current view)")
@@ -184,6 +204,8 @@ export default function projectStatus(
       if (taskState.needsJp > 0) {
         segments.push(theme.fg("warning", `${taskState.needsJp} needs you`));
       }
+      if (taskState.ownedReady > 0)
+        segments.push(theme.fg("dim", `${taskState.ownedReady} owned ready`));
       if (taskState.ready > 0) {
         segments.push(theme.fg("dim", `${taskState.ready} ready`));
       }
@@ -233,11 +255,7 @@ export default function projectStatus(
       catalog?.state === "active"
         ? undefined
         : resolveSessionSelection(ctx.sessionManager, catalog);
-    const listed = await client.listIssues(
-      catalog?.state === "active"
-        ? ["open", "in_progress", "blocked", "deferred"]
-        : undefined,
-    );
+    const listed = await client.listIssues(ALL_PROJECT_ISSUE_STATUSES);
     if (!current()) return;
     const identity =
       catalog?.state === "active"
@@ -283,7 +301,7 @@ export default function projectStatus(
       return;
     }
     const taskState = await getCounts(
-      listed.value.filter((issue) => issue.status !== "deferred"),
+      listed.value,
       selection,
       sessionId,
       current,
@@ -389,6 +407,9 @@ export default function projectStatus(
   const taskChanges = new Set([
     "task_claim",
     "task_wait",
+    "task_block",
+    "task_resume",
+    "task_release",
     "task_defer",
     "task_close",
     "task_reopen",

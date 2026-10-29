@@ -45,7 +45,7 @@ def records(snapshot, key, id_key):
     return result
 
 
-def active_task_labels(snapshot, workspaces, tabs):
+def owned_task_labels(snapshot, workspaces, tabs):
     claims = {workspace_id: set() for workspace_id in workspaces}
     unavailable = set()
     for pane in records(snapshot, "panes", "pane_id").values():
@@ -69,7 +69,7 @@ def active_task_labels(snapshot, workspaces, tabs):
             unavailable.add(workspace_id)
         else:
             claims[workspace_id].add(task_id)
-    return {workspace_id: "tasks unavailable" if workspace_id in unavailable else f"{len(ids)} in-progress"
+    return {workspace_id: "tasks unavailable" if workspace_id in unavailable else f"{len(ids)} owned"
             for workspace_id, ids in claims.items()}
 
 
@@ -84,7 +84,7 @@ def workspace_tokens(snapshot):
         if not isinstance(workspace_id, str) or workspace_id not in workspaces or not isinstance(tab.get("label"), str):
             raise ValueError("snapshot tab has invalid workspace or label")
         counts[workspace_id] += 1
-    task_labels = active_task_labels(snapshot, workspaces, tabs)
+    task_labels = owned_task_labels(snapshot, workspaces, tabs)
     result = {}
     for workspace_id, workspace in workspaces.items():
         active_id = workspace.get("active_tab_id")

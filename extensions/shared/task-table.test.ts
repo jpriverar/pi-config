@@ -33,3 +33,24 @@ test("rollup tables show project labels without changing legacy table defaults",
     ["A task", "[API]"],
   );
 });
+
+test("an owned Ready task with an unmet completion check displays Ready to resume, not Blocked", async () => {
+  const { withCheck } = await import(
+    "../../lib/task-lifecycle/v2-test-fixtures.js"
+  );
+  const lifecycle = withCheck({ phase: "actionable", pause: null });
+  const [issue] = classifyReadiness(
+    [
+      {
+        id: "jp-held",
+        title: "Owned ready",
+        status: "open",
+        labels: [],
+        lifecycle,
+      },
+    ],
+    new Set(["jp-held"]),
+  );
+  assert.equal(issue.readiness, "ready");
+  assert.deepEqual(taskTableCells(issue, theme).state, ["Ready to resume"]);
+});

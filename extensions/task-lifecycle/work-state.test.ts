@@ -1619,3 +1619,62 @@ test("closed owned tasks supply identity and context without returning to the ba
     read.args[read.args.indexOf("-s") + 1].split(",").includes("closed"),
   );
 });
+
+test("owned Ready work is visible but not advertised as another session's actionable candidate", async () => {
+  const { withCheck, state } = await import(
+    "../../lib/task-lifecycle/v2-test-fixtures.js"
+  );
+  const h = createHarness({
+    catalog: catalogFixture(),
+    sessionId: "viewer",
+    issues: [
+      {
+        id: "jp-held",
+        title: "Owned ready",
+        status: "open",
+        labels: [],
+        projectReference: { kind: "valid", projectId: P },
+        lifecycle: withCheck({ phase: "actionable", pause: null }),
+      },
+      {
+        id: "jp-free",
+        title: "Unowned ready",
+        status: "open",
+        labels: [],
+        projectReference: { kind: "valid", projectId: P },
+        lifecycle: state(),
+      },
+    ],
+  });
+  const hidden = await h.handlers.get("before_agent_start")!({}, h.context);
+  const content = hidden.message.content as string;
+  const actionable = content.match(
+    /\*\*Actionable[^\n]+\n((?:- [^\n]+\n?)*)/,
+  )?.[1];
+  assert.ok(actionable);
+  assert.match(actionable, /jp-free/);
+  assert.doesNotMatch(actionable, /jp-held/);
+  assert.match(content, /Ready to resume/);
+  assert.match(content, /jp-held/);
+});
+
+test("legacy-view startup rendering preserves native readiness for owned Ready work", async () => {
+  const { withCheck } = await import(
+    "../../lib/task-lifecycle/v2-test-fixtures.js"
+  );
+  const h = createHarness({
+    sessionName: "pi-setup",
+    sessionId: "viewer",
+    issues: [
+      {
+        ...issue("jp-held", "open", ["workstream:pi-setup"]),
+        lifecycle: withCheck({ phase: "actionable", pause: null }),
+      },
+    ],
+    readyIds: ["jp-held"],
+  });
+  await start(h);
+  const rendered = renderCard(h, 180);
+  assert.match(rendered, /Ready to resume/);
+  assert.doesNotMatch(rendered, /\b\d+d\b/);
+});

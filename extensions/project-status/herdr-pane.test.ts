@@ -54,6 +54,8 @@ test("initializes current runtime without falsely claiming Unassigned", async ()
     pi_task_state: "unavailable",
     pi_task_id: null,
     pi_task_expires_at: null,
+    pi_task_phase: null,
+    pi_task_status: null,
     pi_project: null,
     pi_area: null,
     pi_context_warning: null,
@@ -115,6 +117,8 @@ test("suppresses unchanged data and serializes bursts to the latest value", asyn
     pi_task_state: "assigned",
     pi_task_id: "jp-task",
     pi_task_expires_at: null,
+    pi_task_phase: null,
+    pi_task_status: null,
     pi_project: null,
     pi_area: null,
     pi_context_warning: null,
@@ -173,6 +177,8 @@ test("shutdown clears owned metadata and suppresses later updates", async () => 
     pi_task_state: null,
     pi_task_id: null,
     pi_task_expires_at: null,
+    pi_task_phase: null,
+    pi_task_status: null,
     pi_project: null,
     pi_area: null,
     pi_context_warning: null,
@@ -203,7 +209,9 @@ test("stop cancels an in-flight send before clearing only owned keys", async () 
     "pi_task",
     "pi_task_expires_at",
     "pi_task_id",
+    "pi_task_phase",
     "pi_task_state",
+    "pi_task_status",
     "pi_waiting",
   ]);
   assert.ok(h.sent[1].seq > h.sent[0].seq);
@@ -286,4 +294,39 @@ test("durable typed assignment does not arm an expiry timer", async (t) => {
   } finally {
     await h.reporter!.stop();
   }
+});
+
+test("task blocking preserves runtime and wakeup tokens and shutdown clears the new fields", async () => {
+  const h = harness();
+  h.reporter!.updateWaiting("Waiting until 15:05");
+  h.reporter!.updateTask({
+    state: "assigned",
+    taskId: "jp-held",
+    label: "Owned mission",
+    phase: "active",
+    project: "Pi",
+    area: "Tooling",
+  });
+  await setImmediate();
+  h.reporter!.updateTask({
+    state: "assigned",
+    taskId: "jp-held",
+    label: "Owned mission",
+    phase: "waiting",
+    project: "Pi",
+    area: "Tooling",
+  });
+  await setImmediate();
+  const tokens = h.sent.at(-1)!.values;
+  assert.equal(tokens.pi_task_state, "assigned");
+  assert.equal(tokens.pi_task_status, "Blocked");
+  assert.equal(tokens.pi_task_phase, "waiting");
+  assert.equal(tokens.pi_project, "Pi");
+  assert.equal(tokens.pi_area, "Tooling");
+  assert.equal(tokens.pi_model, "model-one");
+  assert.equal(tokens.pi_waiting, "Waiting until 15:05");
+  assert.equal(Object.hasOwn(tokens, "agent_status"), false);
+  await h.reporter!.stop();
+  assert.equal(h.sent.at(-1)!.values.pi_task_phase, null);
+  assert.equal(h.sent.at(-1)!.values.pi_task_status, null);
 });

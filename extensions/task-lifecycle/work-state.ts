@@ -16,6 +16,8 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   classifyReadiness,
+  isClaimableIssue,
+  isOwnedReadyIssue,
   resolveBeadsDir,
   createBeadsClient,
   withBeadsEnvironment,
@@ -109,6 +111,7 @@ interface State {
   inProgress: ClassifiedIssue[];
   blocked: ClassifiedIssue[];
   ready: ClassifiedIssue[];
+  ownedReady?: ClassifiedIssue[];
   waiting: ClassifiedIssue[];
   inbox: ClassifiedIssue[];
   needsJp: ClassifiedIssue[];
@@ -219,6 +222,12 @@ function renderHiddenState(state: State): string {
       ...[
         section("Active", state.inProgress, IN_PROGRESS_CAP, toLine),
         section("Actionable", state.ready, SCOPED_READY_CAP, toLine),
+        section(
+          "Owned — Ready to resume",
+          state.ownedReady ?? [],
+          SCOPED_READY_CAP,
+          toLine,
+        ),
         section("Waiting", state.waiting, BLOCKED_CAP, toLine),
       ].filter((value): value is string => value !== undefined),
     );
@@ -232,6 +241,12 @@ function renderHiddenState(state: State): string {
           issueLineWithWorkstream,
         ),
         section("Actionable", state.ready, READY_CAP, issueLineWithWorkstream),
+        section(
+          "Owned — Ready to resume",
+          state.ownedReady ?? [],
+          READY_CAP,
+          issueLineWithWorkstream,
+        ),
         section("Waiting", state.waiting, BLOCKED_CAP, issueLineWithWorkstream),
         section("Needs you", state.needsJp, NEEDS_JP_CAP, issueLine, true),
         section("Inbox", state.inbox, INBOX_CAP),
@@ -284,6 +299,7 @@ function stateIssues(state: State): ClassifiedIssue[] {
     ...state.inProgress,
     ...state.blocked,
     ...state.ready,
+    ...(state.ownedReady ?? []),
     ...state.waiting,
     ...state.inbox,
     ...state.needsJp,
@@ -294,7 +310,9 @@ function stateIssues(state: State): ClassifiedIssue[] {
   if (state.scopeKind !== undefined) return unique;
   return classifyReadiness(
     unique,
-    new Set(state.ready.map((issue) => issue.id)),
+    new Set(
+      [...state.ready, ...(state.ownedReady ?? [])].map((issue) => issue.id),
+    ),
   );
 }
 
@@ -545,7 +563,8 @@ export function registerTaskWorkState(
         active: scoped,
         inProgress: scoped.filter((issue) => issue.readiness === "in_progress"),
         blocked: scoped.filter((issue) => issue.readiness === "blocked"),
-        ready: scoped.filter((issue) => issue.readiness === "ready"),
+        ready: scoped.filter(isClaimableIssue),
+        ownedReady: scoped.filter(isOwnedReadyIssue),
         waiting: scoped.filter(
           (issue) =>
             issue.readiness === "waiting" || issue.readiness === "blocked",
@@ -565,7 +584,8 @@ export function registerTaskWorkState(
       listedTaskIds: classified.map((issue) => issue.id),
       inProgress: active.filter((issue) => issue.readiness === "in_progress"),
       blocked: active.filter((issue) => issue.readiness === "blocked"),
-      ready: active.filter((issue) => issue.readiness === "ready"),
+      ready: active.filter(isClaimableIssue),
+      ownedReady: active.filter(isOwnedReadyIssue),
       waiting: active.filter(
         (issue) =>
           issue.readiness === "waiting" || issue.readiness === "blocked",
