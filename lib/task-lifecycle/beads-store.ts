@@ -20,6 +20,12 @@ import {
   type FileOperationLockDependencies,
 } from "../file-operation-lock.js";
 import { decodeLifecycleAny } from "./v2-model.js";
+import {
+  LifecycleV2MigrationApplyError,
+  planLifecycleV2Migration,
+  readLifecycleV2MigrationSnapshot,
+  type LifecycleV2MigrationStore,
+} from "./v2-migration.js";
 import { NEXT_STEP_KEY, normalizeNextStep } from "./next-step.js";
 import {
   decodeWorkManagement,
@@ -65,7 +71,7 @@ const STATUSES: ReadonlySet<string> = new Set([
 export function createLifecycleStore(
   exec: BeadsExec,
   options: LifecycleStoreOptions,
-): LifecycleStore & WorkManagementStore {
+): LifecycleStore & WorkManagementStore & LifecycleV2MigrationStore {
   const store = options.store;
   const writeVersion = options.lifecycleWriteVersion ?? 1;
   if (writeVersion !== 1 && writeVersion !== 2)
@@ -615,7 +621,92 @@ export function createLifecycleStore(
       );
     };
 
+  const applyLifecycleV2Migration: LifecycleV2MigrationStore["applyLifecycleV2Migration"] =
+    async (review, owner) => {
+      assertWritable(2, "convert lifecycle v2");
+      const approved = structuredClone(review);
+      if (approved.storePath !== store)
+        throw new Error("conversion target does not match the reviewed store");
+      const reviewed = planLifecycleV2Migration(
+        approved.source,
+        approved.classifications,
+      );
+      if (!isDeepStrictEqual(approved, { ...reviewed, storePath: store }))
+        throw new Error(
+          "reviewed migration plan fingerprint changed or report contents were edited",
+        );
+      return withFileOperationLock(
+        join(store, "pi-task-lifecycle"),
+        owner,
+        async () => {
+          const snapshot = await readLifecycleV2MigrationSnapshot({
+            list,
+            showMany,
+          });
+          const plan = planLifecycleV2Migration(
+            snapshot,
+            approved.classifications,
+          );
+          if (approved.fingerprint !== plan.fingerprint)
+            throw new Error(
+              "migration input fingerprint changed; obtain a fresh reviewed report",
+            );
+          if (plan.diagnostics.length > 0)
+            throw new Error(
+              `migration refused: ${plan.diagnostics.join("; ")}`,
+            );
+          const verified: LifecycleIssue[] = [];
+          for (const proposal of plan.proposals) {
+            try {
+              const before = snapshot.find((row) => row.id === proposal.id)!;
+              const current = await readOne(
+                proposal.id,
+                `revalidate conversion ${proposal.id}`,
+              );
+              if (!isDeepStrictEqual(current.issue, before))
+                throw new Error("migration input changed after preflight");
+              const metadata = {
+                ...current.rawMetadata,
+                piLifecycle: proposal.lifecycle,
+              };
+              await execute(`convert lifecycle ${proposal.id}`, [
+                "update",
+                proposal.id,
+                "--metadata",
+                JSON.stringify(metadata),
+                "--json",
+              ]);
+              const saved = await readOne(
+                proposal.id,
+                `verify conversion ${proposal.id}`,
+              );
+              if (
+                !isDeepStrictEqual(saved.issue, {
+                  ...before,
+                  metadata,
+                  lifecycle: proposal.lifecycle,
+                })
+              )
+                throw new Error(
+                  "converted record did not match the reviewed proposal",
+                );
+              verified.push(saved.issue);
+            } catch (error) {
+              throw new LifecycleV2MigrationApplyError(
+                verified.map((row) => row.id),
+                proposal.id,
+                error,
+              );
+            }
+          }
+          return verified;
+        },
+        lockDependencies,
+      );
+    };
+
   return {
+    applyLifecycleV2Migration,
     comments,
     mutateWorkManagement,
     show,

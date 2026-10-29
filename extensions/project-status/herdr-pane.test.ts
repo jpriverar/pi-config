@@ -317,15 +317,15 @@ test("task blocking preserves runtime and wakeup tokens and shutdown clears the 
     area: "Tooling",
   });
   await setImmediate();
-  const tokens = h.sent.at(-1)!.values;
-  assert.equal(tokens.pi_task_state, "assigned");
-  assert.equal(tokens.pi_task_status, "Blocked");
-  assert.equal(tokens.pi_task_phase, "waiting");
-  assert.equal(tokens.pi_project, "Pi");
-  assert.equal(tokens.pi_area, "Tooling");
-  assert.equal(tokens.pi_model, "model-one");
-  assert.equal(tokens.pi_waiting, "Waiting until 15:05");
-  assert.equal(Object.hasOwn(tokens, "agent_status"), false);
+  const paneValues = h.sent.at(-1)!.values;
+  assert.equal(paneValues.pi_task_state, "assigned");
+  assert.equal(paneValues.pi_task_status, "Blocked");
+  assert.equal(paneValues.pi_task_phase, "waiting");
+  assert.equal(paneValues.pi_project, "Pi");
+  assert.equal(paneValues.pi_area, "Tooling");
+  assert.equal(paneValues.pi_model, "model-one");
+  assert.equal(paneValues.pi_waiting, "Waiting until 15:05");
+  assert.equal(Object.hasOwn(paneValues, "agent_status"), false);
   await h.reporter!.stop();
   assert.equal(h.sent.at(-1)!.values.pi_task_phase, null);
   assert.equal(h.sent.at(-1)!.values.pi_task_status, null);

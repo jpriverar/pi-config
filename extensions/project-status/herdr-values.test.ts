@@ -390,11 +390,11 @@ for (const [phase, status] of [
     };
     const assignment = selectTaskAssignment([issue], OWNER.sessionId);
     assert.equal(assignment.state, "assigned");
-    const tokens = taskTokens(assignment);
-    assert.equal(tokens.pi_task_id, "jp-held");
-    assert.equal(tokens.pi_task, "Owned mission");
-    assert.equal(tokens.pi_task_phase, phase);
-    assert.equal(tokens.pi_task_status, status);
+    const paneValues = taskTokens(assignment);
+    assert.equal(paneValues.pi_task_id, "jp-held");
+    assert.equal(paneValues.pi_task, "Owned mission");
+    assert.equal(paneValues.pi_task_phase, phase);
+    assert.equal(paneValues.pi_task_status, status);
     if (phase !== "active") {
       const released = selectTaskAssignment(
         [{ ...issue, lifecycle: { ...lifecycle, owner: null } }],
@@ -408,12 +408,12 @@ for (const [phase, status] of [
 }
 
 test("assignment availability alone does not invent a lifecycle phase", () => {
-  const tokens = taskTokens({
+  const paneValues = taskTokens({
     state: "assigned",
     taskId: "jp-held",
     label: "Known owner",
   });
-  assert.equal(tokens.pi_task_state, "assigned");
-  assert.equal(tokens.pi_task_phase, null);
-  assert.equal(tokens.pi_task_status, null);
+  assert.equal(paneValues.pi_task_state, "assigned");
+  assert.equal(paneValues.pi_task_phase, null);
+  assert.equal(paneValues.pi_task_status, null);
 });

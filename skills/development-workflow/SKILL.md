@@ -9,6 +9,16 @@ Carry the whole agreed outcome to its finish line, normally in the same task.
 An artifact, specialist result, completed plan, or task record is not that finish
 line. Scope changes come from the user's agreement, not from a phase transition.
 
+Ownership is responsibility, not execution permission or delivery proof. With
+v2 tools, `task_block` pauses actual work without releasing ownership;
+`task_resume` starts useful approved work on an owned Ready/Blocked task.
+Repeating `task_claim` on that owned task does **not** resume it. Done/Deferred
+need reopening before execution. Use `task_release` for an intentional handoff
+or switch after safe resource cleanup, then claim the next task. Follow the
+[version-specific handoff recipe](references/handoff-and-communication.md):
+legacy v1 tools retain their different wait/claim behavior. Do not activate a
+new writer merely to obtain a missing tool.
+
 ## Navigate the delivery loop
 
 For new tracked work with an active area/project catalog, **read

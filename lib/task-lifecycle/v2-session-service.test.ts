@@ -11,7 +11,7 @@ const document: ArtifactInput = {
   kind: "document",
   role: "deliverable",
   title: "Report",
-  uri: "https://example.com/report",
+  uri: "https://github.com/example/repo/blob/main/report.md",
 };
 const current = withCheck();
 const paused = blockLifecycleV2(current, {

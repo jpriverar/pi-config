@@ -37,6 +37,7 @@ export async function fixture(
     pool?: TaskLifecyclePoolPort;
     checkAdapters?: CheckAdapterRegistry;
     now?: () => number;
+    afterUpdate?: (id: string) => void | Promise<void>;
   } = {
     serviceVersion: 2,
     storeVersion: 2,
@@ -100,6 +101,7 @@ export async function fixture(
         if (args.includes("-s")) current.status = args[args.indexOf("-s") + 1];
         if (args.includes("-d"))
           current.description = args[args.indexOf("-d") + 1];
+        await options.afterUpdate?.(args[1]);
         result = [current];
       } else if (args[0] === "comments" && args[1] === "add") {
         writes.push("comment:" + args[2]);
@@ -155,6 +157,7 @@ export async function fixture(
       : { lifecycleWriteVersion: options.serviceVersion }),
   });
   return {
+    storePath: root,
     store,
     sut,
     writes,
