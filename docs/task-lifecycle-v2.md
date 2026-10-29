@@ -179,7 +179,7 @@ reenroll tasks, move existing items, or replace captured destinations.
 ## Isolated verification
 
 ```sh
-npm run test:file -- lib/task-lifecycle/v2-migration.test.ts tests/task-lifecycle-v2-report.test.ts
+npm run test:file -- lib/task-lifecycle/v2-migration.test.ts lib/task-lifecycle/v2-migration-io.test.ts tests/task-lifecycle-v2-report.test.ts
 npm run test:file -- tests/task-lifecycle-v2-integration.test.ts tests/task-reconciler-integration.test.ts
 npm run build:reconciler
 ```

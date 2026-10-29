@@ -14,8 +14,8 @@ import {
 import {
   readMigrationJson,
   verifyMigrationStore,
-  writeMigrationPlan,
 } from "../lib/work-catalog/migration-io.js";
+import { writeLifecycleV2MigrationReport } from "../lib/task-lifecycle/v2-migration-io.js";
 
 const usage =
   "Usage: report-task-lifecycle-v2 --store STORE --output REPORT [--classifications FILE]. Report only; no apply mode.";
@@ -82,7 +82,10 @@ export async function runLifecycleV2Report(args: string[]): Promise<void> {
     snapshot,
     input as LifecycleV2Classifications,
   );
-  await writeMigrationPlan(values.get("--output")!, { storePath, ...plan });
+  await writeLifecycleV2MigrationReport(values.get("--output")!, {
+    storePath,
+    ...plan,
+  });
   console.log(
     JSON.stringify({
       report: values.get("--output"),

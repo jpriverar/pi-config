@@ -188,3 +188,79 @@ for (const classified of [false, true]) {
     assert.deepEqual(JSON.parse(await readFile(h.data, "utf8")), source);
   });
 }
+
+test("report refuses an oversized classification file before native reads", async (t) => {
+  const h = await fixture(t);
+  const classifications = join(h.root, "classifications.json");
+  await writeFile(
+    classifications,
+    JSON.stringify({
+      "zz-one": { purpose: "completion", reason: "x".repeat(1024 * 1024) },
+    }),
+    { mode: 0o600 },
+  );
+  const result = await h.run([...h.args, "--classifications", classifications]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /bounded file/);
+  await assert.rejects(readFile(h.calls), { code: "ENOENT" });
+  await assert.rejects(readFile(h.output), { code: "ENOENT" });
+});
+
+test("report refuses a complete store above 16 MiB without pruning it", async (t) => {
+  const h = await fixture(t);
+  const source = Array.from({ length: 350 }, (_, index) => ({
+    id: `zz-large-${index}`,
+    title: `Task ${index}`,
+    description: "evidence ".repeat(6400),
+    status: "open",
+    dependencies: [],
+    metadata: { piLifecycle: createActionableLifecycle(NOW) },
+  }));
+  const original = JSON.stringify(source);
+  await writeFile(h.data, original);
+  const result = await h.run(h.args);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /private JSON exceeds limit/);
+  await assert.rejects(readFile(h.output), { code: "ENOENT" });
+  assert.equal(await readFile(h.data, "utf8"), original);
+});
+
+test("report preserves a complete store exceeding the catalog file budget", async (t) => {
+  const h = await fixture(t);
+  const source = Array.from({ length: 350 }, (_, index) => ({
+    id: `zz-many-${index}`,
+    title: `Task ${index}`,
+    description: "evidence ".repeat(512),
+    status: "open",
+    dependencies: [],
+    metadata: {
+      piLifecycle: createActionableLifecycle(NOW),
+      retainedEvidence: { index },
+    },
+  }));
+  await writeFile(h.data, JSON.stringify(source));
+  const result = await h.run(h.args);
+  assert.equal(result.code, 0, result.stderr);
+  const bytes = await readFile(h.output);
+  assert.ok(bytes.length > 1024 * 1024);
+  const report = JSON.parse(bytes.toString("utf8"));
+  assert.equal(report.source.length, 350);
+  assert.equal(report.proposals.length, 350);
+  assert.deepEqual(report.diagnostics, []);
+  assert.deepEqual(
+    report.source.map(
+      ({ id, description, metadata }: (typeof source)[number]) => ({
+        id,
+        description,
+        metadata,
+      }),
+    ),
+    source.map(({ id, description, metadata }) => ({
+      id,
+      description,
+      metadata,
+    })),
+  );
+  assert.deepEqual(JSON.parse(await readFile(h.data, "utf8")), source);
+  assert.equal((await stat(h.output)).mode & 0o777, 0o600);
+});

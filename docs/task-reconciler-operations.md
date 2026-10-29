@@ -127,8 +127,11 @@ convert tasks, reload clients, or change the live sidebar. See the
    schema. Duplicate owners/resources, unresolved resource operations, unsupported
    criteria, native conflicts and incomplete reads block conversion. Exit 0 means
    a report without blocking diagnostics; exit 2 means a saved blocked report;
-   exit 1 means the report failed. The private artifact has a 1 MiB limit; an
-   oversized population fails rather than silently producing a partial plan.
+   exit 1 means the report failed. The complete lifecycle review artifact has a
+   16 MiB limit, including its full source/history and proposals. Classification
+   inputs and catalog plans retain their separate 1 MiB limits; ordinary runtime
+   JSON retains its 64 KiB default. Oversized populations fail rather than being
+   filtered, pruned or silently split into partial plans.
    Neither exit 0 nor a fingerprint establishes operator approval or live safety.
 
 4. **Approve the exact conversion and driver.** There is deliberately no report
@@ -138,6 +141,10 @@ convert tasks, reload clients, or change the live sidebar. See the
    classifications, fingerprint and `storePath`. Use it only from
    the separately reviewed operator driver for this cutover. It requires writer
    2 and the exact reviewed store. Normal v2 mutations still refuse v1 records.
+   Load the saved artifact through `readLifecycleV2MigrationReport` from
+   `lib/task-lifecycle/v2-migration-io.ts`: it enforces the 16 MiB report budget,
+   private file/parent checks and strict UTF-8 JSON decoding. The generic catalog
+   reader keeps its smaller default and is not the lifecycle-report loader.
 
    It first checks the report's contents against its fingerprint; the binding
    covers proposed conversions as well as source data and classification decisions.
