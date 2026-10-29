@@ -729,6 +729,7 @@ export class TaskLifecycleService {
       }
       const latest = issue.lifecycle;
       if (
+        prepared.lifecycleVersion === 2 ||
         latest?.version !== 1 ||
         (latest.phase !== "waiting" && latest.phase !== "active") ||
         latest.waiting?.kind !== "check" ||

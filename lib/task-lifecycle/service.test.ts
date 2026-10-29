@@ -3291,3 +3291,30 @@ for (const outcome of [
     }
   });
 }
+
+test("a v2 prepared result cannot mutate a v1 task even when its check snapshot matches", async () => {
+  const { store, sut } = observationFixture();
+  const prepared = await sut.prepareReconciliation(
+    { taskId: "jp-1", requestId: "foreign-schema" },
+    session("reconciler"),
+  );
+  assert.equal(prepared.kind, "observe");
+  if (prepared.kind !== "observe") throw new Error("expected prepared check");
+  const before = structuredClone(store.saved);
+  const result = await sut.applyReconciliation(
+    {
+      ...prepared.prepared,
+      lifecycleVersion: 2,
+      conditionFingerprint: "a".repeat(64),
+      pause: null,
+      owner: null,
+      ownershipOperationId: null,
+      actorSessionId: "reconciler",
+    },
+    { outcome: "satisfied", observation: "merged" },
+    session("reconciler"),
+  );
+  assert.equal(result.outcome, "stale");
+  assert.deepEqual(store.saved, before);
+  assert.equal(store.writes, 0);
+});

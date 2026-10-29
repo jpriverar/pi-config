@@ -7,6 +7,8 @@ import type {
   LifecycleMetadataV1,
   LifecycleStatus,
   LifecycleStore,
+  TaskOwner,
+  TaskPause,
 } from "./types.js";
 
 export interface ReconciliationCandidate {
@@ -187,7 +189,7 @@ export interface ReconcileRequest {
   expectedCheckFingerprint?: string;
 }
 
-export interface PreparedCheck {
+interface PreparedCheckBase {
   taskId: string;
   operationId: string;
   fingerprint: string;
@@ -195,6 +197,21 @@ export interface PreparedCheck {
   artifacts: readonly Artifact[];
   manualOutcome?: "satisfied" | "action_required";
 }
+
+export interface PreparedCheckV1 extends PreparedCheckBase {
+  lifecycleVersion?: 1;
+}
+
+export interface PreparedCheckV2 extends PreparedCheckBase {
+  lifecycleVersion: 2;
+  conditionFingerprint: string;
+  pause: TaskPause | null;
+  owner: Pick<TaskOwner, "sessionId" | "claimedAt"> | null;
+  ownershipOperationId: string | null;
+  actorSessionId: string;
+}
+
+export type PreparedCheck = PreparedCheckV1 | PreparedCheckV2;
 
 export interface ReconcileResult {
   outcome: "applied" | "unchanged" | "already_applied" | "stale";
@@ -227,7 +244,9 @@ function digest(value: unknown): string {
     .digest("hex");
 }
 
-export function fingerprintCheck(issue: LifecycleIssue): string | null {
+export function fingerprintCheck(
+  issue: Pick<LifecycleIssue, "id" | "lifecycle">,
+): string | null {
   const lifecycle = issue.lifecycle;
   const check = lifecycle?.activeCheck;
   if (check === null || check === undefined) return null;
@@ -274,7 +293,7 @@ export function reconciliationOperationId(request: ReconcileRequest): string {
 }
 
 export function reconciliationAlreadyApplied(
-  issue: LifecycleIssue,
+  issue: Pick<LifecycleIssue, "id" | "lifecycle">,
   operationId: string,
 ): boolean {
   const prefix = operationId.slice(0, operationId.lastIndexOf(":") + 1);
