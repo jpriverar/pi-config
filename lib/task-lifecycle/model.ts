@@ -14,6 +14,7 @@ import type {
   LegacyLifecycleAdoption,
   LifecycleCheck,
   LifecycleIssue,
+  LifecycleMetadata,
   LifecycleMetadataV1,
   LifecyclePhase,
   LifecycleTransition,
@@ -360,10 +361,10 @@ export function canonicalizeArtifact(
   return artifact;
 }
 
-export function attachArtifact(
-  state: LifecycleMetadataV1,
+export function attachArtifact<T extends LifecycleMetadata>(
+  state: T,
   artifact: Artifact,
-): LifecycleMetadataV1 {
+): T {
   validateArtifact(artifact, "artifact");
   const idMatch = state.artifacts.find(
     (existing) => existing.id === artifact.id,
@@ -633,7 +634,7 @@ function transition(
 }
 
 function hasOperation(
-  state: LifecycleMetadataV1,
+  state: Pick<LifecycleMetadata, "transitionHistory">,
   operationId: string,
 ): boolean {
   return state.transitionHistory.some(
@@ -1159,10 +1160,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function beginWorktreeAcquire(
-  state: LifecycleMetadataV1,
+export function beginWorktreeAcquire<T extends LifecycleMetadata>(
+  state: T,
   input: import("./types.js").BeginWorktreeAcquireInput,
-): LifecycleMetadataV1 {
+): T {
   assertText(input.operationId, "worktree acquire operationId");
   assertText(input.claimId, "worktree acquire claimId");
   assertText(input.pathId, "worktree acquire pathId");
@@ -1215,10 +1216,10 @@ export function beginWorktreeAcquire(
   );
 }
 
-export function completeWorktreeAcquire(
-  state: LifecycleMetadataV1,
+export function completeWorktreeAcquire<T extends LifecycleMetadata>(
+  state: T,
   input: import("./types.js").CompleteWorktreeAcquireInput,
-): LifecycleMetadataV1 {
+): T {
   assertText(input.operationId, "worktree acquire operationId");
   assertText(input.claimId, "worktree acquire claimId");
   assertText(input.path, "worktree acquire path");
@@ -1271,10 +1272,10 @@ export function completeWorktreeAcquire(
   );
 }
 
-export function beginWorktreeRelease(
-  state: LifecycleMetadataV1,
+export function beginWorktreeRelease<T extends LifecycleMetadata>(
+  state: T,
   input: import("./types.js").WorktreeReleaseInput,
-): LifecycleMetadataV1 {
+): T {
   assertText(input.operationId, "worktree release operationId");
   assertText(input.claimId, "worktree release claimId");
   assertTimestamp(input.now, "worktree release timestamp");
@@ -1309,10 +1310,10 @@ export function beginWorktreeRelease(
   );
 }
 
-export function completeWorktreeRelease(
-  state: LifecycleMetadataV1,
+export function completeWorktreeRelease<T extends LifecycleMetadata>(
+  state: T,
   input: import("./types.js").WorktreeReleaseInput,
-): LifecycleMetadataV1 {
+): T {
   assertText(input.operationId, "worktree release operationId");
   assertText(input.claimId, "worktree release claimId");
   assertTimestamp(input.now, "worktree release timestamp");
@@ -1341,12 +1342,12 @@ export function completeWorktreeRelease(
   );
 }
 
-function recordResourceOperation(
-  state: LifecycleMetadataV1,
+function recordResourceOperation<T extends LifecycleMetadata>(
+  state: T,
   operationId: string,
   type: string,
   at: string,
-): LifecycleMetadataV1 {
+): T {
   if (hasOperation(state, operationId)) return state;
   return {
     ...state,

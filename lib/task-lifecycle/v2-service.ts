@@ -1,6 +1,21 @@
 import { isDeepStrictEqual } from "node:util";
 import { assertText } from "./model.js";
 import { ownerOf } from "./ownership.js";
+import type { CheckObservation } from "./checks.js";
+import {
+  fingerprintCheck,
+  reconciliationAlreadyApplied,
+  reconciliationOperationId,
+  ReconciliationRequestError,
+  type PreparedCheckV2,
+  type ReconcileRequest,
+  type ReconcileResult,
+  type ReconciliationPreparation,
+} from "./reconciliation.js";
+import {
+  applyConditionObservationV2,
+  prepareConditionObservationV2,
+} from "./v2-reconciliation.js";
 import {
   blockLifecycleV2,
   claimLifecycleV2,
@@ -30,6 +45,8 @@ interface Dependencies {
   now(): number;
   uuid(): string;
   lifecycleWriteVersion?: 1 | 2;
+  prPollIntervalMs?: number;
+  maxBackoffMs?: number;
 }
 type AddBlockers = (ids: readonly string[]) => Promise<LifecycleIssueV2>;
 
@@ -311,6 +328,149 @@ export class V2LifecycleOperations {
     );
   }
 
+  async prepareReconciliation(
+    request: ReconcileRequest,
+    owner: LockOwner,
+    reconcileResources: (issue: LifecycleIssueV2) => Promise<LifecycleIssue>,
+  ): Promise<ReconciliationPreparation> {
+    this.requireMode();
+    const operationId = reconciliationOperationId(request);
+    let current = requireV2(await this.deps.store.show(request.taskId));
+    const complete = (
+      issue: LifecycleIssue,
+      outcome: ReconcileResult["outcome"] = "unchanged",
+    ): ReconciliationPreparation => ({ kind: "complete", issue, outcome });
+    if (reconciliationAlreadyApplied(current, operationId))
+      return complete(current, "already_applied");
+    validateManualRequest(current, request);
+    validateLifecycleV2(current.lifecycle, current);
+    const before = current;
+    current = requireV2(await reconcileResources(current));
+    const localOutcome = isDeepStrictEqual(before.lifecycle, current.lifecycle)
+      ? "unchanged"
+      : "applied";
+    if (reconciliationAlreadyApplied(current, operationId))
+      return complete(current, "already_applied");
+    validateManualRequest(current, request);
+    validateLifecycleV2(current.lifecycle, current);
+    if (current.lifecycle.condition?.kind === "dependency") {
+      let outcome: ReconcileResult["outcome"] = localOutcome;
+      const saved = await this.mutate(
+        request.taskId,
+        owner,
+        operationId,
+        (issue) => {
+          if (reconciliationAlreadyApplied(issue, operationId)) {
+            outcome = "already_applied";
+            return issue.lifecycle;
+          }
+          const latest = issue.lifecycle;
+          if (
+            latest.condition?.kind !== "dependency" ||
+            issue.dependencies.some(
+              (dep) =>
+                dep.dependencyType === "blocks" && dep.status !== "closed",
+            )
+          )
+            return latest;
+          validateLifecycleV2(latest, issue);
+          const phase =
+            latest.phase === "waiting" ? "actionable" : latest.phase;
+          const now = this.now();
+          outcome = "applied";
+          return {
+            ...latest,
+            phase,
+            condition: null,
+            pause: null,
+            activeCheck: null,
+            stateEnteredAt:
+              phase === latest.phase ? latest.stateEnteredAt : now,
+            lastProgressAt: now,
+            transitionHistory: [
+              ...latest.transitionHistory,
+              {
+                operationId,
+                type: "dependencies_satisfied",
+                at: now,
+                from: latest.phase,
+                to: phase,
+                sessionId: owner.sessionId,
+              },
+            ],
+          };
+        },
+      );
+      return complete(saved, outcome);
+    }
+    const check = current.lifecycle.activeCheck;
+    if (current.lifecycle.condition?.kind !== "check" || check === null)
+      return complete(current, localOutcome);
+    if (request.manualOutcome === undefined && check.state === "satisfied") {
+      if (current.lifecycle.pause === null)
+        return complete(current, localOutcome);
+      const prepared = prepareConditionObservationV2(
+        current,
+        operationId,
+        owner.sessionId,
+      );
+      const result = await this.applyReconciliation(
+        prepared,
+        { outcome: "satisfied", observation: check.lastObservation! },
+        owner,
+        true,
+      );
+      return complete(result.issue, result.outcome);
+    }
+    if (
+      request.manualOutcome === undefined &&
+      (check.kind === "manual" ||
+        (check.nextCheckAt !== null &&
+          Date.parse(check.nextCheckAt) > this.deps.now()))
+    )
+      return complete(current, localOutcome);
+    return {
+      kind: "observe",
+      prepared: prepareConditionObservationV2(
+        current,
+        operationId,
+        owner.sessionId,
+        request.manualOutcome,
+      ),
+    };
+  }
+
+  async applyReconciliation(
+    prepared: PreparedCheckV2,
+    observation: CheckObservation,
+    owner: LockOwner,
+    cached = false,
+  ): Promise<ReconcileResult> {
+    let outcome: ReconcileResult["outcome"] = "stale";
+    const saved = await this.mutate(
+      prepared.taskId,
+      owner,
+      prepared.operationId,
+      (issue) => {
+        validateLifecycleV2(issue.lifecycle, issue);
+        const result = applyConditionObservationV2(
+          issue.lifecycle,
+          prepared,
+          observation,
+          this.now(),
+          {
+            pollIntervalMs: this.deps.prPollIntervalMs,
+            maxBackoffMs: this.deps.maxBackoffMs,
+            cached,
+          },
+        );
+        outcome = result.outcome;
+        return result.state;
+      },
+    );
+    return { issue: saved, outcome };
+  }
+
   private async prepareCondition(
     issue: LifecycleIssueV2,
     change: ConditionUpdate,
@@ -527,4 +687,29 @@ function missingBlockers(
       .map((dep) => dep.id),
   );
   return [...new Set(ids)].filter((id) => !existing.has(id));
+}
+
+function validateManualRequest(
+  issue: LifecycleIssueV2,
+  request: ReconcileRequest,
+): void {
+  if (request.manualOutcome === undefined) return;
+  if (
+    issue.lifecycle.condition?.kind !== "check" ||
+    issue.lifecycle.activeCheck?.kind !== "manual"
+  )
+    throw new ReconciliationRequestError(
+      "manual_check_required",
+      `task ${issue.id} does not retain a manual check`,
+    );
+  if (request.expectedCheckFingerprint === undefined)
+    throw new ReconciliationRequestError(
+      "invalid_request",
+      `task ${issue.id} manual outcome requires a check fingerprint`,
+    );
+  if (fingerprintCheck(issue) !== request.expectedCheckFingerprint)
+    throw new ReconciliationRequestError(
+      "check_changed",
+      `task ${issue.id} check changed before reconciliation`,
+    );
 }

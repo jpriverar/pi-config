@@ -97,6 +97,8 @@ export function applyConditionObservationV2(
   if (
     policy.cached &&
     (state.activeCheck.state !== "satisfied" ||
+      state.activeCheck.lastCheckedAt === null ||
+      state.activeCheck.lastObservation === null ||
       observation.outcome !== "satisfied" ||
       state.activeCheck.lastObservation !== observation.observation)
   )

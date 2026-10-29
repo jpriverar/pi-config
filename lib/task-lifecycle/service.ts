@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeNextStep } from "./next-step.js";
 import { listOwnedTasks, V2LifecycleOperations } from "./v2-service.js";
 import { ownerOf } from "./ownership.js";
+import { nativeStatusV2, validateLifecycleV2 } from "./v2-model.js";
 
 import type { OwnerIdentity } from "../../extensions/worktree-pool/operation-lock.js";
 import {
@@ -54,6 +55,7 @@ import type {
   Disposition,
   LifecycleCheck,
   LifecycleIssue,
+  LifecycleMetadata,
   LifecycleMetadataV1,
   LifecyclePhase,
   LifecycleStatus,
@@ -573,6 +575,15 @@ export class TaskLifecycleService {
     request: ReconcileRequest,
     owner: LockOwner,
   ): Promise<ReconciliationPreparation> {
+    if (this.deps.lifecycleWriteVersion === 2)
+      return this.v2.prepareReconciliation(request, owner, (issue) =>
+        this.reconcileWorktreeResources(
+          request.taskId,
+          issue,
+          issue.lifecycle,
+          owner,
+        ),
+      );
     const operationId = reconciliationOperationId(request);
     const taskId = request.taskId;
     let current = await this.deps.store.show(taskId);
@@ -720,6 +731,11 @@ export class TaskLifecycleService {
     observation: CheckObservation,
     owner: LockOwner,
   ): Promise<ReconcileResult> {
+    if (
+      this.deps.lifecycleWriteVersion === 2 &&
+      prepared.lifecycleVersion === 2
+    )
+      return this.v2.applyReconciliation(prepared, observation, owner);
     const { taskId, operationId } = prepared;
     let outcome: ReconcileResult["outcome"] = "stale";
     const updated = await this.deps.store.mutate(taskId, owner, (issue) => {
@@ -902,7 +918,7 @@ export class TaskLifecycleService {
     owner: LockOwner,
   ): Promise<void> {
     const issue = await this.deps.store.show(request.taskId);
-    const lifecycle = requireManaged(issue);
+    const lifecycle = this.writableLifecycle(issue);
     requireCurrentOwner(request.taskId, lifecycle, owner);
     const reconciled = await this.reconcileWorktreeResources(
       request.taskId,
@@ -914,7 +930,7 @@ export class TaskLifecycleService {
       ),
     );
     await this.assertHealthyAssociations(
-      requireManaged(reconciled),
+      this.writableLifecycle(reconciled),
       this.requirePool(),
     );
   }
@@ -927,8 +943,14 @@ export class TaskLifecycleService {
   ): Promise<LifecycleIssue> {
     const pool = this.requirePool();
     const current = await this.deps.store.show(request.taskId);
-    const lifecycle = requireManaged(current);
-    requireCurrentOwner(request.taskId, lifecycle, owner);
+    const lifecycle = this.writableLifecycle(current);
+    requireResourceOwnerSession(request.taskId, lifecycle, owner.sessionId);
+    if (
+      !lifecycle.resources.some(
+        (resource) => resource.claimId === acquired.claimId,
+      )
+    )
+      requireCurrentOwner(request.taskId, lifecycle, owner);
 
     const listing = await pool.list(request.repository);
     if (listing.repositories.length !== 1) {
@@ -976,11 +998,13 @@ export class TaskLifecycleService {
     const poolObservation = observation;
     const now = this.nowIso();
     return this.deps.store.mutate(request.taskId, owner, (issue) => {
-      const latest = requireManaged(issue);
-      requireCurrentOwner(request.taskId, latest, owner);
+      const latest = this.writableLifecycle(issue);
+      requireResourceOwnerSession(request.taskId, latest, owner.sessionId);
       const existing = latest.resources.find(
         (resource) => resource.claimId === acquired.claimId,
       );
+      if (existing === undefined)
+        requireCurrentOwner(request.taskId, latest, owner);
       if (existing?.cleanupState === "active") {
         assertValidAssociation(existing, observation);
         return unchangedMutation(issue, `${existing.operationId}:active`);
@@ -1027,7 +1051,7 @@ export class TaskLifecycleService {
   ): Promise<Extract<PreparedWorktreeOperation, { mode: "acquire" }>> {
     const pool = this.requirePool();
     const current = await this.deps.store.show(request.taskId);
-    const before = requireManaged(current);
+    const before = this.writableLifecycle(current);
     requireCurrentOwner(request.taskId, before, owner);
     const reconciled = await this.reconcileWorktreeResources(
       request.taskId,
@@ -1038,7 +1062,7 @@ export class TaskLifecycleService {
         isExecutionRelease(before, resource),
       ),
     );
-    const lifecycle = requireManaged(reconciled);
+    const lifecycle = this.writableLifecycle(reconciled);
 
     const identityListing = await pool.list(request.repository);
     if (identityListing.repositories.length !== 1) {
@@ -1071,7 +1095,7 @@ export class TaskLifecycleService {
     const pathId = this.deps.uuid();
     const now = this.nowIso();
     await this.deps.store.mutate(request.taskId, owner, (issue) => {
-      const latest = requireManaged(issue);
+      const latest = this.writableLifecycle(issue);
       requireCurrentOwner(request.taskId, latest, owner);
       const next = beginWorktreeAcquire(latest, {
         operationId,
@@ -1140,7 +1164,7 @@ export class TaskLifecycleService {
       );
     }
     if (matches.length === 1) {
-      const current = requireManaged(
+      const current = this.writableLifecycle(
         await this.deps.store.show(request.taskId),
       );
       const resource = current.resources.find(
@@ -1194,8 +1218,8 @@ export class TaskLifecycleService {
     expectedSessionId: string,
   ): Promise<Extract<PreparedWorktreeOperation, { mode: "release" }>> {
     const saved = await this.deps.store.mutate(taskId, owner, (issue) => {
-      const lifecycle = requireManaged(issue);
-      requireCurrentOwnerSession(taskId, lifecycle, expectedSessionId);
+      const lifecycle = this.writableLifecycle(issue);
+      requireResourceOwnerSession(taskId, lifecycle, expectedSessionId);
       const resource = lifecycle.resources.find(
         (candidate) => candidate.claimId === claimId,
       );
@@ -1222,7 +1246,7 @@ export class TaskLifecycleService {
         next,
       );
     });
-    const resource = requireManaged(saved).resources.find(
+    const resource = this.writableLifecycle(saved).resources.find(
       (candidate) => candidate.claimId === claimId,
     )!;
     return {
@@ -1270,7 +1294,7 @@ export class TaskLifecycleService {
     expectedSessionId: string,
   ): Promise<LifecycleIssue> {
     const pool = this.requirePool();
-    const before = requireManaged(await this.deps.store.show(taskId));
+    const before = this.writableLifecycle(await this.deps.store.show(taskId));
     const wasPending = before.resources.some(
       (resource) =>
         resource.claimId === claimId &&
@@ -1307,8 +1331,8 @@ export class TaskLifecycleService {
       let released: ReleaseResult | undefined;
       // Pool first, then store: renewal cannot return while deletion is in flight.
       saved = await this.deps.store.mutate(taskId, owner, async (issue) => {
-        const latest = requireManaged(issue);
-        requireCurrentOwnerSession(taskId, latest, expectedSessionId);
+        const latest = this.writableLifecycle(issue);
+        requireResourceOwnerSession(taskId, latest, expectedSessionId);
         const resource = latest.resources.find(
           (candidate) => candidate.claimId === claimId,
         );
@@ -1410,8 +1434,8 @@ export class TaskLifecycleService {
   ): Promise<LifecycleIssue> {
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
-      const latest = requireManaged(issue);
-      requireCurrentOwnerSession(taskId, latest, expectedSessionId);
+      const latest = this.writableLifecycle(issue);
+      requireResourceOwnerSession(taskId, latest, expectedSessionId);
       const next = completeWorktreeAcquire(latest, {
         operationId,
         claimId,
@@ -1433,8 +1457,8 @@ export class TaskLifecycleService {
   ): Promise<LifecycleIssue> {
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
-      const latest = requireManaged(issue);
-      requireCurrentOwnerSession(taskId, latest, expectedSessionId);
+      const latest = this.writableLifecycle(issue);
+      requireResourceOwnerSession(taskId, latest, expectedSessionId);
       const next = completeWorktreeRelease(latest, {
         operationId,
         claimId,
@@ -1452,7 +1476,7 @@ export class TaskLifecycleService {
   private async reconcileWorktreeResources(
     taskId: string,
     issue: LifecycleIssue,
-    lifecycle: LifecycleMetadataV1,
+    lifecycle: LifecycleMetadata,
     owner: LockOwner,
     resources: readonly WorktreeResource[] = lifecycle.resources,
   ): Promise<LifecycleIssue> {
@@ -1464,7 +1488,8 @@ export class TaskLifecycleService {
     if (pending.length === 0) return issue;
 
     const pool = this.requirePool();
-    const expectedSessionId = lifecycle.execution?.sessionId;
+    const expectedOwner = ownerOf(lifecycle);
+    const expectedSessionId = expectedOwner?.sessionId;
     if (expectedSessionId === undefined) {
       throw new Error(`task ${taskId} is not actively owned`);
     }
@@ -1481,10 +1506,16 @@ export class TaskLifecycleService {
             return this.deps.store.mutate(taskId, owner, (issue) => {
               const latest = issue.lifecycle;
               if (
-                latest?.version !== 1 ||
-                latest.phase !== "active" ||
-                latest.execution?.sessionId !== expectedSessionId ||
-                latest.execution.claimedAt !== lifecycle.execution!.claimedAt
+                latest === null ||
+                (latest.version === 1 &&
+                  (latest.phase !== "active" || latest.execution === null)) ||
+                (latest.version === 2 && latest.owner === null)
+              )
+                return null;
+              const actualOwner = ownerOf(latest);
+              if (
+                actualOwner?.sessionId !== expectedSessionId ||
+                actualOwner?.claimedAt !== expectedOwner!.claimedAt
               )
                 return null;
               const pending = latest.resources.find(
@@ -1554,7 +1585,7 @@ export class TaskLifecycleService {
   }
 
   private async assertHealthyAssociations(
-    lifecycle: LifecycleMetadataV1,
+    lifecycle: LifecycleMetadata,
     pool: TaskLifecyclePoolPort,
     ignoredClaimId?: string,
   ): Promise<void> {
@@ -1630,10 +1661,26 @@ export class TaskLifecycleService {
     issue: LifecycleIssue,
     operationId: string,
     status: LifecycleStatus,
-    lifecycle: LifecycleMetadataV1,
+    lifecycle: LifecycleMetadata,
   ): Mutation {
-    validateLifecycle(lifecycle, { ...issue, status, lifecycle });
+    if (lifecycle.version === 1)
+      validateLifecycle(lifecycle, { ...issue, status, lifecycle });
+    else validateLifecycleV2(lifecycle, { ...issue, status, lifecycle });
     return { operationId, status, lifecycle };
+  }
+
+  private writableLifecycle(issue: LifecycleIssue): LifecycleMetadata {
+    const lifecycle = requireManagedAny(issue);
+    const version = this.deps.lifecycleWriteVersion ?? 1;
+    if (lifecycle.version !== version)
+      throw new Error(
+        `task ${issue.id} requires lifecycle write version ${lifecycle.version}, configured ${version}`,
+      );
+    if (lifecycle.version === 2 && issue.status !== nativeStatusV2(lifecycle))
+      throw new Error(
+        `task ${issue.id} lifecycle phase conflicts with native status ${issue.status}`,
+      );
+    return lifecycle;
   }
 
   private requirePool(): TaskLifecyclePoolPort {
@@ -1677,6 +1724,12 @@ function hasUnresolvedCondition(issue: LifecycleIssue): boolean {
   );
 }
 
+function requireManagedAny(issue: LifecycleIssue): LifecycleMetadata {
+  if (issue.lifecycle === null)
+    throw new Error(`task ${issue.id} has no valid piLifecycle metadata`);
+  return issue.lifecycle;
+}
+
 function requireManaged(issue: LifecycleIssue): LifecycleMetadataV1 {
   if (issue.lifecycle === null) {
     throw new Error(`task ${issue.id} has no valid piLifecycle metadata`);
@@ -1689,9 +1742,10 @@ function requireManaged(issue: LifecycleIssue): LifecycleMetadataV1 {
 }
 
 function isExecutionRelease(
-  lifecycle: LifecycleMetadataV1,
+  lifecycle: LifecycleMetadata,
   resource: WorktreeResource,
 ): boolean {
+  if (lifecycle.version !== 1) return false;
   const execution = lifecycle.execution;
   return (
     lifecycle.phase === "active" &&
@@ -1704,11 +1758,11 @@ function isExecutionRelease(
   );
 }
 
-function cancelExecutionRelease(
-  lifecycle: LifecycleMetadataV1,
+function cancelExecutionRelease<T extends LifecycleMetadata>(
+  lifecycle: T,
   resource: WorktreeResource,
   now: string,
-): LifecycleMetadataV1 {
+): T {
   if (!isExecutionRelease(lifecycle, resource)) return lifecycle;
   return recordCheckObservation(
     {
@@ -1727,7 +1781,7 @@ function cancelExecutionRelease(
 
 function requireCurrentOwner(
   taskId: string,
-  lifecycle: LifecycleMetadataV1,
+  lifecycle: LifecycleMetadata,
   owner: LockOwner,
 ): void {
   requireCurrentOwnerSession(taskId, lifecycle, owner.sessionId);
@@ -1735,19 +1789,32 @@ function requireCurrentOwner(
 
 function requireCurrentOwnerSession(
   taskId: string,
-  lifecycle: LifecycleMetadataV1,
+  lifecycle: LifecycleMetadata,
   expectedSessionId: string,
 ): void {
-  if (lifecycle.phase !== "active" || lifecycle.execution === null) {
+  if (lifecycle.phase !== "active")
     throw new Error(`task ${taskId} is not actively owned`);
-  }
-  if (lifecycle.execution.sessionId !== expectedSessionId) {
+  const current = ownerOf(lifecycle);
+  if (current === null) throw new Error(`task ${taskId} is not actively owned`);
+  if (current.sessionId !== expectedSessionId)
     throw new Error(
-      `task ${taskId} is owned by active session ${lifecycle.execution.sessionId}`,
+      `task ${taskId} is owned by active session ${current.sessionId}`,
     );
-  }
 }
 
+function requireResourceOwnerSession(
+  taskId: string,
+  lifecycle: LifecycleMetadata,
+  expectedSessionId: string,
+): void {
+  if (lifecycle.version === 1)
+    return requireCurrentOwnerSession(taskId, lifecycle, expectedSessionId);
+  const current = ownerOf(lifecycle);
+  if (current?.sessionId !== expectedSessionId)
+    throw new Error(
+      `task ${taskId} is not owned by session ${expectedSessionId}`,
+    );
+}
 function finishActiveWaiting(
   lifecycle: LifecycleMetadataV1,
   operationId: string,
@@ -1809,12 +1876,12 @@ function finishWaiting(
   };
 }
 
-function recordCheckObservation(
-  lifecycle: LifecycleMetadataV1,
+function recordCheckObservation<T extends LifecycleMetadata>(
+  lifecycle: T,
   operationId: string,
   now: string,
   type = "check_observed",
-): LifecycleMetadataV1 {
+): T {
   if (hasOperation(lifecycle, operationId)) return lifecycle;
   return {
     ...lifecycle,
@@ -1946,7 +2013,7 @@ function recordOperation(
 }
 
 function hasOperation(
-  lifecycle: LifecycleMetadataV1,
+  lifecycle: Pick<LifecycleMetadata, "transitionHistory">,
   operationId: string,
 ): boolean {
   return lifecycle.transitionHistory.some(
@@ -1958,7 +2025,7 @@ function unchangedMutation(
   issue: LifecycleIssue,
   operationId: string,
 ): Mutation {
-  const lifecycle = requireManaged(issue);
+  const lifecycle = requireManagedAny(issue);
   if (!hasOperation(lifecycle, operationId)) {
     throw new Error(
       `task ${issue.id} changed before timeout reconciliation could be recorded`,
