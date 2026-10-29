@@ -32,11 +32,18 @@ async function rootFor(t: TestContext) {
   });
   return root;
 }
-async function readPid(path: string): Promise<number> {
+async function readPid(
+  path: string,
+  read: () => Promise<string> = () => readFile(path, "utf8"),
+): Promise<number> {
   const deadline = Date.now() + 4000;
   while (true) {
     try {
-      return Number(await readFile(path, "utf8"));
+      const pid = Number(await read());
+      // The file can be visible before the fixture finishes writing its PID.
+      if (!Number.isSafeInteger(pid) || pid <= 1)
+        throw new Error(`PID file ${path} does not contain a valid child PID`);
+      return pid;
     } catch (e) {
       if (Date.now() >= deadline) throw e;
     }
@@ -202,3 +209,14 @@ test("early child exit does not leave an unhandled stdin error", async () => {
   );
   assert.equal(result.code, 0);
 });
+
+for (const incomplete of ["", "0", "1", "-1", "1.5", "NaN", "Infinity"]) {
+  test(`PID polling waits for a valid child ID after ${JSON.stringify(incomplete)}`, async () => {
+    let reads = 0;
+    const pid = await readPid("/tmp/fixture-pid", async () =>
+      reads++ === 0 ? incomplete : "9001",
+    );
+    assert.equal(pid, 9001);
+    assert.equal(reads, 2);
+  });
+}
