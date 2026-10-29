@@ -54,13 +54,7 @@ export async function listOwnedTasks(
   store: LifecycleStore,
   sessionId: string,
 ): Promise<LifecycleIssue[]> {
-  const issues = await store.list([
-    "open",
-    "in_progress",
-    "blocked",
-    "deferred",
-    "closed",
-  ]);
+  const issues = await store.list("all");
   const owned: LifecycleIssue[] = [];
   for (const issue of issues) {
     if (
@@ -83,26 +77,7 @@ export class V2LifecycleOperations {
     owner: LockOwner,
   ): Promise<LifecycleIssue> {
     this.requireMode();
-    const now = this.now();
-    return this.deps.store.create(
-      input,
-      {
-        version: 2,
-        phase: "actionable",
-        owner: null,
-        condition: null,
-        pause: null,
-        stateEnteredAt: now,
-        lastProgressAt: now,
-        artifacts: [],
-        activeCheck: null,
-        checkHistory: [],
-        transitionHistory: [],
-        resources: [],
-        disposition: null,
-      },
-      owner,
-    );
+    return this.deps.store.create(input, initialLifecycle(this.now()), owner);
   }
 
   async claim(
@@ -110,23 +85,29 @@ export class V2LifecycleOperations {
     owner: LockOwner,
     operationId = this.deps.uuid(),
   ): Promise<LifecycleIssue> {
-    return this.mutate(taskId, owner, operationId, async (issue) => {
-      const owned = await listOwnedTasks(this.deps.store, owner.sessionId);
-      const different = owned.find((candidate) => candidate.id !== taskId);
-      if (different)
-        throw new Error(
-          `session already owns task ${different.id}; release it before claiming ${taskId}`,
-        );
-      const state = issue.lifecycle;
-      if (state.owner === null && state.phase === "actionable") {
-        const ready = await this.deps.store.readyIds();
-        if (!ready.has(taskId))
+    return this.mutate(
+      taskId,
+      owner,
+      operationId,
+      async (issue) => {
+        const owned = await listOwnedTasks(this.deps.store, owner.sessionId);
+        const different = owned.find((candidate) => candidate.id !== taskId);
+        if (different)
           throw new Error(
-            `task ${taskId} is not natively ready; its prerequisites must be inspected`,
+            `session already owns task ${different.id}; release it before claiming ${taskId}`,
           );
-      }
-      return claimLifecycleV2(state, this.actor(owner, operationId));
-    });
+        const state = issue.lifecycle;
+        if (state.owner === null && state.phase === "actionable") {
+          const ready = await this.deps.store.readyIds();
+          if (!ready.has(taskId))
+            throw new Error(
+              `task ${taskId} is not natively ready; its prerequisites must be inspected`,
+            );
+        }
+        return claimLifecycleV2(state, this.actor(owner, operationId));
+      },
+      true,
+    );
   }
 
   async block(
@@ -612,10 +593,16 @@ export class V2LifecycleOperations {
       issue: LifecycleIssueV2,
       addBlockers: AddBlockers,
     ) => LifecycleMetadataV2 | Promise<LifecycleMetadataV2>,
+    initializeForClaim = false,
   ): Promise<LifecycleIssue> {
     this.requireMode();
     return this.deps.store.mutate(taskId, owner, async (raw, addBlockers) => {
-      let current = requireV2(raw);
+      let current =
+        initializeForClaim &&
+        raw.lifecycle === null &&
+        !Object.hasOwn(raw.metadata, "piLifecycle")
+          ? initializeUnmanagedClaim(raw, operationId, this.now())
+          : requireV2(raw);
       const next = await operation(current, async (ids) => {
         if (ids.length > 0) current = requireV2(await addBlockers(ids));
         return current;
@@ -639,6 +626,60 @@ export class V2LifecycleOperations {
   private actor(owner: LockOwner, operationId: string) {
     return { operationId, sessionId: owner.sessionId, now: this.now() };
   }
+}
+
+function initialLifecycle(now: string): LifecycleMetadataV2 {
+  return {
+    version: 2,
+    phase: "actionable",
+    owner: null,
+    condition: null,
+    pause: null,
+    stateEnteredAt: now,
+    lastProgressAt: now,
+    artifacts: [],
+    activeCheck: null,
+    checkHistory: [],
+    transitionHistory: [],
+    resources: [],
+    disposition: null,
+  };
+}
+
+function initializeUnmanagedClaim(
+  issue: LifecycleIssue,
+  operationId: string,
+  now: string,
+): LifecycleIssueV2 {
+  if (issue.status !== "open")
+    throw new Error(
+      `task ${issue.id} cannot initialize v2 tracking from native status ${issue.status}; review its legacy state before claiming`,
+    );
+  const lifecycle = initialLifecycle(now);
+  if (
+    issue.dependencies.some(
+      (dep) => dep.dependencyType === "blocks" && dep.status !== "closed",
+    )
+  ) {
+    lifecycle.phase = "waiting";
+    lifecycle.condition = {
+      id: `${operationId}:native-dependencies`,
+      kind: "dependency",
+      purpose: "completion",
+    };
+    lifecycle.pause = {
+      id: `${operationId}:native-pause`,
+      blockedAt: now,
+      conditionFingerprint: fingerprintConditionV2(
+        lifecycle,
+        issue.dependencies,
+      )!,
+      observationFingerprint: null,
+    };
+  }
+  const initialized = { ...issue, lifecycle };
+  validateLifecycleV2(lifecycle, initialized);
+  return initialized;
 }
 
 function requireV2(issue: LifecycleIssue): LifecycleIssueV2 {

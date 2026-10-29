@@ -190,7 +190,17 @@ export function applyConditionObservationV2(
     };
   } else if (
     state.pause !== null &&
-    !matchingPause &&
+    state.pause.id === prepared.pause?.id &&
+    observation.outcome === "pending"
+  ) {
+    // A successful non-actionable observation separates repeated actionable outcomes.
+    next = {
+      ...next,
+      pause: { ...state.pause, observationFingerprint: observedFingerprint },
+    };
+  } else if (
+    state.pause !== null &&
+    state.pause.id !== prepared.pause?.id &&
     observation.outcome === "action_required"
   ) {
     // A late aggregate is now known; another poll must not wake a newer pause with it.

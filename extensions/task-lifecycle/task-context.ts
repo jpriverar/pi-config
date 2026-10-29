@@ -1,6 +1,6 @@
 import type { BeadsClient, BeadsIssue } from "../../lib/beads.js";
 import { resolveOwnedTask } from "../../lib/session-identity.js";
-import { ALL_PROJECT_ISSUE_STATUSES } from "../../lib/project-management.js";
+import { requiresCompletionCleanup } from "../../lib/task-lifecycle/presentation.js";
 import type {
   LifecycleCheck,
   LifecycleMetadata,
@@ -32,7 +32,7 @@ export async function readSessionFacts(
 ): Promise<SessionFactsResult> {
   try {
     const [listed, catalog] = await Promise.all([
-      client.listIssues(ALL_PROJECT_ISSUE_STATUSES),
+      client.listIssues("all"),
       readCatalog(),
     ]);
     if (!listed.ok)
@@ -127,6 +127,11 @@ export function selectOwnedTaskContext(
   const description = issue.description?.trim() ? issue.description : null;
   const warnings = [
     ...(issue.taskContextWarnings ?? []),
+    ...(requiresCompletionCleanup(lifecycle)
+      ? [
+          "The completion check is satisfied, but retained worktrees need explicit cleanup before closing.",
+        ]
+      : []),
     ...(viewWarning ? [viewWarning] : []),
     ...(outsideLegacyView
       ? ["Owned task is outside the selected view; ownership is unchanged."]
@@ -175,7 +180,7 @@ export async function readOwnedTaskContext(
   catalog: WorkCatalog | null = null,
 ): Promise<TaskContextResult> {
   try {
-    const result = await client.listIssues(ALL_PROJECT_ISSUE_STATUSES);
+    const result = await client.listIssues("all");
     if (!result.ok) {
       return {
         kind: "unavailable",

@@ -733,7 +733,7 @@ export function createTaskLifecycleExtension(
       name: "task_claim",
       label: "Claim task",
       description: v2
-        ? "Acquire one ready or blocked task for this stable session. Ready work starts; blocked work remains paused. Same-owner claims never resume or reopen implicitly. Ownership survives inactivity, blocking and completion until explicit safe task_release."
+        ? "Acquire one ready or blocked task for this stable session. Ready work starts; blocked work remains paused. Safe native-open tasks without lifecycle metadata initialize tracking on this explicit claim; existing v1 records are never implicitly converted. Same-owner claims never resume or reopen implicitly. Ownership survives inactivity, blocking and completion until explicit safe task_release."
         : "Claim one actionable task for the current Pi session. Ownership persists through inactivity and session shutdown.",
       parameters: objectSchema(
         { taskId: taskIdProperty, operationId: operationIdProperty },

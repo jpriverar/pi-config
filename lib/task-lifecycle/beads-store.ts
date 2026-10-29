@@ -11,6 +11,7 @@ import {
 
 import {
   executeBeads,
+  INCLUDE_HIDDEN_BEADS_FLAGS,
   normalizeBeadsLabel,
   type BeadsExec,
   type BeadsExecResult,
@@ -175,15 +176,23 @@ export function createLifecycleStore(
   }
 
   async function list(
-    statuses: readonly LifecycleStatus[],
+    statuses: readonly LifecycleStatus[] | "all",
   ): Promise<LifecycleIssue[]> {
     if (statuses.length === 0) {
       throw lifecycleStoreError("list issues", store, "statuses are required");
     }
-    for (const status of statuses) assertStatus(status, "list issue status");
+    if (statuses !== "all")
+      for (const status of statuses) assertStatus(status, "list issue status");
     const value = await executeJson(
       "list issues",
-      ["list", "-s", statuses.join(","), "-n", "0", "--json"],
+      [
+        "list",
+        ...(statuses === "all" ? ["--all"] : ["-s", statuses.join(",")]),
+        ...INCLUDE_HIDDEN_BEADS_FLAGS,
+        "-n",
+        "0",
+        "--json",
+      ],
       true,
     );
     return decodeEnvelope(value, "list issues", store).map(
@@ -194,7 +203,7 @@ export function createLifecycleStore(
   async function readyIds(): Promise<ReadonlySet<string>> {
     const value = await executeJson(
       "list ready issues",
-      ["ready", "--json"],
+      ["ready", "-n", "0", "--json"],
       true,
     );
     const ids = decodeEnvelope(value, "list ready issues", store).map(

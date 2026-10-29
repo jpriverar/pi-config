@@ -221,8 +221,11 @@ test("fresh context lookup uses the existing read-only client once", async () =>
     {
       args: [
         "list",
-        "-s",
-        "open,in_progress,blocked,deferred,closed",
+        "--all",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--include-ephemeral",
         "-n",
         "0",
         "--json",

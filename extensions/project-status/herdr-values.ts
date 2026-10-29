@@ -3,7 +3,10 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { BeadsIssue } from "../../lib/beads.js";
 import { resolveOwnedTask } from "../../lib/session-identity.js";
 import type { LifecyclePhase } from "../../lib/task-lifecycle/types.js";
-import { lifecycleStatusLabel } from "../../lib/task-lifecycle/presentation.js";
+import {
+  lifecycleStatusLabel,
+  requiresCompletionCleanup,
+} from "../../lib/task-lifecycle/presentation.js";
 
 export type PaneTokens = Record<
   | "pi_model"
@@ -29,6 +32,7 @@ export type TaskAssignment =
       label: string;
       taskId: string;
       phase?: LifecyclePhase;
+      cleanupRequired?: boolean;
       project?: string;
       area?: string;
     }
@@ -65,7 +69,11 @@ export function taskTokens(
       assignment.state === "assigned" ? (assignment.phase ?? null) : null,
     pi_task_status:
       assignment.state === "assigned"
-        ? lifecycleStatusLabel(assignment.phase, true)
+        ? lifecycleStatusLabel(
+            assignment.phase,
+            true,
+            assignment.cleanupRequired,
+          )
         : null,
     pi_task_id: assignment.state === "assigned" ? assignment.taskId : null,
     // Clear the obsolete deadline left by pre-durable-ownership clients.
@@ -120,7 +128,15 @@ export function selectTaskAssignment(
     return unavailable;
   const label = normalizeMetadata(issue.title);
   return label
-    ? { state: "assigned", label, taskId: issue.id, phase: lifecycle.phase }
+    ? {
+        state: "assigned",
+        label,
+        taskId: issue.id,
+        phase: lifecycle.phase,
+        ...(requiresCompletionCleanup(lifecycle)
+          ? { cleanupRequired: true }
+          : {}),
+      }
     : unavailable;
 }
 

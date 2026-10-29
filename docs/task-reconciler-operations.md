@@ -76,7 +76,11 @@ convert tasks, reload clients, or change the live sidebar. See the
    `piLifecycle` metadata instead of adopting it as legacy. Files on disk do not
    prove a running client loaded the guard. Coordinate safe idle reloads; do not
    terminate busy sessions or children. Readers supporting both schemas can be
-   staged while the writer stays at 1.
+   staged while the writer stays at 1. Verify the installed Beads supports
+   `list --all --include-gates --include-infra --include-templates --include-ephemeral -n 0`
+   and `ready -n 0`. Complete lifecycle discovery must include hidden native
+   records; unsupported flags/statuses or bounded-read failures block the operation
+   rather than falling back to an incomplete population.
 
    RPC and health envelopes are now version 2, independent of schema/policy-file
    versions. Health/runtime information declares `supportedLifecycleVersions`
@@ -111,6 +115,11 @@ convert tasks, reload clients, or change the live sidebar. See the
    be explicitly classified continuation. No owner is inferred from labels,
    history or stale task text. Existing unowned tasks remain unowned; unmanaged
    records remain unmanaged; v2 records are validated and left unchanged.
+   Deferred v1 tasks with unresolved native blockers also need an explicit
+   completion classification even if v1 cleared their waiting field. After
+   activation, an explicit claim may initialize truly untracked native-open work
+   under the [safe initialization rules](task-lifecycle-v2.md#work-boundaries-and-tools);
+   the report itself does not adopt these tasks.
 
    Review source lifecycle evidence/raw metadata, native edges, proposed owners,
    phases, conditions, pauses, captured destinations and blocking diagnostics.
@@ -446,7 +455,8 @@ refusal, concurrent lease renewal, commit-before-reply loss, crash/restart, exac
 manual retry/replacement protection and graceful shutdown. A v2 built-process case
 also verifies capability reporting, writer mismatch refusal, and owner/requirement
 retention after a manual continuation. The separate real-Beads v2 integration
-covers ownership handoff, retained resources, stale pauses and concurrent claims.
+covers ownership handoff, retained resources, stale pauses, concurrent claims,
+explicit initialization of untracked work, and hidden native ownership discovery.
 The daemon fixture is not a real
 embedded-Dolt or live launchd test. Packaging tests use an injected launcher;
 actual macOS plist lint runs without loading the agent. Real launchd install/start

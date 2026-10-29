@@ -1,5 +1,8 @@
 import { ALL_PROJECT_ISSUE_STATUSES } from "../../lib/project-management.js";
-import { lifecycleStatusLabel } from "../../lib/task-lifecycle/presentation.js";
+import {
+  lifecycleStatusLabel,
+  requiresCompletionCleanup,
+} from "../../lib/task-lifecycle/presentation.js";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -116,7 +119,11 @@ export default function projectStatus(
           title: issue.title,
           status:
             issue.lifecycle?.version === 2
-              ? (lifecycleStatusLabel(issue.lifecycle.phase, true) ?? undefined)
+              ? (lifecycleStatusLabel(
+                  issue.lifecycle.phase,
+                  true,
+                  requiresCompletionCleanup(issue.lifecycle),
+                ) ?? undefined)
               : undefined,
           workstream:
             selection.kind === "legacy"
@@ -129,14 +136,18 @@ export default function projectStatus(
       };
     }
 
-    const ready = await client.listReadyIssueIds();
+    const [listed, ready] = await Promise.all([
+      client.listIssues(ALL_PROJECT_ISSUE_STATUSES),
+      client.listReadyIssueIds(),
+    ]);
     if (!current()) return undefined;
-    if (!ready.ok) return "unavailable";
+    if (!listed.ok || !ready.ok) return "unavailable";
+    const browseIssues = listed.value;
 
     const active = selectWorkIssues(
       selection,
       classifyReadiness(
-        issues.filter(
+        browseIssues.filter(
           (issue) => issue.status !== "closed" && issue.status !== "deferred",
         ),
         ready.value,
@@ -145,7 +156,7 @@ export default function projectStatus(
     const historical = selectWorkIssues(
       selection,
       classifyReadiness(
-        issues.filter((issue) => issue.status === "closed"),
+        browseIssues.filter((issue) => issue.status === "closed"),
         new Set(),
       ),
     );
@@ -255,7 +266,7 @@ export default function projectStatus(
       catalog?.state === "active"
         ? undefined
         : resolveSessionSelection(ctx.sessionManager, catalog);
-    const listed = await client.listIssues(ALL_PROJECT_ISSUE_STATUSES);
+    const listed = await client.listIssues("all");
     if (!current()) return;
     const identity =
       catalog?.state === "active"

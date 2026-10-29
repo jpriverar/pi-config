@@ -456,3 +456,36 @@ test("optional manual reminders are evaluated and deduplicated without polling",
   assert.equal(check.lastCheckedAt, null);
   assert.equal(check.nextCheckAt, null);
 });
+
+test("successful delivery with retained resources warns about cleanup once instead of implying completion", async () => {
+  const { withCheck, check, resource, NOW } = await import(
+    "../task-lifecycle/v2-test-fixtures.js"
+  );
+  const row: BeadsIssue = {
+    id: "jp-cleanup",
+    title: "Cleanup task",
+    status: "open",
+    labels: [],
+    lifecycle: withCheck({
+      phase: "actionable",
+      activeCheck: check({
+        state: "satisfied",
+        onSatisfied: "close",
+        lastObservation: "Delivered",
+        lastCheckedAt: NOW,
+      }),
+      resources: [resource()],
+    }),
+  };
+  const first = selectReconciliationNotices([row], health, null);
+  assert.equal(first.notices.length, 1);
+  assert.match(first.notices[0].message, /cleanup.*pending/i);
+  assert.doesNotMatch(
+    first.notices[0].message,
+    /task completed|check satisfied/,
+  );
+  assert.equal(
+    selectReconciliationNotices([row], health, first.cursor).notices.length,
+    0,
+  );
+});

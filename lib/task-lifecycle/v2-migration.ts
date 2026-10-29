@@ -37,13 +37,7 @@ export interface LifecycleV2MigrationStore {
 export async function readLifecycleV2MigrationSnapshot(
   store: Pick<LifecycleStore, "list" | "showMany">,
 ): Promise<LifecycleIssue[]> {
-  const listed = await store.list([
-    "open",
-    "in_progress",
-    "blocked",
-    "deferred",
-    "closed",
-  ]);
+  const listed = await store.list("all");
   const ids = new Set(listed.map((row) => row.id));
   if (ids.size !== listed.length)
     throw new Error("migration snapshot has duplicate issue IDs");
@@ -173,7 +167,15 @@ export function planLifecycleV2Migration(
       }
       validateLifecycle(lifecycle, { ...row, dependencies });
       let condition: TaskCondition | null = null;
-      if (lifecycle.waiting !== null) {
+      const conditionKind =
+        lifecycle.waiting?.kind ??
+        (lifecycle.phase === "deferred" &&
+        dependencies.some(
+          (dep) => dep.dependencyType === "blocks" && dep.status !== "closed",
+        )
+          ? "dependency"
+          : null);
+      if (conditionKind !== null) {
         classified.add(row.id);
         const classification = Object.hasOwn(classifications, row.id)
           ? classifications[row.id]
@@ -200,7 +202,7 @@ export function planLifecycleV2Migration(
           throw new Error("unsupported classification field");
         if (
           classification.purpose !== "completion" &&
-          (lifecycle.waiting.kind === "dependency" ||
+          (conditionKind === "dependency" ||
             lifecycle.activeCheck?.state !== "satisfied")
         )
           throw new Error(
@@ -208,7 +210,7 @@ export function planLifecycleV2Migration(
           );
         condition = {
           id: `migration:${row.id}:${digest({ lifecycle, classification })}`,
-          kind: lifecycle.waiting.kind,
+          kind: conditionKind,
           purpose: classification.purpose,
         };
       }

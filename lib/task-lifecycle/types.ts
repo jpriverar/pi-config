@@ -263,7 +263,7 @@ export interface LifecycleIssue {
 export interface LifecycleStore {
   show(id: string): Promise<LifecycleIssue>;
   showMany(ids: readonly string[]): Promise<LifecycleIssue[]>;
-  list(statuses: readonly LifecycleStatus[]): Promise<LifecycleIssue[]>;
+  list(statuses: readonly LifecycleStatus[] | "all"): Promise<LifecycleIssue[]>;
   readyIds(): Promise<ReadonlySet<string>>;
   create(
     input: CreateTaskInput,

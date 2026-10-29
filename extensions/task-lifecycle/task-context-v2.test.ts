@@ -105,22 +105,35 @@ test("shared and direct context reads query all phases without a native row limi
   const task = row(done);
   const statuses: string[] = [];
   const client = createBeadsClient(async (_command, args, options) => {
-    const requested = args[args.indexOf("-s") + 1];
+    const requested = args.includes("--all")
+      ? "all"
+      : args[args.indexOf("-s") + 1];
     statuses.push(requested);
     assert.equal(args[args.indexOf("-n") + 1], "0");
     assert.equal(options?.env.BD_BACKUP_ENABLED, "false");
-    const values = requested.split(",").includes("closed")
-      ? [
-          {
-            id: task.id,
-            title: task.title,
-            status: task.status,
-            labels: task.labels,
-            description: task.description,
-            metadata: { piLifecycle: task.lifecycle, next_step: task.nextStep },
-          },
-        ]
-      : [];
+    for (const flag of [
+      "--include-gates",
+      "--include-infra",
+      "--include-templates",
+      "--include-ephemeral",
+    ])
+      assert.ok(args.includes(flag));
+    const values =
+      requested === "all"
+        ? [
+            {
+              id: task.id,
+              title: task.title,
+              status: task.status,
+              labels: task.labels,
+              description: task.description,
+              metadata: {
+                piLifecycle: task.lifecycle,
+                next_step: task.nextStep,
+              },
+            },
+          ]
+        : [];
     return { code: 0, stderr: "", stdout: JSON.stringify(values) };
   });
   const facts = await readSessionFacts(client, async () => null);
@@ -131,10 +144,7 @@ test("shared and direct context reads query all phases without a native row limi
     (await readOwnedTaskContext(client, session())).kind,
     "available",
   );
-  assert.deepEqual(statuses, [
-    "open,in_progress,blocked,deferred,closed",
-    "open,in_progress,blocked,deferred,closed",
-  ]);
+  assert.deepEqual(statuses, ["all", "all"]);
 });
 
 test("invalid closed ownership and truncated reads remain unavailable", async () => {

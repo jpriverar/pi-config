@@ -22,7 +22,7 @@ import {
   createBeadsClient,
   withBeadsEnvironment,
   lifecycleAnnotation,
-  classifyListedIssues,
+  listClassifiedIssues,
   type BeadsError,
   type BeadsIssue,
   type ClassifiedIssue,
@@ -691,13 +691,7 @@ export function registerTaskWorkState(
         }
         const priorSerialized = JSON.stringify(cursor);
         const [classified, health] = await Promise.all([
-          classifyListedIssues(
-            client,
-            facts.issues.filter(
-              (issue) =>
-                issue.status !== "deferred" && issue.status !== "closed",
-            ),
-          ),
+          listClassifiedIssues(client),
           readHealth(),
         ]);
         assertCurrent();

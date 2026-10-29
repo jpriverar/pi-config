@@ -604,3 +604,68 @@ for (const changed of ["proposal", "source"] as const) {
     assert.deepEqual(h.writes, []);
   });
 }
+
+test("a deferred native dependency group converts with an explicit completion classification", async () => {
+  const { deferLifecycle, validateLifecycle } = await import("./model.js");
+  const deferred = deferLifecycle(
+    { ...legacy(), waiting: { kind: "dependency" } },
+    { operationId: "defer", now: NOW, reason: "Park dependent work" },
+  );
+  const source = issue("jp-one", deferred);
+  source.dependencies = [
+    { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+  ];
+  validateLifecycle(deferred, source);
+  const before = structuredClone(source);
+  const plan = planLifecycleV2Migration(
+    [source, issue("jp-blocker", null)],
+    completion,
+  );
+  assert.deepEqual(plan.diagnostics, []);
+  const converted = plan.proposals[0].lifecycle;
+  assert.equal(converted.phase, "deferred");
+  assert.equal(converted.owner, null);
+  assert.equal(converted.condition?.kind, "dependency");
+  assert.equal(converted.condition?.purpose, "completion");
+  assert.equal(converted.pause, null);
+  validateLifecycleV2(converted, { ...source, lifecycle: converted });
+  assert.deepEqual(source, before);
+});
+
+test("deferred native blockers require explicit classification rather than silently waiving them", () => {
+  const source = issue("jp-one", {
+    ...legacy("actionable"),
+    phase: "deferred",
+  });
+  source.dependencies = [
+    { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+  ];
+  const plan = planLifecycleV2Migration(
+    [source, issue("jp-blocker", null)],
+    {},
+  );
+  assert.match(plan.diagnostics.join("\n"), /explicit purpose classification/);
+});
+
+test("cancelled Done tasks retain native edges without inventing a new completion gate", () => {
+  const source = issue("jp-one", {
+    ...legacy("actionable"),
+    phase: "done",
+    disposition: {
+      kind: "cancelled",
+      at: NOW,
+      reason: "Explicit cancellation",
+      evidenceArtifactIds: [],
+    },
+  });
+  source.dependencies = [
+    { id: "jp-blocker", status: "open", dependencyType: "blocks" },
+  ];
+  const plan = planLifecycleV2Migration(
+    [source, issue("jp-blocker", null)],
+    {},
+  );
+  assert.deepEqual(plan.diagnostics, []);
+  assert.equal(plan.proposals[0].lifecycle.condition, null);
+  assert.equal(plan.proposals[0].lifecycle.phase, "done");
+});

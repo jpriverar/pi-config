@@ -49,6 +49,16 @@ These transitions accept optional `operationId`; reuse the same operation bindin
 when recovering an uncertain acknowledgement. Successful release of X followed by
 failed claim of Y leaves X released and Y unclaimed. It does not resurrect X.
 
+An explicit claim can initialize v2 tracking for an older task with **no**
+`piLifecycle` metadata. Only native `open` work is eligible: natively ready work
+starts In progress, while unresolved native dependencies become a completion
+requirement and a Blocked pause with the new owner. The same store lock enforces
+one task per session. Unrelated metadata, labels and native edges are preserved.
+Native blocked/in-progress/deferred/closed records require legacy-state review
+rather than guessed ownership or conditions. This is not automatic backlog
+adoption, and present v1, malformed or unsupported lifecycle metadata never takes
+this path. Existing v1 tasks still need the reviewed conversion.
+
 Block only when useful approved work has actually paused, including productive
 children. Blocking does not stop them. Turn end, brief observation, inactivity
 and a cosmetic dashboard preference are not block events. Ready/Blocked ownership
@@ -119,7 +129,9 @@ a newer pause, close resumed work or restore an old owner. A repeated historical
 PR aggregate is not a fresh review response. Current matching intent can reuse
 persisted success without polling again, but requires an observation and timestamp.
 If success arrives with resources retained, work becomes Ready with cleanup
-required; reconciliation never deletes the checkout.
+required; reconciliation never deletes the checkout. Header/table labels, owned
+context and notices derive that cleanup cue from the persisted check and resource
+facts, so a restart does not imply completion.
 
 Existing automated checks support PR merge, changes requested, conflict,
 closed-unmerged, and time predicates. Approval-as-success, fresh-review-response
@@ -142,8 +154,12 @@ until the separate task release succeeds.
 
 ## Identity, displays and Work Management
 
-Ownership discovery includes open, in-progress, blocked, deferred and closed
-records before applying browse filters. Same-session reload recovers ownership;
+Ownership, resource-association and migration discovery request all native
+statuses and explicitly include hidden gate, infrastructure, template and ephemeral
+records, without a row limit. Unsupported flags, statuses or incomplete reads
+fail closed; there is no narrower fallback. Native readiness also requests no
+row limit. Ordinary browsing remains a separate native-filtered query, not an
+ownership filter. Same-session reload recovers ownership;
 a new/forked ID does not inherit it. Duplicates, unsupported metadata and incomplete
 reads are Unavailable, not Unassigned. Non-active owned context warns that it is
 not execution permission, and completion review does not treat Done as delivery.

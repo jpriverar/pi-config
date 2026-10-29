@@ -546,3 +546,125 @@ test("persisted manual success may settle without inventing new manual input", (
   assert.equal(result.state.phase, "actionable");
   assert.equal(result.state.activeCheck?.lastCheckedAt, NOW);
 });
+
+for (const actionable of ["changes_requested", "merge_conflict"]) {
+  test(`an observed pending state permits renewed ${actionable} to end the same pause`, () => {
+    const original = prState();
+    original.activeCheck!.state = "action_required";
+    original.activeCheck!.lastObservation = actionable;
+    const blocked = pause(original);
+    const pending = applyConditionObservationV2(
+      blocked,
+      prepare(blocked, "pending"),
+      { outcome: "pending", observation: "0/1 merged" },
+      LATER,
+    ).state;
+    assert.equal(pending.phase, "waiting");
+    const result = applyConditionObservationV2(
+      pending,
+      prepare(pending, "renewed"),
+      { outcome: "action_required", observation: actionable },
+      LATER,
+    );
+    assert.equal(result.state.phase, "actionable");
+    assert.equal(result.state.pause, null);
+    assert.equal(result.state.condition?.purpose, "completion");
+    assert.equal(result.state.activeCheck?.state, "action_required");
+  });
+}
+
+test("an observation error does not make the same known actionable aggregate fresh", () => {
+  const original = prState();
+  original.activeCheck!.state = "action_required";
+  original.activeCheck!.lastObservation = "changes_requested";
+  const blocked = pause(original);
+  const failed = applyConditionObservationV2(
+    blocked,
+    prepare(blocked, "error"),
+    { outcome: "error", observation: "GitHub unavailable" },
+    LATER,
+  ).state;
+  const result = applyConditionObservationV2(
+    failed,
+    prepare(failed, "retry"),
+    requested,
+    LATER,
+  );
+  assert.equal(result.state.phase, "waiting");
+  assert.equal(result.state.pause?.id, blocked.pause?.id);
+});
+
+for (const newOwner of [null, OWNER.sessionId, "session-b"]) {
+  test(`an ownership-only fence leaves the same pause eligible for the next current poll (${newOwner})`, () => {
+    const original = pause(prState());
+    const prepared = prepare(original, "old-owner");
+    const released = releaseLifecycleV2(original, {
+      operationId: "release",
+      sessionId: OWNER.sessionId,
+      now: NOW,
+      reason: "Handoff",
+    });
+    const current =
+      newOwner === null
+        ? released
+        : claimLifecycleV2(released, {
+            operationId: "claim-new",
+            sessionId: newOwner,
+            now: NOW,
+          });
+    const late = applyConditionObservationV2(
+      current,
+      prepared,
+      requested,
+      LATER,
+    ).state;
+    assert.equal(late.phase, "waiting");
+    assert.equal(late.pause?.id, original.pause?.id);
+    const result = applyConditionObservationV2(
+      late,
+      prepare(late, "current-owner"),
+      requested,
+      LATER,
+    );
+    assert.equal(result.state.phase, "actionable");
+    assert.equal(result.state.pause, null);
+    assert.equal(result.state.owner?.sessionId ?? null, newOwner);
+    assert.equal(result.state.condition?.purpose, "completion");
+  });
+}
+
+test("a pending fact from the previous owner separates repeated signals within the same pause", () => {
+  const initial = prState();
+  initial.activeCheck!.state = "action_required";
+  initial.activeCheck!.lastObservation = "changes_requested";
+  const blocked = pause(initial);
+  const prepared = prepare(blocked, "old-owner-pending");
+  const released = releaseLifecycleV2(blocked, {
+    operationId: "release",
+    sessionId: OWNER.sessionId,
+    now: NOW,
+    reason: "Handoff",
+  });
+  const reclaimed = claimLifecycleV2(released, {
+    operationId: "claim-b",
+    sessionId: "session-b",
+    now: NOW,
+  });
+  const pending = applyConditionObservationV2(
+    reclaimed,
+    prepared,
+    { outcome: "pending", observation: "0/1 merged" },
+    LATER,
+  ).state;
+  assert.equal(pending.phase, "waiting");
+  assert.equal(pending.pause?.id, blocked.pause?.id);
+  const fresh = applyConditionObservationV2(
+    pending,
+    prepare(pending, "new-owner-requested"),
+    requested,
+    LATER,
+  ).state;
+  assert.equal(fresh.phase, "actionable");
+  assert.equal(fresh.owner?.sessionId, "session-b");
+  assert.equal(fresh.condition?.purpose, "completion");
+});

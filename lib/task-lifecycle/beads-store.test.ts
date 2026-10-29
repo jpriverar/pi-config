@@ -358,7 +358,23 @@ test("list preserves Beads edge summaries with unknown target status", async () 
     { id: "jp-blocker", status: "unknown", dependencyType: "blocks" },
   ]);
   assert.deepEqual(calls, [
-    ["bd", ["list", "-s", "open", "-n", "0", "--json", "--db", STORE]],
+    [
+      "bd",
+      [
+        "list",
+        "-s",
+        "open",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--include-ephemeral",
+        "-n",
+        "0",
+        "--json",
+        "--db",
+        STORE,
+      ],
+    ],
   ]);
 });
 
@@ -486,8 +502,24 @@ test("lists statuses and reads native ready IDs through the explicit store", asy
   assert.equal(listed[0].id, "jp-1");
   assert.deepEqual([...ready], ["jp-1"]);
   assert.deepEqual(calls, [
-    ["bd", ["list", "-s", "open,blocked", "-n", "0", "--json", "--db", STORE]],
-    ["bd", ["ready", "--json", "--db", STORE]],
+    [
+      "bd",
+      [
+        "list",
+        "-s",
+        "open,blocked",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--include-ephemeral",
+        "-n",
+        "0",
+        "--json",
+        "--db",
+        STORE,
+      ],
+    ],
+    ["bd", ["ready", "-n", "0", "--json", "--db", STORE]],
   ]);
 });
 

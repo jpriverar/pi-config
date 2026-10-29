@@ -354,7 +354,7 @@ test("lists ready issue IDs in source order", async () => {
   assert.deepEqual(fake.calls, [
     {
       command: "bd",
-      args: ["ready", "--json", "--db", store],
+      args: ["ready", "-n", "0", "--json", "--db", store],
     },
   ]);
   assert.equal(result.ok, true);
@@ -891,7 +891,7 @@ test("classifies blocker summaries with one batched status lookup", async () => 
     },
     {
       command: "bd",
-      args: ["ready", "--json", "--db", store],
+      args: ["ready", "-n", "0", "--json", "--db", store],
     },
     {
       command: "bd",

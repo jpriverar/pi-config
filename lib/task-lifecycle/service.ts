@@ -1486,13 +1486,16 @@ export class TaskLifecycleService {
   }
 
   async associatedTasksForClaim(claimId: string): Promise<LifecycleIssue[]> {
-    const issues = await this.deps.store.list([
-      "open",
-      "in_progress",
-      "blocked",
-      "deferred",
-      "closed",
-    ]);
+    const issues = await this.deps.store.list("all");
+    for (const issue of issues) {
+      if (
+        issue.lifecycle === null &&
+        Object.hasOwn(issue.metadata, "piLifecycle")
+      )
+        throw new Error(
+          `task ${issue.id} has invalid or unsupported piLifecycle metadata; resource associations are unavailable`,
+        );
+    }
     return issues
       .filter((issue) =>
         issue.lifecycle?.resources.some(

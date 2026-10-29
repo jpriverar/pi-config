@@ -93,6 +93,7 @@ function createHarness(
     catalog?: WorkCatalog | null;
     catalogError?: string;
     issues?: BeadsIssue[];
+    hiddenIds?: string[];
     readyIds?: string[];
     closed?: BeadsIssue[];
     unavailable?: Query;
@@ -143,8 +144,11 @@ function createHarness(
           : args.includes("closed")
             ? "closed"
             : "active";
-      const statuses =
-        args[0] === "list" ? args[args.indexOf("-s") + 1].split(",") : [];
+      const statuses = args.includes("--all")
+        ? ["open", "in_progress", "blocked", "deferred", "closed"]
+        : args[0] === "list"
+          ? args[args.indexOf("-s") + 1].split(",")
+          : [];
       if (
         unavailable === query ||
         (unavailable === "closed" && statuses.includes("closed"))
@@ -161,7 +165,14 @@ function createHarness(
               );
       return {
         code: 0,
-        stdout: JSON.stringify(result.map(rawIssue)),
+        stdout: JSON.stringify(
+          result
+            .filter(
+              (item) =>
+                args.includes("--all") || !options.hiddenIds?.includes(item.id),
+            )
+            .map(rawIssue),
+        ),
         stderr: "",
       };
     },
@@ -739,7 +750,7 @@ test("a stalled display lookup cannot prevent a prompt from starting", async () 
 test("task display queries pass a finite timeout to the process boundary", async () => {
   const h = createHarness();
   await start(h);
-  assert.equal(h.executionLimits.length, 2);
+  assert.equal(h.executionLimits.length, 3);
   assert.ok(h.executionLimits.every((limits) => limits?.timeout === 1500));
 });
 
@@ -795,8 +806,8 @@ for (const { scope, name, expected } of [
     assert.equal(h.renderHeader().trimEnd(), expected);
     assert.equal(
       h.calls.length,
-      2,
-      "reuse the complete issue snapshot for all scopes",
+      3,
+      "separate complete ownership, normal browsing and native readiness",
     );
   });
 }
@@ -815,7 +826,7 @@ test("empty global view keeps identity without a redundant browse label", async 
   });
   await start(h);
   assert.equal(h.renderHeader().trimEnd(), "pi-setup");
-  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls.length, 3);
 });
 
 test("Herdr publishes owned project and area independently of the browse view", async () => {
@@ -1389,4 +1400,69 @@ test("new lifecycle transitions refresh phase without clearing identity or wakeu
   assert.equal(h.metadata.at(-1)!.pi_project, null);
   assert.equal(h.metadata.at(-1)!.pi_area, null);
   await h.handlers.get("session_shutdown")?.({}, h.context);
+});
+
+test("native-hidden ownership still supplies the header and Herdr identity", async () => {
+  const row = await ownedV2("actionable");
+  const h = createHarness({
+    catalog: catalogViewFixture().catalog,
+    entries: [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "global" } },
+      },
+    ],
+    issues: [row],
+    hiddenIds: [row.id],
+    herdr: true,
+  });
+  await start(h);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.pi_task_id, row.id);
+  assert.match(h.renderHeader(240), /Ready to resume/);
+  assert.equal(h.calls.length, 1);
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+});
+
+test("complete ownership discovery does not add native-hidden work to backlog counts", async () => {
+  const h = createHarness({
+    issues: [issue("jp-visible"), issue("jp-hidden")],
+    hiddenIds: ["jp-hidden"],
+    readyIds: ["jp-visible", "jp-hidden"],
+  });
+  await start(h);
+  assert.match(h.renderHeader(240), /1 ready/);
+  assert.doesNotMatch(h.renderHeader(240), /2 ready/);
+  assert.equal(h.calls.filter((args) => args.includes("--all")).length, 1);
+  assert.equal(
+    h.calls.filter((args) => args[0] === "list" && !args.includes("--all"))
+      .length,
+    1,
+  );
+});
+
+test("owned successful work with retained resources has an explicit cleanup header", async () => {
+  const row = await ownedV2("actionable");
+  const { resource, NOW } = await import(
+    "../../lib/task-lifecycle/v2-test-fixtures.js"
+  );
+  row.lifecycle!.activeCheck!.onSatisfied = "close";
+  row.lifecycle!.activeCheck!.state = "satisfied";
+  row.lifecycle!.activeCheck!.lastCheckedAt = NOW;
+  row.lifecycle!.activeCheck!.lastObservation = "Delivered";
+  row.lifecycle!.resources = [resource()];
+  const h = createHarness({
+    catalog: catalogViewFixture().catalog,
+    entries: [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "global" } },
+      },
+    ],
+    issues: [row],
+  });
+  await start(h);
+  assert.match(h.renderHeader(240), /Ready.*cleanup required/i);
 });

@@ -83,6 +83,7 @@ function createHarness(
     branch?: any[];
     entries?: any[];
     issues?: BeadsIssue[];
+    hiddenIds?: string[];
     readyIds?: string[];
     health?: () => Promise<DaemonHealth>;
     exec?: (
@@ -152,10 +153,19 @@ function createHarness(
         stderr: "",
       };
     }
+    const statuses =
+      args[0] === "list" && !args.includes("--all")
+        ? args[args.indexOf("-s") + 1].split(",")
+        : null;
     const selected =
       args[0] === "ready"
         ? issues.filter((issue) => readyIds.has(issue.id))
-        : issues;
+        : issues.filter(
+            (issue) =>
+              (statuses === null || statuses.includes(issue.status)) &&
+              (args.includes("--all") ||
+                !options.hiddenIds?.includes(issue.id)),
+          );
     return {
       code: 0,
       stdout: JSON.stringify(selected.map(rawIssue)),
@@ -1268,7 +1278,7 @@ for (const scope of [
     );
   });
 }
-test("navigation during the global facts read selects the latest view without relisting", async () => {
+test("navigation during global facts selects the latest browse view without repeating ownership discovery", async () => {
   const fixture = catalogViewFixture();
   const issues = fixture.issues.map((issue) => ({
     ...issue,
@@ -1303,7 +1313,8 @@ test("navigation during the global facts read selects the latest view without re
   assert.doesNotMatch(result.message.content, /zz-api|zz-unscoped/);
   assert.equal(h.cursors.at(-1)?.data.scopeKey, `project:${Q}`);
   assert.deepEqual(h.cursors.at(-1)?.data.cursor.knownTaskIds, ["zz-other"]);
-  assert.equal(h.calls.filter((c) => c.args[0] === "list").length, 1);
+  assert.equal(h.calls.filter((c) => c.args[0] === "list").length, 2);
+  assert.equal(h.calls.filter((c) => c.args.includes("--all")).length, 1);
 });
 
 test("scope changes during classification cannot append reconciliation cursors", async () => {
@@ -1615,9 +1626,7 @@ test("closed owned tasks supply identity and context without returning to the ba
   assert.match(hidden.message.content, /"task_id": "jp-held"/);
   assert.doesNotMatch(hidden.message.content, /^- jp-held /m);
   const read = h.calls.find((call) => call.args[0] === "list")!;
-  assert.ok(
-    read.args[read.args.indexOf("-s") + 1].split(",").includes("closed"),
-  );
+  assert.ok(read.args.includes("--all"));
 });
 
 test("owned Ready work is visible but not advertised as another session's actionable candidate", async () => {
@@ -1677,4 +1686,26 @@ test("legacy-view startup rendering preserves native readiness for owned Ready w
   const rendered = renderCard(h, 180);
   assert.match(rendered, /Ready to resume/);
   assert.doesNotMatch(rendered, /\b\d+d\b/);
+});
+
+test("native-hidden ownership supplies context without exposing hidden work in the backlog", async () => {
+  const { state, OWNER } = await import(
+    "../../lib/task-lifecycle/v2-test-fixtures.js"
+  );
+  const h = createHarness({
+    sessionId: OWNER.sessionId,
+    issues: [
+      {
+        ...issue("jp-hidden-owner", "in_progress", ["workstream:pi-setup"]),
+        lifecycle: state({ phase: "active", owner: OWNER }),
+      },
+      issue("jp-hidden-free", "open", ["workstream:pi-setup"]),
+      issue("jp-visible", "open", ["workstream:pi-setup"]),
+    ],
+    hiddenIds: ["jp-hidden-owner", "jp-hidden-free"],
+  });
+  const result = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.match(result.message.content, /"task_id": "jp-hidden-owner"/);
+  assert.match(result.message.content, /^- jp-visible /m);
+  assert.doesNotMatch(result.message.content, /^- jp-hidden/m);
 });

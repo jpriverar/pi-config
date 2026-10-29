@@ -82,17 +82,30 @@ export async function fixture(
           .slice(1, args.indexOf("--long"))
           .map((id) => records.get(id));
       } else if (args[0] === "list") {
-        const statuses = args[args.indexOf("-s") + 1].split(",");
+        const statuses = args.includes("--all")
+          ? null
+          : args[args.indexOf("-s") + 1].split(",");
         assert.equal(args[args.indexOf("-n") + 1], "0");
-        result = [...records.values()].filter((record) =>
-          statuses.includes(record.status),
+        result = [...records.values()].filter(
+          (record) =>
+            (statuses === null || statuses.includes(record.status)) &&
+            (record.issue_type !== "gate" ||
+              args.includes("--include-gates")) &&
+            (!["agent", "role", "message"].includes(record.issue_type) ||
+              args.includes("--include-infra")) &&
+            (!record.is_template || args.includes("--include-templates")) &&
+            (!record.ephemeral || args.includes("--include-ephemeral")),
         );
       } else if (args[0] === "ready") {
-        result = [...records.values()].filter(
+        const ready = [...records.values()].filter(
           (record) =>
             record.status === "open" &&
             record.dependencies.every((dep: any) => dep.status === "closed"),
         );
+        result =
+          args.includes("-n") && args[args.indexOf("-n") + 1] === "0"
+            ? ready
+            : ready.slice(0, 100);
       } else if (args[0] === "update") {
         writes.push("update:" + args[1]);
         const current = records.get(args[1])!;

@@ -1,4 +1,5 @@
 import { ownerOf } from "./task-lifecycle/ownership.js";
+import { requiresCompletionCleanup } from "./task-lifecycle/presentation.js";
 import {
   summarizeWorkManagement,
   decodeWorkManagement,
@@ -44,6 +45,14 @@ export type IssueStatus =
   | "deferred"
   | "closed";
 export type Readiness = "in_progress" | "blocked" | "ready" | "waiting";
+
+// Native list hides these categories independently of status and result limits.
+export const INCLUDE_HIDDEN_BEADS_FLAGS = [
+  "--include-gates",
+  "--include-infra",
+  "--include-templates",
+  "--include-ephemeral",
+] as const;
 
 export interface BeadsIssue {
   id: string;
@@ -140,7 +149,7 @@ export interface BeadsClient {
   ): Promise<BeadsResult<T>>;
 
   listIssues(
-    statuses?: readonly IssueStatus[],
+    statuses?: readonly IssueStatus[] | "all",
   ): Promise<BeadsResult<BeadsIssue[]>>;
 
   listReadyIssueIds(): Promise<BeadsResult<ReadonlySet<string>>>;
@@ -473,15 +482,28 @@ export function createBeadsClient(
     listIssues(statuses = ["open", "in_progress", "blocked"]) {
       return readBd(
         "list issues",
-        ["list", "-s", statuses.join(","), "-n", "0", "--json"],
+        statuses === "all"
+          ? [
+              "list",
+              "--all",
+              ...INCLUDE_HIDDEN_BEADS_FLAGS,
+              "-n",
+              "0",
+              "--json",
+            ]
+          : ["list", "-s", statuses.join(","), "-n", "0", "--json"],
         decodeIssues,
       );
     },
     listReadyIssueIds() {
-      return readBd("list ready issues", ["ready", "--json"], (value) => {
-        const issues = decodeIssues(value);
-        return new Set(issues.map((issue) => issue.id));
-      });
+      return readBd(
+        "list ready issues",
+        ["ready", "-n", "0", "--json"],
+        (value) => {
+          const issues = decodeIssues(value);
+          return new Set(issues.map((issue) => issue.id));
+        },
+      );
     },
     showIssues(ids) {
       const normalizedIds = ids.map(normalizeId);
@@ -698,8 +720,13 @@ export function classifyReadiness(
           warnings.push("dependency wait has no unresolved blocker");
         }
       }
+      const cleanupRequired = requiresCompletionCleanup(issue.lifecycle);
       for (const resource of issue.lifecycle.resources) {
-        if (
+        if (cleanupRequired && resource.cleanupState !== "released") {
+          warnings.push(
+            `cleanup required for worktree ${resource.claimId} (${resource.cleanupState.replace("_", " ")}); release it explicitly before closing`,
+          );
+        } else if (
           issue.lifecycle.phase === "waiting" &&
           resource.cleanupState === "active"
         ) {

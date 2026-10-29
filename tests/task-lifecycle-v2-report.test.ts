@@ -106,10 +106,14 @@ test("report runs only native reads against the explicit isolated store and writ
     calls.map((c) => c.args[0]),
     ["list", "show"],
   );
-  assert.equal(
-    calls[0].args[calls[0].args.indexOf("-s") + 1],
-    "open,in_progress,blocked,deferred,closed",
-  );
+  for (const flag of [
+    "--all",
+    "--include-gates",
+    "--include-infra",
+    "--include-templates",
+    "--include-ephemeral",
+  ])
+    assert.ok(calls[0].args.includes(flag));
   assert.equal(calls[0].args[calls[0].args.indexOf("-n") + 1], "0");
   assert.ok(
     calls.every((c) => c.args[c.args.indexOf("--db") + 1] === report.storePath),

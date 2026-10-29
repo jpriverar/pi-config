@@ -2045,9 +2045,11 @@ async function catalogIdentityHarness(lifecycleWriteVersion: 1 | 2 = 1) {
     const args = command === "env" ? originalArgs.slice(2) : originalArgs;
     if (args[0] === "list") {
       reads++;
-      const statuses = args[args.indexOf("-s") + 1].split(",");
-      const listed = (await readRows()).filter((row) =>
-        statuses.includes(row.status),
+      const statuses = args.includes("--all")
+        ? null
+        : args[args.indexOf("-s") + 1].split(",");
+      const listed = (await readRows()).filter(
+        (row) => statuses === null || statuses.includes(row.status),
       );
       return { code: 0, stdout: JSON.stringify(listed), stderr: "" };
     }
@@ -2126,7 +2128,7 @@ for (const conflict of ["deferred status", "non-active execution"] as const) {
     assert.deepEqual(projection(), before);
     assert.match(JSON.stringify(result), /unavailable/i);
     assert.doesNotMatch(JSON.stringify(result), /The exact owned mission/);
-    assert.equal(h.reads(), 2);
+    assert.equal(h.reads(), 3);
   });
 }
 
@@ -2144,7 +2146,7 @@ test("deferred ownership facts do not broaden the model work overview", async ()
     JSON.stringify(result),
     /Owned task|The exact owned mission/,
   );
-  assert.equal(h.reads(), 2);
+  assert.equal(h.reads(), 3);
 });
 
 test("failed claim leaves identity and browsing untouched without a projection read", async () => {
@@ -2376,13 +2378,13 @@ test("authoritative recovery supersedes the fresh catalog-session seed", async (
   });
 });
 
-test("fresh startup reuses overview facts for identity without a second listing", async () => {
+test("fresh startup shares ownership facts while keeping browse discovery separate", async () => {
   const h = await catalogIdentityHarness();
   h.context.sessionManager.getBranch = () => h.entries;
   await h.event("session_start", { reason: "startup" });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(h.context.sessionManager.getSessionName(), "before");
-  assert.equal(h.reads(), 1);
+  assert.equal(h.reads(), 2);
   assert.equal(
     h.entries.filter((entry) => entry.customType === "jp-work-startup").length,
     1,
