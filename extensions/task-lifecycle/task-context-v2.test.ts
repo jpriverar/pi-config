@@ -115,7 +115,6 @@ test("shared and direct context reads query all phases without a native row limi
       "--include-gates",
       "--include-infra",
       "--include-templates",
-      "--include-ephemeral",
     ])
       assert.ok(args.includes(flag));
     const values =

@@ -225,7 +225,6 @@ test("fresh context lookup uses the existing read-only client once", async () =>
         "--include-gates",
         "--include-infra",
         "--include-templates",
-        "--include-ephemeral",
         "-n",
         "0",
         "--json",

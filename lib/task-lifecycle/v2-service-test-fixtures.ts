@@ -94,7 +94,7 @@ export async function fixture(
             (!["agent", "role", "message"].includes(record.issue_type) ||
               args.includes("--include-infra")) &&
             (!record.is_template || args.includes("--include-templates")) &&
-            (!record.ephemeral || args.includes("--include-ephemeral")),
+            (!record.ephemeral || args.includes("--include-infra")),
         );
       } else if (args[0] === "ready") {
         const ready = [...records.values()].filter(

@@ -77,7 +77,7 @@ convert tasks, reload clients, or change the live sidebar. See the
    prove a running client loaded the guard. Coordinate safe idle reloads; do not
    terminate busy sessions or children. Readers supporting both schemas can be
    staged while the writer stays at 1. Verify the installed Beads supports
-   `list --all --include-gates --include-infra --include-templates --include-ephemeral -n 0`
+   `list --all --include-gates --include-infra --include-templates -n 0`
    and `ready -n 0`. Complete lifecycle discovery must include hidden native
    records; unsupported flags/statuses or bounded-read failures block the operation
    rather than falling back to an incomplete population.

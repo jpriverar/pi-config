@@ -417,60 +417,61 @@ test(
     assert.equal(v2(blocked).condition?.purpose, "completion");
     assert.equal(blocked.dependencies[0].id, unmanaged);
 
-    const gateOwner = actor("hidden-owner");
-    const timestamp = new Date(now).toISOString();
-    const gateState = withCheck({
-      owner: {
-        sessionId: gateOwner.sessionId,
-        claimedAt: timestamp,
-        lastActivityAt: timestamp,
-      },
-    });
-    const gatePause = blockLifecycleV2(gateState, {
-      operationId: "gate-pause",
-      sessionId: gateOwner.sessionId,
-      now: timestamp,
-      reason: "Native hidden ownership fixture",
-      conditionFingerprint: fingerprintConditionV2(gateState, [])!,
-    });
-    const gate = await nativeCreate("Owned hidden gate", [
-      "--type",
-      "gate",
-      "--metadata",
-      JSON.stringify({ piLifecycle: gatePause }),
-    ]);
-    await must("bd", ["update", gate, "-s", "blocked", "--db", storePath]);
-    const normal = JSON.parse(
-      await must("bd", [
-        "list",
-        "--all",
-        "-n",
-        "0",
-        "--json",
-        "--db",
-        storePath,
-      ]),
-    );
-    assert.equal(
-      normal.some((row: { id: string }) => row.id === gate),
-      false,
-    );
-    assert.deepEqual(
-      (await sut.ownedTasksForSession(gateOwner.sessionId)).map(
-        (row) => row.id,
-      ),
-      [gate],
-    );
-    assert.ok(
-      (await readLifecycleV2MigrationSnapshot(store)).some(
-        (row) => row.id === gate,
-      ),
-    );
-    const unclaimed = claims[0].status === "rejected" ? first : second;
-    await assert.rejects(
-      sut.claim(unclaimed.id, gateOwner, "second-hidden-claim"),
-      /already owns/,
-    );
+    for (const kind of ["gate", "ephemeral"] as const) {
+      const hiddenOwner = actor(`hidden-${kind}-owner`);
+      const timestamp = new Date(now).toISOString();
+      const hiddenState = withCheck({
+        owner: {
+          sessionId: hiddenOwner.sessionId,
+          claimedAt: timestamp,
+          lastActivityAt: timestamp,
+        },
+      });
+      const hiddenPause = blockLifecycleV2(hiddenState, {
+        operationId: "gate-pause",
+        sessionId: hiddenOwner.sessionId,
+        now: timestamp,
+        reason: "Native hidden ownership fixture",
+        conditionFingerprint: fingerprintConditionV2(hiddenState, [])!,
+      });
+      const hidden = await nativeCreate(`Owned hidden ${kind}`, [
+        ...(kind === "gate" ? ["--type", "gate"] : ["--ephemeral"]),
+        "--metadata",
+        JSON.stringify({ piLifecycle: hiddenPause }),
+      ]);
+      await must("bd", ["update", hidden, "-s", "blocked", "--db", storePath]);
+      const normal = JSON.parse(
+        await must("bd", [
+          "list",
+          "--all",
+          "-n",
+          "0",
+          "--json",
+          "--db",
+          storePath,
+        ]),
+      );
+      assert.equal(
+        normal.some((row: { id: string }) => row.id === hidden),
+        false,
+      );
+      assert.deepEqual(
+        (await sut.ownedTasksForSession(hiddenOwner.sessionId)).map(
+          (row) => row.id,
+        ),
+        [hidden],
+      );
+      assert.ok(
+        (await readLifecycleV2MigrationSnapshot(store)).some(
+          (row) => row.id === hidden,
+        ),
+      );
+      const unclaimed = claims[0].status === "rejected" ? first : second;
+      await assert.rejects(
+        sut.claim(unclaimed.id, hiddenOwner, "second-hidden-claim"),
+        /already owns/,
+      );
+    }
     assert.equal((await runtime.pool.list("repo")).repositories[0].used, 0);
   },
 );

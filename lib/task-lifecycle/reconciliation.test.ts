@@ -93,14 +93,13 @@ function scannerStore(
       calls.push([...args]);
       let records: unknown[];
       if (args[0] === "list") {
-        assert.deepEqual(args.slice(0, 10), [
+        assert.deepEqual(args.slice(0, args.indexOf("--db")), [
           "list",
           "-s",
           "open,in_progress,blocked",
           "--include-gates",
           "--include-infra",
           "--include-templates",
-          "--include-ephemeral",
           "-n",
           "0",
           "--json",

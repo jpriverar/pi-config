@@ -111,7 +111,6 @@ test("report runs only native reads against the explicit isolated store and writ
     "--include-gates",
     "--include-infra",
     "--include-templates",
-    "--include-ephemeral",
   ])
     assert.ok(calls[0].args.includes(flag));
   assert.equal(calls[0].args[calls[0].args.indexOf("-n") + 1], "0");

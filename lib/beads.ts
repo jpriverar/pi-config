@@ -46,12 +46,11 @@ export type IssueStatus =
   | "closed";
 export type Readiness = "in_progress" | "blocked" | "ready" | "waiting";
 
-// Native list hides these categories independently of status and result limits.
+// Use the infra bundle for ephemeral rows: the narrower flag is absent in Beads 1.1.2.
 export const INCLUDE_HIDDEN_BEADS_FLAGS = [
   "--include-gates",
   "--include-infra",
   "--include-templates",
-  "--include-ephemeral",
 ] as const;
 
 export interface BeadsIssue {

@@ -121,7 +121,6 @@ test("complete client reads retain hidden ownership without changing normal brow
         "--include-gates",
         "--include-infra",
         "--include-templates",
-        "--include-ephemeral",
       ].every((flag) => args.includes(flag));
       return {
         code: 0,
@@ -202,4 +201,30 @@ test("browse readiness requests an unlimited result set", async () => {
   const ready = await client.listReadyIssueIds();
   assert.equal(ready.ok, true);
   if (ready.ok) assert.equal(ready.value.has("jp-100"), true);
+});
+
+test("complete discovery works with the supported Beads 1.1.2 flag surface", async () => {
+  const client = createBeadsClient(
+    async (_command, args) => {
+      if (args.includes("--include-ephemeral"))
+        return {
+          code: 1,
+          stdout: "",
+          stderr: "Error: unknown flag: --include-ephemeral",
+        };
+      assert.ok(args.includes("--all"));
+      for (const flag of [
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+      ])
+        assert.ok(args.includes(flag));
+      return { code: 0, stdout: "[]", stderr: "" };
+    },
+    { env: { BEADS_DIR: "/tmp/discovery-fixture" } },
+  );
+  assert.equal(
+    (await readSessionFacts(client, async () => null)).kind,
+    "available",
+  );
 });
