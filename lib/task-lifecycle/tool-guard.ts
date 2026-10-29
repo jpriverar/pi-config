@@ -2,6 +2,7 @@ export type TaskToolRequirement =
   | { kind: "none" }
   | { kind: "active-task" }
   | { kind: "same-task"; taskId: string }
+  | { kind: "owned-task"; taskId: string }
   | { kind: "claim-task"; taskId: string };
 
 const sameTaskTools = new Set([
@@ -15,8 +16,19 @@ const sameTaskTools = new Set([
 export function classifyTaskToolRequirement(
   toolName: string,
   input: unknown,
+  lifecycleWriteVersion: 1 | 2 = 1,
 ): TaskToolRequirement {
   if (toolName === "subagent") {
+    if (
+      lifecycleWriteVersion === 2 &&
+      isRecord(input) &&
+      (input.action === "resume" ||
+        input.action === "steer" ||
+        (input.action === "project.open" &&
+          typeof input.message === "string" &&
+          input.message.trim().length > 0))
+    )
+      return { kind: "active-task" };
     return isRecord(input) && typeof input.action === "string"
       ? { kind: "none" }
       : { kind: "active-task" };
@@ -26,6 +38,21 @@ export function classifyTaskToolRequirement(
   }
 
   const taskId = readTaskId(input);
+  if (
+    lifecycleWriteVersion === 2 &&
+    taskId !== null &&
+    ([
+      "task_block",
+      "task_resume",
+      "task_release",
+      "task_close",
+      "task_defer",
+    ].includes(toolName) ||
+      (toolName === "task_update" &&
+        isRecord(input) &&
+        input.condition !== undefined))
+  )
+    return { kind: "owned-task", taskId };
   if (toolName === "task_claim" && taskId !== null) {
     return { kind: "claim-task", taskId };
   }

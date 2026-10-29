@@ -36,6 +36,7 @@ export async function fixture(
     storeVersion?: 1 | 2;
     pool?: TaskLifecyclePoolPort;
     checkAdapters?: CheckAdapterRegistry;
+    now?: () => number;
   } = {
     serviceVersion: 2,
     storeVersion: 2,
@@ -45,6 +46,7 @@ export async function fixture(
   t.after(() => rm(root, { recursive: true, force: true }));
   const records = new Map<string, Record<string, any>>();
   const writes: string[] = [];
+  const comments: Array<{ taskId: string; message: string }> = [];
   for (const seed of seeds) {
     const statuses = {
       actionable: "open",
@@ -99,6 +101,10 @@ export async function fixture(
         if (args.includes("-d"))
           current.description = args[args.indexOf("-d") + 1];
         result = [current];
+      } else if (args[0] === "comments" && args[1] === "add") {
+        writes.push("comment:" + args[2]);
+        comments.push({ taskId: args[2], message: args[3] });
+        result = {};
       } else if (args[0] === "dep" && args[1] === "add") {
         writes.push("dep:" + args[2] + ":" + args[3]);
         records.get(args[2])!.dependencies.push({
@@ -139,7 +145,7 @@ export async function fixture(
   let sequence = 0;
   const sut = new TaskLifecycleService({
     store,
-    now: () => Date.parse(NOW),
+    now: options.now ?? (() => Date.parse(NOW)),
     uuid: () => "op-" + ++sequence,
     executionTimeoutMs: 60_000,
     pool: options.pool,
@@ -152,6 +158,7 @@ export async function fixture(
     store,
     sut,
     writes,
+    comments,
     records,
     snapshot: (id: string) => structuredClone(records.get(id)),
   };

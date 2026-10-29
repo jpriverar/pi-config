@@ -72,3 +72,31 @@ test("leaves malformed task inputs to their tool schemas", () => {
     kind: "none",
   });
 });
+
+test("v2 distinguishes resumed or steered execution from read-only subagent management", () => {
+  for (const input of [
+    { action: "resume", id: "child" },
+    { action: "steer", id: "child", message: "Continue" },
+    { action: "project.open", cwd: "/repo", message: "Implement the change" },
+  ])
+    assert.deepEqual(classifyTaskToolRequirement("subagent", input, 2), {
+      kind: "active-task",
+    });
+  for (const action of [
+    "status",
+    "list",
+    "models",
+    "guide",
+    "stop",
+    "interrupt",
+    "project.status",
+    "project.close",
+  ])
+    assert.deepEqual(classifyTaskToolRequirement("subagent", { action }, 2), {
+      kind: "none",
+    });
+  assert.deepEqual(
+    classifyTaskToolRequirement("subagent", { action: "project.open" }, 2),
+    { kind: "none" },
+  );
+});

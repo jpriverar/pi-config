@@ -194,7 +194,7 @@ export class TaskLifecycleService {
       normalizeTaskUpdate(input),
       owner,
       (issue) => {
-        const lifecycle = requireManaged(issue);
+        const lifecycle = this.writableLifecycle(issue);
         requireCurrentOwner(taskId, lifecycle, owner);
       },
     );
@@ -209,7 +209,7 @@ export class TaskLifecycleService {
       throw new Error("task log message must not be empty");
     }
     return this.deps.store.appendComment(taskId, message, owner, (issue) => {
-      const lifecycle = requireManaged(issue);
+      const lifecycle = this.writableLifecycle(issue);
       requireCurrentOwner(taskId, lifecycle, owner);
       if (lifecycle.phase !== "active") {
         throw new Error(
@@ -304,7 +304,7 @@ export class TaskLifecycleService {
   ): Promise<LifecycleIssue> {
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
-      const lifecycle = requireManaged(issue);
+      const lifecycle = this.writableLifecycle(issue);
       requireCurrentOwner(taskId, lifecycle, owner);
       if (hasOperation(lifecycle, operationId)) {
         return this.mutation(issue, operationId, issue.status, lifecycle);
@@ -333,7 +333,7 @@ export class TaskLifecycleService {
     }
     const now = this.nowIso();
     return this.deps.store.mutate(taskId, owner, (issue) => {
-      const lifecycle = requireManaged(issue);
+      const lifecycle = this.writableLifecycle(issue);
       requireCurrentOwner(taskId, lifecycle, owner);
       if (hasOperation(lifecycle, operationId)) {
         return this.mutation(issue, operationId, issue.status, lifecycle);
@@ -932,6 +932,56 @@ export class TaskLifecycleService {
   }
 
   async refreshSessionActivity(owner: LockOwner): Promise<LifecycleIssue[]> {
+    if (this.deps.lifecycleWriteVersion === 2) {
+      const owned = await this.ownedTasksForSession(owner.sessionId);
+      if (owned.length > 1)
+        throw new Error(
+          `session ${owner.sessionId} owns multiple tasks; ownership is unavailable`,
+        );
+      const results: LifecycleIssue[] = [];
+      const nowMs = this.deps.now();
+      const interval = this.deps.activityWriteIntervalMs ?? 300_000;
+      for (const issue of owned) {
+        const before = this.writableLifecycle(issue);
+        const captured = ownerOf(before)!;
+        if (
+          nowMs <= Date.parse(captured.lastActivityAt) ||
+          nowMs - Date.parse(captured.lastActivityAt) < interval
+        )
+          continue;
+        results.push(
+          await this.deps.store.mutate(issue.id, owner, (latestIssue) => {
+            const latest = this.writableLifecycle(latestIssue);
+            if (
+              latest.version !== 2 ||
+              latest.owner?.sessionId !== owner.sessionId ||
+              latest.owner.claimedAt !== captured.claimedAt
+            )
+              return null;
+            if (
+              nowMs <= Date.parse(latest.owner.lastActivityAt) ||
+              nowMs - Date.parse(latest.owner.lastActivityAt) < interval
+            )
+              return null;
+            const now = new Date(nowMs).toISOString();
+            const operationId = `activity:${owner.sessionId}:${now}`;
+            const next = recordCheckObservation(
+              { ...latest, owner: { ...latest.owner, lastActivityAt: now } },
+              operationId,
+              now,
+              "owner_activity",
+            );
+            return this.mutation(
+              latestIssue,
+              operationId,
+              latestIssue.status,
+              next,
+            );
+          }),
+        );
+      }
+      return results;
+    }
     const issues = await this.deps.store.list(["in_progress"]);
     const nowMs = this.deps.now();
     const interval = this.deps.activityWriteIntervalMs ?? 300_000;
@@ -1411,6 +1461,16 @@ export class TaskLifecycleService {
   }
 
   async activeTasksForSession(sessionId: string): Promise<LifecycleIssue[]> {
+    if (this.deps.lifecycleWriteVersion === 2) {
+      const owned = await this.ownedTasksForSession(sessionId);
+      if (owned.length > 1)
+        throw new Error(
+          `session ${sessionId} owns multiple tasks; ownership is unavailable`,
+        );
+      return owned.filter(
+        (issue) => this.writableLifecycle(issue).phase === "active",
+      );
+    }
     const issues = await this.deps.store.list(["in_progress"]);
     return issues
       .filter(
@@ -2028,13 +2088,13 @@ function sameBranch(left: string, right: string): boolean {
   return canonical(left) === canonical(right);
 }
 
-function recordOperation(
-  lifecycle: LifecycleMetadataV1,
+function recordOperation<T extends LifecycleMetadata>(
+  lifecycle: T,
   operationId: string,
   type: string,
   at: string,
   sessionId?: string,
-): LifecycleMetadataV1 {
+): T {
   if (hasOperation(lifecycle, operationId)) return lifecycle;
   const phase: LifecyclePhase = lifecycle.phase;
   return {

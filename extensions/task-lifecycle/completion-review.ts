@@ -199,7 +199,10 @@ export function registerCompletionReview(
       !eligible()
     )
       return;
-    const content = renderTaskContext(taskContext);
+    const content =
+      taskContext.kind === "available" && taskContext.value.phase !== "active"
+        ? undefined
+        : renderTaskContext(taskContext);
     return {
       entries: [
         ...(content === undefined

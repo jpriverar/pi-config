@@ -98,7 +98,8 @@ export default function projectStatus(
   ): Promise<TaskState | undefined> {
     const sessionTasks = issues.filter(
       (issue) =>
-        issue.lifecycle?.phase === "active" &&
+        issue.lifecycle?.version === 1 &&
+        issue.lifecycle.phase === "active" &&
         issue.lifecycle.execution?.sessionId === sessionId,
     );
     if (sessionTasks.length === 1) {

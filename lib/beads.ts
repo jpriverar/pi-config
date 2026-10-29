@@ -14,11 +14,11 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { decodeLifecycle } from "./task-lifecycle/model.js";
+import { decodeLifecycleAny } from "./task-lifecycle/v2-model.js";
 import { NEXT_STEP_KEY, readNextStep } from "./task-lifecycle/next-step.js";
 import type {
   LifecycleCheck,
-  LifecycleMetadataV1,
+  LifecycleMetadata,
   LifecyclePhase,
   NativeDependency,
 } from "./task-lifecycle/types.js";
@@ -53,7 +53,7 @@ export interface BeadsIssue {
   status: IssueStatus;
   labels: string[];
   updatedAt?: string;
-  lifecycle?: LifecycleMetadataV1 | null;
+  lifecycle?: LifecycleMetadata | null;
   lifecycleWarning?: string;
   workManagement?: NonNullable<ReturnType<typeof summarizeWorkManagement>>;
   projectReference?: ProjectReference;
@@ -283,7 +283,7 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
     if (nextStep.warning) contextWarnings.push(nextStep.warning);
     const rawLifecycle = metadata.piLifecycle;
     if (rawLifecycle !== undefined) {
-      const lifecycle = decodeLifecycle(rawLifecycle);
+      const lifecycle = decodeLifecycleAny(rawLifecycle);
       if (lifecycle.ok) decoded.lifecycle = lifecycle.value;
       else {
         decoded.lifecycle = null;
@@ -688,7 +688,10 @@ export function classifyReadiness(
       } else if (issue.lifecycle.phase === "waiting") {
         readiness = "waiting";
         if (
-          issue.lifecycle.waiting?.kind === "dependency" &&
+          (issue.lifecycle.version === 1
+            ? issue.lifecycle.waiting
+            : issue.lifecycle.condition
+          )?.kind === "dependency" &&
           blockingTaskIds.length === 0
         ) {
           warnings.push("dependency wait has no unresolved blocker");

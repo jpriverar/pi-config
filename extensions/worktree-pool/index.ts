@@ -1,4 +1,9 @@
 import { hostname as readHostname } from "node:os";
+import {
+  allocateWithHooks,
+  registerAllocationCapability,
+  type AllocationEventBus,
+} from "./allocation-hook.js";
 
 import type { PoolListing } from "./pool.js";
 import { evaluatePoolCommand } from "./command-policy.js";
@@ -50,6 +55,7 @@ type ExtensionContext = {
 };
 type ToolCallEvent = { toolName?: string; input?: unknown };
 type ExtensionAPI = {
+  events?: AllocationEventBus;
   on(
     name: string,
     handler: (event: any, ctx: ExtensionContext) => unknown,
@@ -121,6 +127,7 @@ export function createWorktreePoolExtension(
   deps: WorktreePoolExtensionDependencies,
 ) {
   return function worktreePoolExtension(pi: ExtensionAPI): void {
+    registerAllocationCapability(pi.events);
     const ownerFor = (ctx: ExtensionContext) =>
       currentOwner(ctx.sessionManager.getSessionId(), {
         pid: deps.pid,
@@ -159,29 +166,27 @@ export function createWorktreePoolExtension(
         },
         async execute(_id, params, _signal, _update, ctx) {
           validateParameters(action, params);
-          const purpose = action === "acquire" ? "acquire" : "identity";
-          const repositories =
-            params.repository === undefined ? [] : [params.repository];
-          const runtime = await deps.loadRuntime(repositories, purpose);
           const owner = ownerFor(ctx);
-
-          if (action === "list") {
-            const listing = await runtime.pool.list(params.repository);
-            return result(formatListing(listing), {
-              action: "list",
-              ...listing,
-            });
-          }
           if (action === "acquire") {
-            const acquired = await runtime.pool.acquire(
-              {
-                repository: params.repository!,
-                branch: params.branch!,
-                ...(params.startPoint === undefined || params.startPoint === ""
-                  ? {}
-                  : { startPoint: params.startPoint }),
-              },
+            const request = {
+              repository: params.repository!,
+              branch: params.branch!,
+              ...(params.startPoint === undefined || params.startPoint === ""
+                ? {}
+                : { startPoint: params.startPoint }),
+            };
+            const acquired = await allocateWithHooks(
+              pi.events,
+              _id,
+              request,
               owner,
+              async (identity) => {
+                const runtime = await deps.loadRuntime(
+                  [request.repository],
+                  "acquire",
+                );
+                return runtime.pool.acquire(request, owner, identity);
+              },
             );
             return result(
               `${acquired.reused ? "Reused" : "Acquired"} ${acquired.path} on ${acquired.branch} ` +
@@ -190,6 +195,18 @@ export function createWorktreePoolExtension(
                 `When work is durable and no child uses it, release with worktree_release(${JSON.stringify({ repository: params.repository, claimId: acquired.claimId })}).`,
               { action: "acquire", ...acquired },
             );
+          }
+
+          const repositories =
+            params.repository === undefined ? [] : [params.repository];
+          const runtime = await deps.loadRuntime(repositories, "identity");
+
+          if (action === "list") {
+            const listing = await runtime.pool.list(params.repository);
+            return result(formatListing(listing), {
+              action: "list",
+              ...listing,
+            });
           }
           if (action === "release") {
             const released = await runtime.pool.release(

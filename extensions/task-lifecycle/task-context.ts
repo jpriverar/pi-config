@@ -1,5 +1,11 @@
 import type { BeadsClient, BeadsIssue } from "../../lib/beads.js";
 import { resolveOwnedTask } from "../../lib/session-identity.js";
+import { ALL_PROJECT_ISSUE_STATUSES } from "../../lib/project-management.js";
+import type {
+  LifecycleCheck,
+  LifecycleMetadata,
+  LifecyclePhase,
+} from "../../lib/task-lifecycle/types.js";
 import {
   resolveSessionProject,
   resolveSessionSelection,
@@ -26,7 +32,7 @@ export async function readSessionFacts(
 ): Promise<SessionFactsResult> {
   try {
     const [listed, catalog] = await Promise.all([
-      client.listIssues(["open", "in_progress", "blocked", "deferred"]),
+      client.listIssues(ALL_PROJECT_ISSUE_STATUSES),
       readCatalog(),
     ]);
     if (!listed.ok)
@@ -47,8 +53,17 @@ export async function readSessionFacts(
 }
 
 export type TaskSession = SessionProjectReader & { getSessionId?(): string };
+export interface TaskConditionContext {
+  kind: "check" | "dependency";
+  purpose?: "completion" | "continuation";
+  checkKind?: LifecycleCheck["kind"];
+  state?: LifecycleCheck["state"];
+}
 export interface OwnedTaskContext {
   taskId: string;
+  phase: LifecyclePhase;
+  ownerRelationship: "current_session";
+  condition: TaskConditionContext | null;
   description: string | null;
   nextStep: string | null;
   warnings: string[];
@@ -91,47 +106,36 @@ export function selectOwnedTaskContext(
     viewWarning =
       "Browse view is unavailable or invalid; ownership is unchanged.";
   }
-  let owned: readonly BeadsIssue[];
-  if (catalog?.state === "active") {
-    const selected = resolveOwnedTask(issues, sessionId);
-    if (selected.kind === "unavailable" || selected.kind === "ambiguous")
-      return selected;
-    owned = selected.kind === "owned" ? [selected.issue] : [];
-  } else {
-    owned = issues.filter(
-      (issue) =>
-        issue.status === "in_progress" &&
-        issue.lifecycle?.phase === "active" &&
-        issue.lifecycle.execution?.sessionId === sessionId,
-    );
-  }
-  if (owned.length === 0)
-    return { kind: "none", reason: "No owned active task was found." };
-  if (owned.length !== 1) {
+  const selected = resolveOwnedTask(issues, sessionId);
+  if (selected.kind === "unassigned")
+    return { kind: "none", reason: "No owned task was found." };
+  if (selected.kind !== "owned") return selected;
+  const issue = selected.issue;
+  const lifecycle = issue.lifecycle;
+  if (lifecycle == null)
     return {
-      kind: "ambiguous",
-      reason:
-        "Multiple active tasks are owned by this session; no task was selected.",
+      kind: "unavailable",
+      reason: "Owned task metadata is unavailable.",
     };
-  }
-  const issue = owned[0];
   const workstream = issue.labels
     .find((label) => label.startsWith("workstream:"))
     ?.slice("workstream:".length);
-  if (
+  const outsideLegacyView =
     selection?.kind === "legacy" &&
     selection.project !== undefined &&
-    workstream?.toLowerCase() !== selection.project.toLowerCase()
-  ) {
-    return {
-      kind: "unavailable",
-      reason: `Owned task ${issue.id} is outside the selected project; its context was not loaded.`,
-    };
-  }
+    workstream?.toLowerCase() !== selection.project.toLowerCase();
   const description = issue.description?.trim() ? issue.description : null;
   const warnings = [
     ...(issue.taskContextWarnings ?? []),
     ...(viewWarning ? [viewWarning] : []),
+    ...(outsideLegacyView
+      ? ["Owned task is outside the selected view; ownership is unchanged."]
+      : []),
+    ...(lifecycle.phase !== "active"
+      ? [
+          `Task is ${lifecycle.phase}; ownership does not grant execution permission.`,
+        ]
+      : []),
   ];
   if (catalog?.state === "active") {
     const membership = resolveTaskMembership(catalog, issue);
@@ -155,6 +159,9 @@ export function selectOwnedTaskContext(
     kind: "available",
     value: {
       taskId: issue.id,
+      phase: lifecycle.phase,
+      ownerRelationship: "current_session",
+      condition: conditionContext(lifecycle),
       description,
       nextStep: issue.nextStep ?? null,
       warnings,
@@ -168,7 +175,7 @@ export async function readOwnedTaskContext(
   catalog: WorkCatalog | null = null,
 ): Promise<TaskContextResult> {
   try {
-    const result = await client.listIssues(["in_progress"]);
+    const result = await client.listIssues(ALL_PROJECT_ISSUE_STATUSES);
     if (!result.ok) {
       return {
         kind: "unavailable",
@@ -182,6 +189,24 @@ export async function readOwnedTaskContext(
       reason: "Task context lookup failed; no task was selected.",
     };
   }
+}
+
+function conditionContext(
+  lifecycle: LifecycleMetadata,
+): TaskConditionContext | null {
+  const condition =
+    lifecycle.version === 1 ? lifecycle.waiting : lifecycle.condition;
+  if (condition === null) return null;
+  const check = lifecycle.activeCheck;
+  return {
+    kind: condition.kind,
+    ...(lifecycle.version === 2
+      ? { purpose: lifecycle.condition!.purpose }
+      : {}),
+    ...(condition.kind === "check" && check !== null
+      ? { checkKind: check.kind, state: check.state }
+      : {}),
+  };
 }
 
 function contextBlock(value: unknown): string {
@@ -201,6 +226,9 @@ export function renderTaskContext(
     result.kind === "available"
       ? {
           task_id: result.value.taskId,
+          phase: result.value.phase,
+          owner_relationship: result.value.ownerRelationship,
+          condition: result.value.condition,
           description: result.value.description,
           next_step: result.value.nextStep,
           warnings: result.value.warnings,

@@ -295,3 +295,32 @@ test("durable task tokens clear obsolete deadline metadata", () => {
   };
   assert.equal(taskTokens(assignment).pi_task_expires_at, null);
 });
+
+test("the legacy assignment projection cannot infer unassigned from v2 ownership", async () => {
+  const { state, OWNER, NOW } = await import(
+    "../../lib/task-lifecycle/v2-test-fixtures.js"
+  );
+  const lifecycle = state({
+    phase: "done",
+    owner: OWNER,
+    disposition: {
+      kind: "completed",
+      reason: "Delivered",
+      at: NOW,
+      evidenceArtifactIds: [],
+    },
+  });
+  const result = selectTaskAssignment(
+    [
+      {
+        id: "jp-held",
+        title: "Retained ownership",
+        status: "closed",
+        labels: [],
+        lifecycle,
+      },
+    ],
+    OWNER.sessionId,
+  );
+  assert.equal(result.state, "unavailable");
+});

@@ -1447,7 +1447,7 @@ test("injects only the owned mission and does not persist foreign task content",
   foreign.id = "jp-foreign";
   foreign.description = "FOREIGN PRIVATE MISSION";
   foreign.nextStep = "FOREIGN NEXT ACTION";
-  foreign.lifecycle!.execution!.sessionId = "another-session";
+  legacyLifecycle(foreign.lifecycle)!.execution!.sessionId = "another-session";
   const h = createHarness({
     issues: [foreign, owned],
     sessionId: "session-1",
@@ -1486,7 +1486,7 @@ test("project filtering cannot hide ambiguous session ownership", async () => {
   });
   const hidden = await h.handlers.get("before_agent_start")!({}, h.context);
   assert.doesNotMatch(hidden.message.content, /PRIVATE MISSION/);
-  assert.match(hidden.message.content, /Multiple active tasks/);
+  assert.match(hidden.message.content, /Multiple tasks/);
 });
 
 test("startup snapshots retain only the bounded owned-context representation", async () => {
@@ -1544,7 +1544,7 @@ test("catalog snapshots and compaction retain owned mission outside the view wit
   foreign.projectReference = { kind: "valid", projectId: Q };
   foreign.description = "FOREIGN CATALOG MISSION";
   foreign.nextStep = "FOREIGN CATALOG NEXT STEP";
-  foreign.lifecycle!.execution!.sessionId = "someone-else";
+  legacyLifecycle(foreign.lifecycle)!.execution!.sessionId = "someone-else";
   const h = createHarness({
     catalog,
     sessionId: "session-1",
@@ -1573,5 +1573,49 @@ test("catalog snapshots and compaction retain owned mission outside the view wit
   assert.doesNotMatch(
     JSON.stringify(h.appended),
     /FOREIGN CATALOG (MISSION|NEXT STEP)/,
+  );
+});
+
+test("closed owned tasks supply identity and context without returning to the backlog", async () => {
+  const { state, OWNER, NOW } = await import(
+    "../../lib/task-lifecycle/v2-test-fixtures.js"
+  );
+  const owned: BeadsIssue = {
+    id: "jp-held",
+    title: "Completed deliverable",
+    status: "closed",
+    labels: [],
+    description: "Retained mission",
+    nextStep: null,
+    projectReference: { kind: "valid", projectId: P },
+    lifecycle: state({
+      phase: "done",
+      owner: OWNER,
+      disposition: {
+        kind: "completed",
+        reason: "Delivered",
+        at: NOW,
+        evidenceArtifactIds: [],
+      },
+    }),
+  };
+  const h = createHarness({
+    catalog: catalogFixture(),
+    sessionId: OWNER.sessionId,
+    issues: [owned],
+    entries: [
+      {
+        type: "custom",
+        customType: SESSION_PROJECT_ENTRY_TYPE,
+        data: { version: 2, scope: { kind: "global" } },
+      },
+    ],
+  });
+  const hidden = await h.handlers.get("before_agent_start")!({}, h.context);
+  assert.match(hidden.message.content, /"task_id": "jp-held"/);
+  assert.doesNotMatch(hidden.message.content, /^- jp-held /m);
+  const read = h.calls.find((call) => call.args[0] === "list")!;
+  assert.ok(
+    read.args[read.args.indexOf("-s") + 1].split(",").includes("closed"),
   );
 });

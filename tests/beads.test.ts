@@ -977,19 +977,22 @@ test("classifies managed lifecycle phases and native blockers", () => {
   assert.match(drifted.warnings[0], /unresolved blocker/);
 });
 
-test("surfaces malformed lifecycle metadata as a migration warning", async () => {
-  const raw = issue({ metadata: { piLifecycle: { version: 2 } } });
-  const client = createBeadsClient(fakeExec(success([raw])).exec, {
-    env: { BEADS_DIR: store },
+for (const [version, warning] of [
+  [2, /invalid piLifecycle v2/],
+  [99, /unsupported piLifecycle version 99/],
+] as const) {
+  test(`surfaces invalid or unsupported lifecycle v${version} as a migration warning`, async () => {
+    const raw = issue({ metadata: { piLifecycle: { version } } });
+    const client = createBeadsClient(fakeExec(success([raw])).exec, {
+      env: { BEADS_DIR: store },
+    });
+    const listed = await client.listIssues();
+    assert.equal(listed.ok, true);
+    if (!listed.ok) return;
+    const classified = classifyReadiness(listed.value, new Set(["jp-1"]));
+    assert.match(classified[0].warnings[0], warning);
   });
-  const listed = await client.listIssues();
-  assert.equal(listed.ok, true);
-  if (!listed.ok) return;
-
-  const classified = classifyReadiness(listed.value, new Set(["jp-1"]));
-
-  assert.match(classified[0].warnings[0], /unsupported piLifecycle version 2/);
-});
+}
 
 test("renders overdue checks and retained resources as waiting warnings", () => {
   const enteredAt = "2026-09-16T10:00:00.000Z";

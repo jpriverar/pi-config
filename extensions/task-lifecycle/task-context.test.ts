@@ -72,6 +72,9 @@ test("selects the owned active task rather than a same-title foreign task", () =
     kind: "available",
     value: {
       taskId: "jp-owned",
+      phase: "active",
+      ownerRelationship: "current_session",
+      condition: null,
       description: "Build, verify and report the outcome",
       nextStep: "Verify abc123 in staging",
       warnings: [],
@@ -89,11 +92,11 @@ test("requires unique ownership even across project boundaries", () => {
   );
 });
 
-test("does not load an owned task outside the selected project", () => {
-  assert.equal(
-    selectOwnedTaskContext([issue()], session("different")).kind,
-    "unavailable",
-  );
+test("keeps owned task context outside the selected project", () => {
+  const outside = selectOwnedTaskContext([issue()], session("different"));
+  assert.equal(outside.kind, "available");
+  if (outside.kind === "available")
+    assert.match(outside.value.warnings.join(" "), /outside.*view/);
   assert.equal(
     selectOwnedTaskContext([issue()], session("PROJECT")).kind,
     "available",
@@ -132,13 +135,13 @@ test("no matching owner is missing data, not a completed mission", () => {
   assert.equal(renderTaskContext(result), undefined);
 });
 
-test("does not treat a stale lease on a non-active record as current context", () => {
+test("contradictory ownership remains unavailable instead of being omitted", () => {
   const row = issue();
   row.status = "closed";
-  assert.equal(selectOwnedTaskContext([row], session()).kind, "none");
+  assert.equal(selectOwnedTaskContext([row], session()).kind, "unavailable");
   row.status = "in_progress";
   row.lifecycle!.phase = "deferred";
-  assert.equal(selectOwnedTaskContext([row], session()).kind, "none");
+  assert.equal(selectOwnedTaskContext([row], session()).kind, "unavailable");
 });
 
 test("missing or invalid content remains explicit rather than becoming a finish line", () => {
@@ -219,7 +222,7 @@ test("fresh context lookup uses the existing read-only client once", async () =>
       args: [
         "list",
         "-s",
-        "in_progress",
+        "open,in_progress,blocked,deferred,closed",
         "-n",
         "0",
         "--json",

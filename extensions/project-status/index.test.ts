@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../../lib/task-lifecycle/legacy-test-fixtures.js";
 import {
   A,
   B,
@@ -730,7 +731,8 @@ test("Herdr preserves an idle task label instead of reporting legacy lease expir
     ...issue("jp-idle", "in_progress"),
     lifecycle: activeLifecycle("session-1"),
   };
-  owned.lifecycle.execution!.expiresAt = "2026-09-15T12:00:00Z";
+  legacyLifecycle(owned.lifecycle)!.execution!.expiresAt =
+    "2026-09-15T12:00:00Z";
   const h = createHarness({ herdr: true, issues: [owned] });
   await start(h);
   await setImmediate();

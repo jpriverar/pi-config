@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "./task-lifecycle/legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { BeadsIssue } from "./beads.js";
@@ -90,7 +91,7 @@ test("verified empty ownership is unassigned, including a new session ID", () =>
   const finished = owned();
   finished.status = "closed";
   finished.lifecycle!.phase = "done";
-  finished.lifecycle!.execution = null;
+  legacyLifecycle(finished.lifecycle)!.execution = null;
   assert.deepEqual(resolveWorkingIdentity([finished], c, SESSION), {
     kind: "unassigned",
   });
@@ -104,7 +105,7 @@ test("duplicate owners and malformed active metadata are unavailable, not unassi
     lifecycleWarning: "invalid lifecycle",
   };
   const missingExecution = owned();
-  missingExecution.lifecycle!.execution = null;
+  legacyLifecycle(missingExecution.lifecycle)!.execution = null;
   for (const rows of [
     [owned(), owned("zz-second", Q)],
     [malformed],

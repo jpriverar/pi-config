@@ -87,6 +87,8 @@ export function selectTaskAssignment(
     label: "Task unavailable",
   };
   if (!issues || !sessionId) return unavailable;
+  if (issues.some((issue) => issue.lifecycle?.version === 2))
+    return unavailable;
   // Invalid active metadata could conceal this session's ownership.
   if (
     issues.some(
@@ -96,13 +98,15 @@ export function selectTaskAssignment(
     return unavailable;
   const matching = issues.filter(
     (issue) =>
-      issue.lifecycle?.phase === "active" &&
+      issue.lifecycle?.version === 1 &&
+      issue.lifecycle.phase === "active" &&
       issue.lifecycle.execution?.sessionId === sessionId,
   );
   if (matching.length === 0)
     return { state: "unassigned", label: "Unassigned" };
   if (matching.length !== 1) return unavailable;
   const issue = matching[0];
+  if (issue.lifecycle?.version !== 1) return unavailable;
   // The v1 timestamp must be valid, but it no longer expires ownership.
   const expiresAt = Date.parse(issue.lifecycle!.execution!.expiresAt);
   if (

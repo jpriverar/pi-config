@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { hostname } from "node:os";
@@ -6,6 +7,8 @@ import { dirname, join } from "node:path";
 import type { TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
+import { state as v2State } from "../../lib/task-lifecycle/v2-test-fixtures.js";
+import { createWorktreePoolExtension } from "../../extensions/worktree-pool/index.js";
 import { createTaskLifecycleExtension } from "../../extensions/task-lifecycle/index.js";
 import {
   loadWorktreePoolRuntime,
@@ -24,6 +27,7 @@ import {
 export async function createWorktreeLifecycleFixture(
   t: TestContext,
   submodule = false,
+  lifecycleWriteVersion: 1 | 2 = 1,
 ) {
   const root = await fs.realpath(await fs.mkdtemp("/tmp/pi-worktree-guards-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -120,16 +124,30 @@ export async function createWorktreeLifecycleFixture(
       },
     },
   });
+  if (lifecycleWriteVersion === 2) {
+    task.lifecycle = v2State({
+      phase: "active",
+      owner: {
+        sessionId: owner.sessionId,
+        claimedAt: new Date(now).toISOString(),
+        lastActivityAt: new Date(now).toISOString(),
+      },
+    });
+    task.metadata.piLifecycle = task.lifecycle;
+  }
   const store = new MemoryLifecycleStore([task]);
   const service = new TaskLifecycleService({
     store,
     pool: runtime.pool,
     ...fixturePolicy,
+    lifecycleWriteVersion,
     now: () => now,
     uuid: randomUUID,
   });
   const handlers = new Map<string, Array<(event: any, context: any) => any>>();
+  const events = createEventBus();
   createTaskLifecycleExtension({
+    lifecycleWriteVersion,
     service,
     now: () => now,
     pid: process.pid,
@@ -138,6 +156,7 @@ export async function createWorktreeLifecycleFixture(
     sessionReconcileLimit: fixturePolicy.sessionReconcileLimit,
     sessionPrCheckLimit: fixturePolicy.sessionPrCheckLimit,
   })({
+    events,
     on(name: string, handler: any) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
     },
@@ -157,6 +176,19 @@ export async function createWorktreeLifecycleFixture(
     },
     ui: { notify() {} },
   };
+  const tools = new Map<string, any>();
+  createWorktreePoolExtension({
+    now: () => now,
+    pid: process.pid,
+    hostname: hostname(),
+    loadRuntime: async () => runtime,
+  })({
+    events,
+    on() {},
+    registerTool(tool) {
+      tools.set(tool.name, tool);
+    },
+  });
   const event = (
     id: string,
     { action, ...input }: Record<string, unknown>,
@@ -180,7 +212,20 @@ export async function createWorktreeLifecycleFixture(
     const call = event(`acquire-${branch}`, input);
     const guard = await hook("tool_call", call);
     if (guard?.block) return { guard, acquired: undefined };
-    const acquired = await runtime.pool.acquire(input, owner);
+    const acquired =
+      lifecycleWriteVersion === 2
+        ? (
+            await tools
+              .get("worktree_acquire")
+              .execute(
+                call.toolCallId,
+                call.input,
+                undefined,
+                undefined,
+                context,
+              )
+          ).details
+        : await runtime.pool.acquire(input, owner);
     assert.equal(
       await hook("tool_result", { ...call, details: acquired, isError: false }),
       undefined,
@@ -190,6 +235,7 @@ export async function createWorktreeLifecycleFixture(
   const acquired = (await acquire("jpriverar/first")).acquired!;
   return {
     runtime,
+    tools,
     runtimeDependencies,
     store,
     service,

@@ -673,7 +673,10 @@ export function registerTaskWorkState(
         const [classified, health] = await Promise.all([
           classifyListedIssues(
             client,
-            facts.issues.filter((issue) => issue.status !== "deferred"),
+            facts.issues.filter(
+              (issue) =>
+                issue.status !== "deferred" && issue.status !== "closed",
+            ),
           ),
           readHealth(),
         ]);

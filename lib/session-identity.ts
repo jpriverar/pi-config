@@ -1,4 +1,6 @@
 import type { BeadsIssue } from "./beads.js";
+import { ownerOf } from "./task-lifecycle/ownership.js";
+import { nativeStatusV2 } from "./task-lifecycle/v2-model.js";
 import { resolveTaskMembership } from "./work-catalog/membership.js";
 import type { WorkCatalog } from "./work-catalog/model.js";
 
@@ -29,32 +31,31 @@ export function resolveOwnedTask(
   const owned: BeadsIssue[] = [];
   for (const issue of issues) {
     if (
-      issue.status !== "closed" &&
-      (issue.lifecycleWarning || issue.lifecycle === null)
+      issue.lifecycleWarning ||
+      (issue.status !== "closed" && issue.lifecycle === null)
     )
       return {
         kind: "unavailable",
         reason: "Task ownership is unavailable; inspect lifecycle metadata",
       };
-    if (issue.lifecycle?.phase !== "active") {
-      if (issue.lifecycle?.execution)
-        return {
-          kind: "unavailable",
-          reason: "Task execution conflicts with its non-active lifecycle",
-        };
-      continue;
-    }
-    const owner = issue.lifecycle.execution?.sessionId;
-    if (!owner)
+    const lifecycle = issue.lifecycle;
+    if (lifecycle == null) continue;
+    let owner;
+    try {
+      owner = ownerOf(lifecycle);
+    } catch {
       return {
         kind: "unavailable",
-        reason: "Active task ownership is missing; inspect lifecycle metadata",
+        reason: "Task ownership is inconsistent; inspect lifecycle metadata",
       };
-    if (owner !== sessionId) continue;
-    if (issue.status !== "in_progress")
+    }
+    if (owner?.sessionId !== sessionId) continue;
+    const status =
+      lifecycle.version === 2 ? nativeStatusV2(lifecycle) : "in_progress";
+    if (issue.status !== status)
       return {
         kind: "unavailable",
-        reason: "Owned task status conflicts with its active lifecycle",
+        reason: "Owned task status conflicts with its lifecycle phase",
       };
     owned.push(issue);
   }
@@ -62,7 +63,7 @@ export function resolveOwnedTask(
   if (owned.length !== 1)
     return {
       kind: "ambiguous",
-      reason: "Multiple active tasks are owned by this session",
+      reason: "Multiple tasks are owned by this session",
     };
   return { kind: "owned", issue: owned[0] };
 }

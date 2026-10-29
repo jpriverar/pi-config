@@ -2,6 +2,19 @@ import { legacyLifecycle } from "../../lib/task-lifecycle/legacy-test-fixtures.j
 import { newWorkManagementState } from "../../lib/work-management/model.js";
 import { target as wmTarget } from "../../lib/work-management/test-fixtures.js";
 import assert from "node:assert/strict";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { validateToolArguments } from "@earendil-works/pi-ai";
+import {
+  state as v2State,
+  withCheck,
+  NOW as V2_NOW,
+  OWNER as V2_OWNER,
+} from "../../lib/task-lifecycle/v2-test-fixtures.js";
+import {
+  nativeStatusV2,
+  blockLifecycleV2,
+  fingerprintConditionV2,
+} from "../../lib/task-lifecycle/v2-model.js";
 import { test } from "node:test";
 
 import type {
@@ -101,6 +114,44 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
     finalizationError: null as Error | null,
   };
   const service = {
+    async prepareWorktreeAcquire(...args: any[]) {
+      calls.push({ name: "prepareWorktreeAcquire", args });
+      return {
+        version: 1,
+        mode: "acquire",
+        taskId: args[0].taskId,
+        operationId: args[2],
+        repository: "repo",
+        claimId: "claim",
+        pathId: "path",
+      } as const;
+    },
+    async finalizeWorktreeAcquire(...args: any[]) {
+      calls.push({ name: "finalizeWorktreeAcquire", args });
+      return normalizedIssue();
+    },
+    async ownedTasksForSession(...args: any[]) {
+      calls.push({ name: "ownedTasksForSession", args });
+      if (guardState.activeTaskLookupError)
+        throw guardState.activeTaskLookupError;
+      return guardState.activeTasks;
+    },
+    async block(...args: any[]) {
+      calls.push({ name: "block", args });
+      return normalizedIssue("waiting");
+    },
+    async resume(...args: any[]) {
+      calls.push({ name: "resume", args });
+      return normalizedIssue();
+    },
+    async release(...args: any[]) {
+      calls.push({ name: "release", args });
+      return normalizedIssue("actionable");
+    },
+    async updateCondition(...args: any[]) {
+      calls.push({ name: "updateCondition", args });
+      return normalizedIssue();
+    },
     async create(...args: any[]) {
       calls.push({ name: "create", args });
       return normalizedIssue("actionable");
@@ -217,10 +268,15 @@ function harness(overrides: Partial<TaskLifecycleExtensionDependencies> = {}) {
       if (guardState.activeTaskLookupError !== null) {
         throw guardState.activeTaskLookupError;
       }
-      return guardState.activeTasks;
+      return overrides.lifecycleWriteVersion === 2
+        ? guardState.activeTasks.filter(
+            (issue) => issue.lifecycle?.phase === "active",
+          )
+        : guardState.activeTasks;
     },
   };
   const pi = {
+    events: createEventBus(),
     on(name: string, handler: Handler) {
       const registered = handlers.get(name) ?? [];
       registered.push(handler);
@@ -1942,7 +1998,7 @@ test("factory exposes operator-only review and injectable work-state health", as
   assert.equal(healthReads, 1);
 });
 
-async function catalogIdentityHarness() {
+async function catalogIdentityHarness(lifecycleWriteVersion: 1 | 2 = 1) {
   const { P, Q, catalogFixture } = await import(
     "../../lib/work-catalog/test-fixtures.js"
   );
@@ -1952,6 +2008,7 @@ async function catalogIdentityHarness() {
   const catalog = catalogFixture();
   let catalogResult: typeof catalog | null = catalog;
   const h = harness({
+    lifecycleWriteVersion,
     readCatalog: async () => catalogResult,
     workStateHealth: async () => ({
       state: "unavailable",
@@ -2449,4 +2506,347 @@ test("catalog ownership projection publishes the existing display-refresh event"
   await h.event("before_agent_start");
   assert.equal(events.length, 1);
   assert.equal(h.context.sessionManager.getSessionName(), "before");
+});
+
+function retainedIssue(
+  phase: "active" | "actionable" | "waiting" | "deferred" | "done",
+) {
+  const owner = { ...V2_OWNER, sessionId: "session-1" };
+  const current = withCheck({ owner });
+  const lifecycle =
+    phase === "waiting"
+      ? blockLifecycleV2(current, {
+          operationId: "block",
+          sessionId: owner.sessionId,
+          now: V2_NOW,
+          reason: "Await review",
+          conditionFingerprint: fingerprintConditionV2(current, [])!,
+        })
+      : v2State({
+          phase,
+          owner,
+          disposition:
+            phase === "done"
+              ? {
+                  kind: "completed",
+                  reason: "Delivered",
+                  at: V2_NOW,
+                  evidenceArtifactIds: [],
+                }
+              : null,
+        });
+  return { ...normalizedIssue(), lifecycle, status: nativeStatusV2(lifecycle) };
+}
+
+test("v2 exposes explicit transitions instead of the incompatible wait API", async () => {
+  const h = harness({ lifecycleWriteVersion: 2 });
+  assert.equal(h.tools.has("task_wait"), false);
+  for (const name of ["task_block", "task_resume", "task_release"]) {
+    const tool = h.tools.get(name)!;
+    assert.ok(tool);
+    const params = { taskId: "jp-1", reason: "Meaningful work boundary" };
+    assert.throws(() =>
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "call",
+        name,
+        arguments: { taskId: "jp-1" },
+      }),
+    );
+    for (const field of ["phase", "lifecycle"])
+      assert.throws(() =>
+        validateToolArguments(tool, {
+          type: "toolCall",
+          id: "call",
+          name,
+          arguments: { ...params, [field]: "done" },
+        }),
+      );
+    await tool.execute("call", params, undefined, undefined, h.context);
+    const call = h.calls.find((c) => c.name === name.slice(5))!;
+    assert.equal(call.args[0], "jp-1");
+    assert.equal(call.args[3], "call");
+  }
+});
+
+test("condition changes are exclusive and hydrate no user-supplied observations", async () => {
+  const h = harness({ lifecycleWriteVersion: 2 });
+  const tool = h.tools.get("task_update")!;
+  const condition = {
+    kind: "check",
+    purpose: "completion",
+    reason: "Require merge",
+    check: {
+      id: "merge",
+      kind: "github_pull_request",
+      targetArtifactIds: ["pr"],
+      predicate: {},
+      onSatisfied: "close",
+      wakeOn: ["changes_requested"],
+    },
+  };
+  for (const content of [
+    { add_labels: [] },
+    { description: "Mission" },
+    { next_step: null },
+  ]) {
+    await assert.rejects(
+      tool.execute(
+        "change",
+        { taskId: "jp-1", condition, ...content },
+        undefined,
+        undefined,
+        h.context,
+      ),
+      /exclusive|combined/,
+    );
+  }
+  assert.equal(h.calls.length, 0);
+  assert.throws(() =>
+    validateToolArguments(tool, {
+      type: "toolCall",
+      id: "x",
+      name: tool.name,
+      arguments: {
+        taskId: "jp-1",
+        condition: {
+          ...condition,
+          check: { ...condition.check, state: "satisfied" },
+        },
+      },
+    }),
+  );
+  await tool.execute(
+    "change",
+    { taskId: "jp-1", condition },
+    undefined,
+    undefined,
+    h.context,
+  );
+  const call = h.calls.find((c) => c.name === "updateCondition")!;
+  assert.equal(call.args[3], "change");
+  assert.deepEqual((call.args[1] as any).check, {
+    ...condition.check,
+    state: "pending",
+    createdAt: new Date(NOW).toISOString(),
+    lastCheckedAt: null,
+    nextCheckAt: new Date(NOW).toISOString(),
+    lastObservation: null,
+    errorCount: 0,
+  });
+});
+
+for (const phase of ["actionable", "waiting", "deferred", "done"] as const) {
+  test(`v2 ${phase} ownership blocks a second claim and delegated execution but permits explicit owner transitions`, async () => {
+    const h = harness({ lifecycleWriteVersion: 2 });
+    h.guardState.activeTasks = [retainedIssue(phase)];
+    const guard = h.handlers.get("tool_call")![0];
+    assert.equal(
+      (
+        (await guard(
+          { toolName: "task_claim", input: { taskId: "jp-other" } },
+          h.context,
+        )) as any
+      )?.block,
+      true,
+    );
+    assert.equal(
+      (
+        (await guard(
+          { toolName: "subagent", input: { agent: "worker", task: "Work" } },
+          h.context,
+        )) as any
+      )?.block,
+      true,
+    );
+    assert.equal(
+      (
+        (await guard(
+          { toolName: "worktree_acquire", input: {} },
+          h.context,
+        )) as any
+      )?.block,
+      true,
+    );
+    assert.equal(
+      await guard(
+        { toolName: "task_claim", input: { taskId: "jp-1" } },
+        h.context,
+      ),
+      undefined,
+    );
+    for (const toolName of [
+      "task_resume",
+      "task_release",
+      "task_reopen",
+      "task_close",
+    ])
+      assert.equal(
+        await guard({ toolName, input: { taskId: "jp-1" } }, h.context),
+        undefined,
+      );
+    assert.equal(
+      (
+        (await guard(
+          { toolName: "task_release", input: { taskId: "jp-other" } },
+          h.context,
+        )) as any
+      )?.block,
+      true,
+    );
+  });
+}
+
+test("v2 cleanup uses ownership rather than current execution", async () => {
+  const h = harness({ lifecycleWriteVersion: 2 });
+  const issue = retainedIssue("waiting");
+  h.guardState.activeTasks = [issue];
+  h.guardState.associatedTasks = [issue];
+  const result = await h.handlers.get("tool_call")![0](
+    {
+      toolName: "worktree_release",
+      toolCallId: "cleanup",
+      input: { repository: "repo", claimId: "claim" },
+    },
+    h.context,
+  );
+  assert.equal(result, undefined);
+  assert.ok(h.calls.some((c) => c.name === "prepareWorktreeRelease"));
+});
+
+for (const action of ["claim", "release"] as const) {
+  test(`uncertain v2 ${action} refreshes committed facts without reporting success`, async () => {
+    const h = await catalogIdentityHarness(2);
+    const row = h.row();
+    row.metadata.piLifecycle = retainedIssue("active").lifecycle;
+    h.setRows([row]);
+    if (action === "release") {
+      await h.claim();
+      h.setRows([]);
+    }
+    const before = h.reads();
+    h.service[action] = async () => {
+      throw new Error("result unknown");
+    };
+    const tool = h.tools.get(`task_${action}`)!;
+    assert.ok(tool);
+    await assert.rejects(
+      tool.execute(
+        "unknown",
+        { taskId: "jp-1", reason: "Switch" },
+        null,
+        null,
+        h.context,
+      ),
+      /result unknown/,
+    );
+    assert.equal(h.reads(), before + 1);
+    const marker = h.entries
+      .filter((e) => e.customType === "jp-working-identity")
+      .at(-1);
+    assert.ok(marker);
+    assert.equal(JSON.stringify(marker).includes("jp-1"), action === "claim");
+  });
+}
+
+test("v2 release replay reaches authoritative history after ownership was already cleared", async () => {
+  const h = harness({ lifecycleWriteVersion: 2 });
+  const result = await h.handlers.get("tool_call")![0](
+    {
+      toolName: "task_release",
+      input: {
+        taskId: "jp-1",
+        reason: "Switch",
+        operationId: "already-released",
+      },
+    },
+    h.context,
+  );
+  assert.equal(result, undefined);
+});
+
+test("owned paused execution refusal directs explicit continuation rather than another claim", async () => {
+  const h = harness({ lifecycleWriteVersion: 2 });
+  h.guardState.activeTasks = [retainedIssue("waiting")];
+  const result = (await h.handlers.get("tool_call")![0](
+    { toolName: "worktree_acquire", input: {} },
+    h.context,
+  )) as any;
+  assert.match(result.reason, /task_resume/);
+});
+
+for (const mode of [1, 2] as const) {
+  test(`writer mode ${mode} cannot delegate execution using a task from the other schema`, async () => {
+    const h = harness({ lifecycleWriteVersion: mode });
+    h.guardState.activeTasks = [
+      mode === 2 ? activeIssue("jp-1") : retainedIssue("active"),
+    ];
+    const result = (await h.handlers.get("tool_call")![0](
+      { toolName: "subagent", input: { agent: "worker", task: "Work" } },
+      h.context,
+    )) as any;
+    assert.equal(result?.block, true);
+    assert.match(result.reason, /version|incompatible/);
+  });
+}
+
+test("v2 close retains the working identity until an explicit committed release", async () => {
+  const h = await catalogIdentityHarness(2);
+  const row = h.row();
+  const done = retainedIssue("done");
+  row.status = done.status;
+  row.metadata.piLifecycle = done.lifecycle;
+  h.setRows([row]);
+  h.service.close = async () => done;
+  await h.tools
+    .get("task_close")!
+    .execute(
+      "close",
+      { taskId: "jp-1", kind: "completed", reason: "Delivered" },
+      null,
+      null,
+      h.context,
+    );
+  const marker = () =>
+    h.entries.filter((e) => e.customType === "jp-working-identity").at(-1);
+  assert.ok(JSON.stringify(marker()).includes("jp-1"));
+  const released = { ...done, lifecycle: { ...done.lifecycle, owner: null } };
+  h.service.release = async () => {
+    row.metadata.piLifecycle = released.lifecycle;
+    h.setRows([row]);
+    return released;
+  };
+  await h.tools
+    .get("task_release")!
+    .execute(
+      "release",
+      { taskId: "jp-1", reason: "Switch work" },
+      null,
+      null,
+      h.context,
+    );
+  assert.equal(JSON.stringify(marker()).includes("jp-1"), false);
+});
+
+test("v2 refuses an old pool boundary rather than falling back to result-only bookkeeping", async () => {
+  const h = harness({ lifecycleWriteVersion: 2 });
+  h.guardState.activeTasks = [retainedIssue("active")];
+  const result = (await h.handlers.get("tool_call")![0](
+    {
+      toolName: "worktree_acquire",
+      toolCallId: "acquire",
+      input: { repository: "repo", branch: "jpriverar/branch" },
+    },
+    h.context,
+  )) as any;
+  assert.equal(result?.block, true);
+  assert.match(result.reason, /boundary.*unavailable|incompatible/);
+  assert.equal(
+    h.calls.some(
+      (call) =>
+        call.name === "prepareWorktreeAcquire" ||
+        call.name === "preflightWorktreeAcquire",
+    ),
+    false,
+  );
 });

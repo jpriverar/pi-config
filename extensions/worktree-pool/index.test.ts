@@ -182,6 +182,14 @@ function harness(options: { runtimeError?: Error } = {}) {
     events: {
       on(name: string, handler: (event: any) => unknown) {
         busHandlers.set(name, [...(busHandlers.get(name) ?? []), handler]);
+        return () =>
+          busHandlers.set(
+            name,
+            (busHandlers.get(name) ?? []).filter((value) => value !== handler),
+          );
+      },
+      emit(name: string, value: unknown) {
+        for (const handler of busHandlers.get(name) ?? []) handler(value);
       },
     },
     registerTool(tool: Tool & { name: string }) {

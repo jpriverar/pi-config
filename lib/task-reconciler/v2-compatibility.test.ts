@@ -212,3 +212,18 @@ test("client respects advertised writer capability even when the socket would ac
   );
   assert.equal(f.calls.requests.length, 0);
 });
+
+test("Pi's explicit writer mode cannot be replaced by a daemon's separate v1 policy file", async (t) => {
+  const f = await hostFixture(t);
+  await f.start();
+  await assert.rejects(
+    requestReconciliation(
+      f.config,
+      { taskId: "jp-1", requestId: "pi-v2" },
+      undefined,
+      2,
+    ),
+    clientIncompatible,
+  );
+  assert.equal(f.calls.requests.length, 0);
+});

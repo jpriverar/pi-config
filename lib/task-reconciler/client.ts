@@ -36,10 +36,13 @@ export async function requestReconciliation(
   config: DaemonConfig,
   input: ReconcileRequest,
   signal?: AbortSignal,
+  expectedLifecycleVersion?: 1 | 2,
 ): Promise<ReconcileReply> {
   const request = parseReconcileRequest(input);
   const lifecycleVersion =
-    loadLifecycleConfig(config.lifecycleConfigPath).lifecycleWriteVersion ?? 1;
+    expectedLifecycleVersion ??
+    loadLifecycleConfig(config.lifecycleConfigPath).lifecycleWriteVersion ??
+    1;
   return new Promise((resolve, reject) => {
     let settled = false;
     let sent = false;
