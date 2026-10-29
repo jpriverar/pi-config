@@ -286,3 +286,29 @@ test("release finalization remains valid after the owner blocks", async (t) => {
   assert.deepEqual((saved.lifecycle as LifecycleMetadataV2).owner, OWNER);
   assert.equal(saved.lifecycle?.resources[0].cleanupState, "released");
 });
+
+test("manual release-pending cleanup progresses with no external check budget", async (t) => {
+  const p = poolFixture();
+  p.entries.clear();
+  const original = paused([
+    resource({
+      path: acquired.path,
+      cleanupState: "release_pending",
+      operationId: "release-tree",
+    }),
+  ]);
+  const f = await fixture(t, [{ id: "jp-1", lifecycle: original }], {
+    ...V2,
+    pool: p.pool,
+  });
+  const results = await f.sut.reconcileDue(session("daemon"), {
+    taskLimit: 1,
+    checkLimit: 0,
+  });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].lifecycle?.phase, "waiting");
+  assert.deepEqual((results[0].lifecycle as LifecycleMetadataV2).owner, OWNER);
+  assert.equal(results[0].lifecycle?.resources[0].cleanupState, "released");
+  assert.equal(results[0].lifecycle?.activeCheck?.state, "pending");
+  assert.equal(p.releases(), 0);
+});

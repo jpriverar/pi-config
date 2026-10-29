@@ -9,7 +9,7 @@ import {
 } from "./protocol.js";
 
 test("decodes one fragmented length-prefixed JSON frame", () => {
-  const value = { version: 1, kind: "status", store: "/fixture/store" };
+  const value = { version: 2, kind: "status", store: "/fixture/store" };
   const frame = encodeFrame(value);
   const reader = new FrameReader();
   for (let i = 0; i < frame.length - 1; i++)
@@ -44,8 +44,9 @@ test("bounds the complete frame and rejects malformed encoding before dispatch",
 
 test("request validation excludes arbitrary fields and unbound manual intent", () => {
   const ordinary = {
-    version: 1,
+    version: 2,
     kind: "reconcile",
+    lifecycleVersion: 1,
     store: "/fixture/store",
     request: { requestId: "r", taskId: "jp-a" },
   };
@@ -60,7 +61,7 @@ test("request validation excludes arbitrary fields and unbound manual intent", (
   };
   assert.deepEqual(parseRequest(manual), manual);
   for (const value of [
-    { ...ordinary, version: 2 },
+    { ...ordinary, version: 1 },
     { ...ordinary, command: "anything" },
     { ...ordinary, kind: "stop" },
     { ...ordinary, store: "relative" },
@@ -81,7 +82,7 @@ test("request validation excludes arbitrary fields and unbound manual intent", (
 
 test("reconciliation responses contain only a validated task summary", () => {
   const value = {
-    version: 1,
+    version: 2,
     ok: true,
     kind: "reconcile",
     reply: {
@@ -116,7 +117,7 @@ test("response parsing covers every native lifecycle status", () => {
   };
   for (const [status, phase] of Object.entries(phases)) {
     const response = {
-      version: 1,
+      version: 2,
       ok: true,
       kind: "reconcile",
       reply: {

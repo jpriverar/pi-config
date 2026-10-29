@@ -4,6 +4,7 @@ import { homedir, hostname } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RUNTIME_VERSION } from "./build-info.js";
+import { PROTOCOL_VERSION, SUPPORTED_LIFECYCLE_VERSIONS } from "./schema.js";
 import { runBoundedCommand } from "./commands.js";
 import { loadDaemonConfig } from "./config.js";
 import { localPidState } from "./files.js";
@@ -133,7 +134,11 @@ export async function runCli(
     }
     if (argv.length === 1 && argv[0] === "--runtime-info") {
       deps.output(
-        JSON.stringify({ protocolVersion: 1, runtimeVersion: RUNTIME_VERSION }),
+        JSON.stringify({
+          protocolVersion: PROTOCOL_VERSION,
+          runtimeVersion: RUNTIME_VERSION,
+          supportedLifecycleVersions: SUPPORTED_LIFECYCLE_VERSIONS,
+        }),
       );
       return 0;
     }

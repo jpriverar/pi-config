@@ -77,7 +77,8 @@ test(
       },
     );
     const info = JSON.parse(result.stdout);
-    assert.equal(info.protocolVersion, 1);
+    assert.equal(info.protocolVersion, 2);
+    assert.deepEqual(info.supportedLifecycleVersions, [1, 2]);
     assert.equal(info.runtimeVersion, built.manifest.runtimeVersion);
     assert.notEqual(info.runtimeVersion, "source-unbuilt");
     const help = await exec(

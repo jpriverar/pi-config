@@ -35,7 +35,9 @@ const manifest = {
 };
 const health = {
   state: "available" as const,
-  protocolVersion: 1 as const,
+  protocolVersion: 2 as const,
+  supportedLifecycleVersions: [1, 2],
+  lifecycleWriteVersion: 1,
   runtimeVersion: "fixture-v2",
   pid: process.pid,
   startedAt: "2026-01-01T00:00:00Z",

@@ -1,4 +1,6 @@
 import { createConnection, type Socket } from "node:net";
+import { loadLifecycleConfig } from "../task-lifecycle/config.js";
+import { PROTOCOL_VERSION } from "./schema.js";
 import type { ReconcileRequest } from "../task-lifecycle/reconciliation.js";
 import type { DaemonConfig } from "./config.js";
 import { resolveRuntimePaths } from "./files.js";
@@ -36,6 +38,8 @@ export async function requestReconciliation(
   signal?: AbortSignal,
 ): Promise<ReconcileReply> {
   const request = parseReconcileRequest(input);
+  const lifecycleVersion =
+    loadLifecycleConfig(config.lifecycleConfigPath).lifecycleWriteVersion ?? 1;
   return new Promise((resolve, reject) => {
     let settled = false;
     let sent = false;
@@ -75,10 +79,23 @@ export async function requestReconciliation(
         );
         return;
       }
+      if (
+        !health.supportedLifecycleVersions.includes(lifecycleVersion) ||
+        health.lifecycleWriteVersion !== lifecycleVersion
+      ) {
+        finish(
+          new ReconciliationClientError(
+            "incompatible",
+            `daemon cannot write lifecycle version ${lifecycleVersion}`,
+          ),
+        );
+        return;
+      }
       const paths = await resolveRuntimePaths(config, false);
       if (settled) return;
       const frame = encodeFrame({
-        version: 1,
+        version: PROTOCOL_VERSION,
+        lifecycleVersion,
         kind: "reconcile",
         store: paths.store,
         request,

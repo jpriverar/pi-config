@@ -24,6 +24,7 @@ import {
   type RuntimeBuild,
 } from "./runtime-build.js";
 import { ADMIN_SOURCE } from "./admin-entry.mjs";
+import { PROTOCOL_VERSION, SUPPORTED_LIFECYCLE_VERSIONS } from "./schema.js";
 
 export type ServiceAction =
   | "install"
@@ -604,15 +605,24 @@ export async function manageService(
       [join(d.path, d.build.manifest.entry), "--runtime-info"],
       env,
     );
-    let info: { protocolVersion?: number; runtimeVersion?: string };
+    let info: {
+      protocolVersion?: number;
+      runtimeVersion?: string;
+      supportedLifecycleVersions?: unknown;
+    };
     try {
       info = JSON.parse(smoke.stdout);
     } catch {
       throw new Error("standalone runtime verification returned invalid JSON");
     }
+    const supported = info.supportedLifecycleVersions;
     if (
       smoke.code !== 0 ||
-      info.protocolVersion !== 1 ||
+      info.protocolVersion !== PROTOCOL_VERSION ||
+      !Array.isArray(supported) ||
+      !SUPPORTED_LIFECYCLE_VERSIONS.every((version) =>
+        supported.includes(version),
+      ) ||
       info.runtimeVersion !== build.manifest.runtimeVersion
     )
       throw new Error("standalone runtime verification failed");

@@ -151,9 +151,10 @@ test("oversized and malformed input never reaches task reconciliation", async (t
   for (const data of [
     oversized,
     Buffer.from([0, 0, 0, 1, 0xff]),
-    encodeFrame({ version: 2, kind: "status", store: f.config.store }),
+    encodeFrame({ version: 1, kind: "status", store: f.config.store }),
     encodeFrame({
-      version: 1,
+      version: 2,
+      lifecycleVersion: 1,
       kind: "reconcile",
       store: f.config.store,
       request: { requestId: "r", taskId: "x", command: "ignored" },

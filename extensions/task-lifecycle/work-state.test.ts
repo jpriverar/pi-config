@@ -220,7 +220,9 @@ function createHarness(
       options.health ??
       (async () => ({
         state: "available",
-        protocolVersion: 1,
+        protocolVersion: 2,
+        supportedLifecycleVersions: [1, 2],
+        lifecycleWriteVersion: 1,
         runtimeVersion: "fixture",
         pid: 1,
         startedAt: "2026-01-01T00:00:00Z",

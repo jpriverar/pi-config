@@ -39,6 +39,7 @@ import {
 } from "./model.js";
 import {
   fingerprintCheck,
+  scanReconciliation,
   ReconciliationRequestError,
   reconciliationAlreadyApplied,
   reconciliationOperationId,
@@ -866,6 +867,47 @@ export class TaskLifecycleService {
     owner: LockOwner,
     limits: ReconcileLimits,
   ): Promise<LifecycleIssue[]> {
+    if (this.deps.lifecycleWriteVersion === 2) {
+      const scan = await scanReconciliation(
+        this.deps.store,
+        this.deps.now(),
+        2,
+      );
+      const results: LifecycleIssue[] = [];
+      let checks = 0;
+      for (const candidate of scan.candidates) {
+        if (results.length >= limits.taskLimit) break;
+        const prepared = await this.prepareReconciliation(
+          { taskId: candidate.taskId, requestId: this.deps.uuid() },
+          owner,
+        );
+        if (prepared.kind === "complete") results.push(prepared.issue);
+        else if (checks >= limits.checkLimit)
+          results.push(await this.deps.store.show(candidate.taskId));
+        else {
+          if (this.deps.checkAdapters === undefined)
+            throw new Error(
+              "reconciliation requires configured check adapters",
+            );
+          checks++;
+          const observation = await this.deps.checkAdapters.observe(
+            prepared.prepared.check,
+            prepared.prepared.artifacts,
+            { manualOutcome: prepared.prepared.manualOutcome },
+          );
+          results.push(
+            (
+              await this.applyReconciliation(
+                prepared.prepared,
+                observation,
+                owner,
+              )
+            ).issue,
+          );
+        }
+      }
+      return results;
+    }
     const issues = await this.deps.store.list([
       "open",
       "in_progress",

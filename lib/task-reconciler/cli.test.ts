@@ -94,3 +94,24 @@ test("CLI reports an operation failure without claiming success", async () => {
     output.some((line) => line.includes("fixture update stayed stopped")),
   );
 });
+
+test("runtime info advertises protocol and lifecycle support without administration", async () => {
+  const output: string[] = [];
+  const code = await runCli(["--runtime-info"], {
+    deps: {
+      output: (line) => {
+        output.push(line);
+      },
+      manage: async () => {
+        throw new Error("unexpected administration");
+      },
+      run: async () => {
+        throw new Error("unexpected daemon start");
+      },
+    },
+  });
+  assert.equal(code, 0);
+  const info = JSON.parse(output[0]);
+  assert.equal(info.protocolVersion, 2);
+  assert.deepEqual(info.supportedLifecycleVersions, [1, 2]);
+});

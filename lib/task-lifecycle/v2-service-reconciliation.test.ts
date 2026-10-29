@@ -247,3 +247,80 @@ test("cached success without an observation timestamp cannot change task status"
   assert.deepEqual(f.snapshot("jp-1"), before);
   assert.deepEqual(f.writes, []);
 });
+
+test("v2 direct reconciliation respects its observation budget", async (t) => {
+  let observations = 0;
+  const original = paused(
+    withCheck({
+      activeCheck: check({
+        kind: "time",
+        predicate: { at: NOW },
+        nextCheckAt: NOW,
+      }),
+    }),
+  );
+  const f = await fixture(t, [{ id: "jp-1", lifecycle: original }], {
+    ...V2,
+    checkAdapters: {
+      async observe() {
+        observations++;
+        return { outcome: "satisfied", observation: "Time reached" };
+      },
+    },
+  });
+  const skipped = await f.sut.reconcileDue(session("daemon"), {
+    taskLimit: 1,
+    checkLimit: 0,
+  });
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].lifecycle?.phase, "waiting");
+  assert.equal(observations, 0);
+  const checked = await f.sut.reconcileDue(session("daemon"), {
+    taskLimit: 1,
+    checkLimit: 1,
+  });
+  assert.equal(checked[0].lifecycle?.phase, "actionable");
+  assert.deepEqual((checked[0].lifecycle as LifecycleMetadataV2).owner, OWNER);
+  assert.equal(observations, 1);
+});
+
+for (const predicate of [
+  { mode: "approved" },
+  { mode: "all", approval: "required" },
+  { mode: "all", freshReview: true },
+  { mode: "all", ci: "passed" },
+]) {
+  test(`unsupported automated PR predicate requires manual evaluation: ${JSON.stringify(predicate)}`, async () => {
+    const { validateLifecycleV2 } = await import("./v2-model.js");
+    const current = mergeGate();
+    current.activeCheck!.predicate = predicate;
+    assert.throws(
+      () =>
+        validateLifecycleV2(current, issue(current, nativeStatusV2(current))),
+      /unsupported.*manual/,
+    );
+  });
+}
+
+test("time checks cannot silently carry additional automation criteria", async () => {
+  const { validateLifecycleV2 } = await import("./v2-model.js");
+  const current = withCheck({
+    activeCheck: check({ kind: "time", predicate: { at: NOW, ci: "passed" } }),
+  });
+  assert.throws(
+    () => validateLifecycleV2(current, issue(current, nativeStatusV2(current))),
+    /unsupported.*manual/,
+  );
+});
+
+test("manual checks retain structured criteria that have no automatic adapter", async () => {
+  const { validateLifecycleV2 } = await import("./v2-model.js");
+  const current = withCheck({
+    activeCheck: check({
+      predicate: { approval: "required", freshReview: true, ci: "passed" },
+    }),
+  });
+  assert.doesNotThrow(() =>
+    validateLifecycleV2(current, issue(current, nativeStatusV2(current))),
+  );
+});

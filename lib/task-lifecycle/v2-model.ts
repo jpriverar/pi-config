@@ -175,11 +175,26 @@ export function validateLifecycleV2(
         blockers.length === 0,
         "one check cannot coexist with native blockers",
       );
-      if (state.activeCheck.kind === "time")
+      if (state.activeCheck.kind === "github_pull_request")
+        requireInvariant(
+          Object.keys(state.activeCheck.predicate).every(
+            (key) => key === "mode",
+          ) &&
+            (state.activeCheck.predicate.mode === undefined ||
+              state.activeCheck.predicate.mode === "all" ||
+              state.activeCheck.predicate.mode === "any"),
+          `unsupported github_pull_request predicate for check ${state.activeCheck.id}; use a manual check`,
+        );
+      if (state.activeCheck.kind === "time") {
+        requireInvariant(
+          Object.keys(state.activeCheck.predicate).every((key) => key === "at"),
+          `unsupported time predicate for check ${state.activeCheck.id}; use a manual check`,
+        );
         assertTimestamp(
           state.activeCheck.predicate.at,
           "time check predicate.at",
         );
+      }
       if (
         state.activeCheck.kind === "manual" &&
         state.activeCheck.predicate.reviewAt !== undefined

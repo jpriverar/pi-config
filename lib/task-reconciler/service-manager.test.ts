@@ -105,7 +105,8 @@ async function fixture(t: TestContext) {
           return {
             code: 0,
             stdout: JSON.stringify({
-              protocolVersion: 1,
+              protocolVersion: 2,
+              supportedLifecycleVersions: [1, 2],
               runtimeVersion: currentVersion,
             }),
             stderr: "",
@@ -156,7 +157,9 @@ async function fixture(t: TestContext) {
         ? { state: "unavailable", reason: "not_running" }
         : {
             state: "available",
-            protocolVersion: 1,
+            protocolVersion: 2,
+            supportedLifecycleVersions: [1, 2],
+            lifecycleWriteVersion: 1,
             runtimeVersion: currentVersion,
             pid: 12345,
             startedAt: new Date(clock).toISOString(),
@@ -936,4 +939,21 @@ test("rollback refuses an unusable retained executable and leaves the service st
   );
   assert.equal(f.loaded, false);
   assert.equal(f.disabled, true);
+});
+
+test("install rejects a runtime without compiled lifecycle capabilities", async (t) => {
+  const f = await fixture(t);
+  const exec = f.deps.exec;
+  f.deps.exec = async (file, args, env) => {
+    const result = await exec(file, args, env);
+    if (!args.includes("--runtime-info")) return result;
+    const info = JSON.parse(result.stdout);
+    delete info.supportedLifecycleVersions;
+    return { ...result, stdout: JSON.stringify(info) };
+  };
+  await assert.rejects(
+    manageService("install", f.configPath, f.deps),
+    /runtime verification failed/,
+  );
+  assert.equal(f.loaded, false);
 });
