@@ -230,7 +230,7 @@ test("runScenario awaits final persistence before deadline cleanup", async () =>
     "utf8",
   );
 
-  assert.match(source, /return await persistAndEvaluateScenario\(/);
+  assert.match(source, /await persistAndEvaluateScenario\(/);
 });
 
 test("final transcript write cannot return a passing summary after timeout", async () => {

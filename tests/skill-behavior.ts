@@ -39,7 +39,17 @@ const skillNames = [
   "development-workflow",
 ] as const;
 type SkillName = (typeof skillNames)[number];
-type Mode = "baseline" | "package";
+type Mode = "baseline" | "package" | "control";
+const workflowNames = [
+  "intent",
+  "design",
+  "plan",
+  "validation",
+  "deploy",
+] as const;
+function workflowScenario(scenario: { id: string }): boolean {
+  return workflowNames.some((name) => scenario.id === `workflow/${name}`);
+}
 const placementNames = [
   "current",
   "existing",
@@ -51,12 +61,23 @@ const placementNames = [
 ] as const;
 function scenarioSkill(id: string): SkillName {
   if ((skillNames as readonly string[]).includes(id)) return id as SkillName;
-  if (placementNames.some((name) => id === `project-selection/${name}`))
+  if (
+    placementNames.some((name) => id === `project-selection/${name}`) ||
+    workflowScenario({ id })
+  )
     return "development-workflow";
   throw new Error(`unknown scenario: ${id}`);
 }
-function placementScenario(scenario: Scenario): boolean {
-  return scenario.id.startsWith("project-selection/");
+function proposalScenario(scenario: Scenario): boolean {
+  return (
+    scenario.id.startsWith("project-selection/") || workflowScenario(scenario)
+  );
+}
+
+export function buildScenarioPrompt(scenario: Scenario): string {
+  return workflowScenario(scenario)
+    ? scenario.prompt
+    : `/skill:${scenario.name} ${scenario.prompt}`;
 }
 function policyPath(value: string): string {
   if (!isAbsolute(value) || /[\u0000-\u001f\u007f]/.test(value))
@@ -78,8 +99,61 @@ export interface Scenario {
   id: string;
   name: SkillName;
   prompt: string;
+  context?: string;
   required: string[];
   forbidden: string[];
+}
+
+export interface ReadEvidence {
+  successfulReads: string[];
+  failedTools: string[];
+}
+
+export function collectReadEvidence(
+  messages: unknown,
+  cwd: string,
+): ReadEvidence {
+  if (!Array.isArray(messages))
+    throw new Error("RPC returned no messages for read evidence");
+  const calls = new Map<string, string>();
+  const successfulReads = new Set<string>();
+  const failedTools: string[] = [];
+  for (const message of messages) {
+    if (message?.role === "assistant" && Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (
+          part?.type === "toolCall" &&
+          part.name === "read" &&
+          typeof part.id === "string" &&
+          typeof part.arguments?.path === "string"
+        )
+          calls.set(part.id, resolve(cwd, part.arguments.path));
+      }
+    }
+    if (message?.role !== "toolResult") continue;
+    if (message.isError === true && typeof message.toolName === "string")
+      failedTools.push(message.toolName);
+    const path = calls.get(message.toolCallId);
+    if (path && message.toolName === "read" && message.isError === false)
+      successfulReads.add(path);
+  }
+  return { successfulReads: [...successfulReads], failedTools };
+}
+
+export async function hasSuccessfulRead(
+  evidence: ReadEvidence,
+  path: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal) throwIfAborted(signal);
+  const target = await realpath(path);
+  const reads = await Promise.all(
+    evidence.successfulReads.map((read) =>
+      realpath(read).catch(() => undefined),
+    ),
+  );
+  if (signal) throwIfAborted(signal);
+  return reads.includes(target);
 }
 
 export interface CriterionResult {
@@ -90,6 +164,8 @@ export interface CriterionResult {
 export interface ScenarioSummary {
   scenario?: string;
   skill: SkillName;
+  observations?: ReadEvidence;
+  skillRead?: boolean;
   discovered: boolean;
   passed: boolean;
   required: CriterionResult[];
@@ -121,8 +197,11 @@ export function parseArguments(argv: string[]): Options {
     const flag = argv[index];
     const value = argv[index + 1];
     if (flag === "--mode") {
-      if (mode || (value !== "baseline" && value !== "package"))
-        throw new Error("--mode must be baseline or package");
+      if (
+        mode ||
+        (value !== "baseline" && value !== "package" && value !== "control")
+      )
+        throw new Error("--mode must be baseline, package or control");
       mode = value;
       index++;
     } else if (flag === "--package") {
@@ -155,8 +234,10 @@ export function parseArguments(argv: string[]): Options {
   if (!output) throw new Error("--output is required");
   if (mode === "package" && !packageArgument)
     throw new Error("--package is required in package mode");
-  if (mode === "baseline" && packageArgument)
+  if (mode !== "package" && packageArgument)
     throw new Error("--package is only valid in package mode");
+  if (mode === "control" && (!scenario || !workflowScenario({ id: scenario })))
+    throw new Error("control mode requires one workflow scenario");
   return { mode, packageArgument, output, scenario, appendPolicy };
 }
 
@@ -207,9 +288,8 @@ export function buildRpcArguments(
     "--no-approve",
     "--offline",
   ];
-  if (placementScenario(scenario)) {
-    if (!guard)
-      throw new Error("Placement scenarios require the proposal read guard");
+  if (proposalScenario(scenario)) {
+    if (!guard) throw new Error("Proposal scenarios require the read guard");
     args.push(
       "--no-extensions",
       "--no-mcp",
@@ -254,7 +334,18 @@ export async function loadScenario(
   const forbidden = criteria("Forbidden observations");
   if (required.length === 0 || forbidden.length === 0)
     throw new Error(`${name} must define required and forbidden observations`);
-  return { id, name, prompt: section(markdown, "Prompt"), required, forbidden };
+  for (const criterion of [...required, ...forbidden])
+    evaluateCriterion("", criterion);
+  return {
+    id,
+    name,
+    prompt: section(markdown, "Prompt"),
+    ...(workflowScenario({ id })
+      ? { context: section(markdown, "Context") }
+      : {}),
+    required,
+    forbidden,
+  };
 }
 
 function evaluateCriterion(text: string, criterion: string): boolean {
@@ -834,7 +925,9 @@ async function runScenario(
       "fixtures",
       "project-selection-guard.ts",
     );
-    if (placementScenario(scenario)) {
+    if (scenario.context !== undefined)
+      await writeFile(join(fixture.cwd, "context.md"), scenario.context);
+    if (proposalScenario(scenario)) {
       const roots = [await realpath(fixture.cwd)];
       if (options.mode === "package")
         roots.push(
@@ -876,7 +969,9 @@ async function runScenario(
         forbidden: [],
       };
     }
-    if (!discovered) {
+    if (options.mode === "control" && discovered)
+      throw new Error("No-guidance control unexpectedly discovered the skill");
+    if (!discovered && options.mode !== "control") {
       return {
         scenario: scenario.id,
         skill: scenario.name,
@@ -887,21 +982,51 @@ async function runScenario(
       };
     }
 
+    if (workflowScenario(scenario))
+      await rpc.request("set_auto_retry", { enabled: false });
     const settled = rpc.waitFor("agent_settled");
     await rpc.request("prompt", {
-      message: `/skill:${scenario.name} ${scenario.prompt}`,
+      message: buildScenarioPrompt(scenario),
     });
     await settled;
     const textResponse = await rpc.request("get_last_assistant_text");
     const text = (textResponse.data as { text?: unknown } | undefined)?.text;
     if (typeof text !== "string" || text.trim().length === 0)
       throw new Error(`${scenario.name} returned no final assistant text`);
-    return await persistAndEvaluateScenario(
+    const summary = await persistAndEvaluateScenario(
       scenario,
       text,
       join(outputDirectory, scenarioTranscriptName(scenario)),
       controller.signal,
     );
+    if (!workflowScenario(scenario)) return summary;
+    const response = await rpc.request("get_messages");
+    const observations = collectReadEvidence(
+      (response.data as { messages?: unknown } | undefined)?.messages,
+      fixture.cwd,
+    );
+    const skillRead =
+      options.mode === "package" &&
+      (await hasSuccessfulRead(
+        observations,
+        join(
+          resolve(options.packageArgument!),
+          "skills",
+          scenario.name,
+          "SKILL.md",
+        ),
+        controller.signal,
+      ));
+    return {
+      ...summary,
+      discovered,
+      observations,
+      skillRead,
+      passed:
+        summary.passed &&
+        observations.failedTools.length === 0 &&
+        (options.mode === "control" || skillRead),
+    };
   } finally {
     clearTimeout(timer);
     await rpc?.stop(

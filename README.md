@@ -401,10 +401,14 @@ questions remain direct. It does not require a task or pull request.
 
 ## Development workflows
 
-Use `/skill:development-workflow` when planning new tracked work, or ask to
-resume or hand off approved development work. The skill selects the next useful action from the agreed finish
-line, current evidence, and existing authority. Conditional references cover
-review/CI loops, validation, waiting, related deliverables, and communication.
+Use `/skill:development-workflow` when starting a development initiative, or ask
+to resume or hand off approved work. It connects **Intent → Design → Build and
+Test → Deploy**. Planning starts Build and Test; production verification,
+communication and cleanup belong to Deploy. Ordinary service changes default to
+full delivery, while explicit narrower missions and local-tooling outcomes stay
+proportional. Conditional references cover prior-work discovery, design and
+acceptance criteria, executable planning, review/CI, candidate-specific validation,
+release, waiting and proactive communication.
 It reuses existing specialist skills and task tools rather than adding task
 states, background watchers, or permission to merge, deploy, post, or create
 follow-up tasks. It is not needed for every quick question or review-only request.
@@ -467,6 +471,36 @@ policy and transcripts private. Compare old and candidate skill/policy copies in
 flagged responses manually: string criteria can both miss semantic failures and
 flag valid phrasing. Proposal evaluations do not prove live tool orchestration,
 automatic skill discovery, or correctness across every model/context.
+
+### Workflow behavior evaluation
+
+The same runner supports `workflow/intent`, `workflow/design`, `workflow/plan`,
+`workflow/validation` and `workflow/deploy`. These cases submit ordinary-language
+requests rather than `/skill:` commands. Only the selected workflow skill and the
+read guard load; fixture facts live in `context.md`. Successful skill/reference
+reads and failed tool calls are recorded from RPC messages, not inferred from
+assistant claims. Package-mode success additionally requires a successful read
+of the selected skill. This tests selection in a single-skill fixture, not routing
+among every installed skill.
+
+```sh
+out=$(mktemp -d)
+PI_SKILL_TEST_MODEL=provider/model node --import tsx tests/skill-behavior.ts \
+  --mode package --package /absolute/package-copy \
+  --scenario workflow/intent --output "$out"
+```
+
+For a real no-guidance response, use `--mode control` with one workflow scenario
+and omit `--package`. Unlike the legacy discovery-only `baseline` mode, control
+mode sends the same prompt to the model. No skill is loaded. Workflow runs disable
+provider auto-retry and retain the two-minute timeout and restricted reads.
+Invalid scoring expressions fail before any model invocation.
+
+Agree a model/run budget before evaluation and count failed/timed-out attempts.
+Use fresh output directories and retain guidance versions. Read flagged outputs:
+lexical failures can be valid paraphrases, and passing text does not prove real
+service/tool orchestration. Do not claim a behavioral improvement when current
+guidance already produces the intended behavior.
 
 ## Brief technical RFCs
 

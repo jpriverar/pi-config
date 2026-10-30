@@ -126,6 +126,23 @@ A PR closed without merge is not successful delivery. The daemon updates facts
 and notices but does not launch an agent. Do not promise unattended follow-through
 or silently add a watcher to compensate.
 
+## Propose communication throughout the work
+
+Do not wait until a PR exists to notice a coordination need:
+
+- During Intent, identify relevant owners/initiatives and propose a concrete
+  question when available evidence cannot resolve ownership or requirements.
+- During Design, surface shared-contract changes and required cross-team alignment
+  early, with the decision and evidence the reviewers need.
+- During Build and Test, request appropriate draft feedback or ready-PR review;
+  keep validation gaps explicit.
+- During Deploy, consider operator/user impact and propose an announcement,
+  documentation or rollout coordination when warranted, then the final result.
+
+Proposing outreach is not permission to send it. Reuse an established audience
+and authorization; ask for the concrete missing decision rather than repeatedly
+asking to send already-approved updates. Do not broadcast every small change.
+
 ## Communicate where it advances the work
 
 Use the approved audience and existing thread. If no external audience was
