@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { normalizeMetadata, type BeadsIssue } from "../beads.js";
 import type { LifecycleCheck } from "../task-lifecycle/types.js";
+import { requiresCompletionCleanup } from "../task-lifecycle/presentation.js";
 import type { DaemonHealth } from "./health.js";
 
 export const MAX_NOTICE_CURSOR_BYTES = 128 * 1024;
@@ -82,8 +83,13 @@ function wakes(
 function observation(issue: BeadsIssue) {
   const l = issue.lifecycle!;
   const check = l.activeCheck ?? l.checkHistory.at(-1);
+  const cleanupRequired = requiresCompletionCleanup(l);
   const pending = l.resources
-    .filter((r) => r.cleanupState === "release_pending")
+    .filter(
+      (r) =>
+        r.cleanupState === "release_pending" ||
+        (cleanupRequired && r.cleanupState !== "released"),
+    )
     .map((r) => r.id);
   let kind = l.phase as string;
   if (pending.length) kind = "cleanup";

@@ -5,7 +5,7 @@ An optional Herdr 0.8.0+ integration for the expanded desktop sidebar:
 - The Pi package's existing `project-status` extension publishes the current
   model, claimed task title, catalog project/area, and context pressure for
   interactive Pi panes.
-- This Herdr plugin publishes each space's tab count, active-task count, and
+- This Herdr plugin publishes each space's tab count, distinct owned-task count, and
   optional active-tab label, including spaces with no agents. It requires
   Python 3.9+ on macOS/Linux.
 - Space rows show no Git branch or ahead/behind information.
@@ -17,8 +17,9 @@ The plugin runs from Herdr events, with no daemon or database polling.
 
 ## Display semantics
 
-The example layout shows Pi panes in three rows: state icon and bold task
-title; the owned task’s catalog project and area; then state text and model.
+The example layout shows Pi panes in four rows: state icon and bold task
+title; the owned task’s catalog project and area; task status; then native state
+text and model.
 The pane/display-agent label is omitted so it does not repeat the task title.
 `pi_project` and `pi_area` reuse the identity already resolved for Pi’s status
 line, independently of the browse filter and Herdr tab/space names. No extra
@@ -26,21 +27,31 @@ catalog reads or polling are added. Renames and area moves appear on the next
 normal refresh. Unassigned, unavailable, and non-catalog sessions clear these
 tokens instead of falling back to unrelated location names; an empty row is
 hidden by Herdr.
-A conditional fourth row shows
+A conditional fifth row shows
 `pi_waiting` in warm amber while a session-local wakeup is waiting. The row disappears
 when the token is absent, keeping existing task/model rows intact. Spaces show their state icon and name,
-then `N tabs` and `M in-progress` on the next row. Sidebar context and active-tab
+then `N tabs` and `M owned` on the next row. Sidebar context and active-tab
 labels are omitted; their metadata remains available for custom layouts.
 
 Context usage stays in Pi's footer. When Pi cannot yet estimate it after
 compaction, the footer shows `Context ?` until fresh usage becomes available.
 
 `pi_model` follows the actual selected model. `pi_task` shows the title of the
-current session's matching active claim, including after inactivity. A successful
-lookup with no claim shows `Unassigned`; lookup failures or conflicting claims
-show `Task unavailable`. Legacy expiry timestamps do not end ownership.
-Idle/working is independent of task assignment. Normalized labels are capped at 80 characters; the sidebar
+current session's matching owner record, including after inactivity. V2 retains
+title/project/area through Blocked, Ready, Deferred and Done until explicit release;
+v1 ownership is represented by its active execution record. A successful complete
+lookup with no owner shows `Unassigned`; lookup failures or conflicting owners
+show `Task unavailable`. Discovery includes closed/deferred tasks before browse
+filtering, so failure to read that population is not merely a missing history count.
+Legacy expiry timestamps do not end ownership. Idle/working is independent of assignment. Normalized labels are capped at 80 characters; the sidebar
 may truncate further, and the task system retains the full title.
+
+`pi_task_state` remains `assigned`, `unassigned` or `unavailable`; it is not a task
+phase. `pi_task_phase` carries the raw lifecycle phase and `pi_task_status` its
+bounded display label: Ready to resume, In progress, Blocked, Deferred or Done.
+Missing phase evidence clears the status instead of inventing Active. An owned
+Ready task is not another session's claimable candidate. Native agent runtime and
+`pi_waiting` are independent; a blocked task need not have a scheduled wakeup.
 
 `pi_context_warning` appears at 75–<90% and `pi_context_critical` at >=90%, with
 only one set at a time. The displayed percentage is floored. Unknown usage
@@ -58,16 +69,17 @@ pending alarm. This is session-local waiting, not a persistent alarm or an
 exact-time execution guarantee. The label updates on lifecycle transitions,
 not a countdown polling loop.
 
-The sidebar change is opt-in: merge the `$pi_waiting` row from the example into
+The sidebar change is opt-in: separately review the `$pi_task_status` and
+`$pi_waiting` rows from the example before merging them into
 your existing Pi rows, preserving other styles and labels. No Herdr binary or
-managed agent-state integration changes are required. Waiting-only updates do
+managed agent-state integration changes are required. Wakeup-only updates do
 not query Beads or refresh space task counts.
 
 The space plugin owns `active_tab` (`tab: <label>`), `tab_count`
-(`1 tab` / `N tabs`), and `active_tasks` (`M in-progress`). Task counts use
+(`1 tab` / `N tabs`), and the compatibility key `active_tasks` (`M owned`). Task counts use
 structured `pi_task_state` and `pi_task_id` pane fields, never task-title text.
-They count distinct active claims owned by Pi sessions present in that space,
-including idle sessions, without a deadline. Multiple panes showing the same
+They count distinct tasks owned by Pi sessions present in that space, across
+all owned phases and including idle sessions, without a deadline. Multiple panes showing the same
 claimed task count once. These are space-local counts, not the header's
 workstream-wide counts. Confirmed unassigned panes contribute zero. The publisher
 clears the obsolete `pi_task_expires_at` token; the counter does not use it.
@@ -134,7 +146,7 @@ read metadata with `herdr plugin list --json`, `herdr workspace list`, and
 Each pane-side Herdr command has a 1500ms timeout and an output bound, with no
 automatic retry loop. After an ownership metadata write succeeds, the publisher
 checks whether `jp.space-tabs` is installed/enabled and invokes its existing
-refresh action. Model/context-only writes do not invoke it. This is event-driven,
+refresh action. Model/context/wakeup-only and task-phase-only writes do not invoke it. This is event-driven,
 not database polling, and does not rely on metadata-change hooks. Publication
 remains asynchronous and coalesced; the optional plugin is not required for
 pane metadata. The next meaningful Pi

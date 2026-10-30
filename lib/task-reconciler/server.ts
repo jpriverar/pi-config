@@ -28,7 +28,12 @@ import {
   type ProtocolResponse,
 } from "./protocol.js";
 import { ReconciliationQueueError, type Reconciler } from "./queue.js";
-import { ProtocolError, record } from "./schema.js";
+import {
+  ProtocolError,
+  record,
+  PROTOCOL_VERSION,
+  SUPPORTED_LIFECYCLE_VERSIONS,
+} from "./schema.js";
 
 import { RUNTIME_VERSION } from "./build-info.js";
 export { RUNTIME_VERSION } from "./build-info.js";
@@ -162,7 +167,9 @@ export async function serveReconciler(
         const health = (): AvailableDaemonHealth =>
           parseDaemonHealth({
             state: "available",
-            protocolVersion: 1,
+            protocolVersion: PROTOCOL_VERSION,
+            supportedLifecycleVersions: SUPPORTED_LIFECYCLE_VERSIONS,
+            lifecycleWriteVersion: reconciler.lifecycleWriteVersion ?? 1,
             runtimeVersion: RUNTIME_VERSION,
             pid: owner.pid,
             startedAt: new Date(owner.started).toISOString(),
@@ -171,7 +178,7 @@ export async function serveReconciler(
           }) as AvailableDaemonHealth;
         const publish = () =>
           writePrivateJson(paths.health, {
-            version: 1,
+            version: PROTOCOL_VERSION,
             store: paths.store,
             instanceId: identity.instanceId,
             health: health(),
@@ -188,7 +195,7 @@ export async function serveReconciler(
           socket.on("error", () => socket.destroy());
           if (closing || admissions.size >= MAX_CLIENTS) {
             respond(socket, {
-              version: 1,
+              version: PROTOCOL_VERSION,
               ok: false,
               code: closing ? "not_running" : "busy",
               outcomeUnknown: false,
@@ -220,19 +227,28 @@ export async function serveReconciler(
               const message = parseRequest(value);
               if (message.store !== paths.store) {
                 respond(socket, {
-                  version: 1,
+                  version: PROTOCOL_VERSION,
                   ok: false,
                   code: "wrong_store",
                   outcomeUnknown: false,
                 });
                 return;
               }
+              if (
+                message.kind === "reconcile" &&
+                message.lifecycleVersion !==
+                  (reconciler.lifecycleWriteVersion ?? 1)
+              )
+                throw new ProtocolError(
+                  "incompatible",
+                  "incompatible lifecycle writer",
+                );
               dispatched = true;
               const work = (async () => {
                 try {
                   if (message.kind === "status")
                     respond(socket, {
-                      version: 1,
+                      version: PROTOCOL_VERSION,
                       ok: true,
                       kind: "status",
                       health: health(),
@@ -242,7 +258,7 @@ export async function serveReconciler(
                     if (result.issue.id !== message.request.taskId)
                       throw new Error("mismatched result identity");
                     respond(socket, {
-                      version: 1,
+                      version: PROTOCOL_VERSION,
                       ok: true,
                       kind: "reconcile",
                       reply: {
@@ -259,21 +275,21 @@ export async function serveReconciler(
                 } catch (error) {
                   if (error instanceof ReconciliationRequestError)
                     respond(socket, {
-                      version: 1,
+                      version: PROTOCOL_VERSION,
                       ok: false,
                       code: error.code,
                       outcomeUnknown: false,
                     });
                   else if (error instanceof ReconciliationQueueError)
                     respond(socket, {
-                      version: 1,
+                      version: PROTOCOL_VERSION,
                       ok: false,
                       code: error.code,
                       outcomeUnknown: error.outcomeUnknown,
                     });
                   else
                     respond(socket, {
-                      version: 1,
+                      version: PROTOCOL_VERSION,
                       ok: false,
                       code: "execution_failed",
                       outcomeUnknown: true,
@@ -286,7 +302,7 @@ export async function serveReconciler(
               void work.finally(() => handlers.delete(work));
             } catch (error) {
               respond(socket, {
-                version: 1,
+                version: PROTOCOL_VERSION,
                 ok: false,
                 code:
                   error instanceof ProtocolError ? error.code : "invalid_frame",

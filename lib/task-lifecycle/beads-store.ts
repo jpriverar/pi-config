@@ -11,6 +11,7 @@ import {
 
 import {
   executeBeads,
+  INCLUDE_HIDDEN_BEADS_FLAGS,
   normalizeBeadsLabel,
   type BeadsExec,
   type BeadsExecResult,
@@ -19,7 +20,13 @@ import {
   withFileOperationLock,
   type FileOperationLockDependencies,
 } from "../file-operation-lock.js";
-import { decodeLifecycle } from "./model.js";
+import { decodeLifecycleAny } from "./v2-model.js";
+import {
+  LifecycleV2MigrationApplyError,
+  planLifecycleV2Migration,
+  readLifecycleV2MigrationSnapshot,
+  type LifecycleV2MigrationStore,
+} from "./v2-migration.js";
 import { NEXT_STEP_KEY, normalizeNextStep } from "./next-step.js";
 import {
   decodeWorkManagement,
@@ -32,7 +39,7 @@ import {
 import type {
   CreateTaskInput,
   LifecycleIssue,
-  LifecycleMetadataV1,
+  LifecycleMetadata,
   LifecycleStatus,
   LifecycleStore,
   LockOwner,
@@ -43,6 +50,7 @@ import type {
 
 export interface LifecycleStoreOptions {
   store: string;
+  lifecycleWriteVersion?: 1 | 2;
   lockDependencies?: FileOperationLockDependencies;
   readWorkManagementConfig?: () => WorkManagementConfig | null;
   readCatalog?: () => Promise<WorkCatalog | null>;
@@ -64,8 +72,19 @@ const STATUSES: ReadonlySet<string> = new Set([
 export function createLifecycleStore(
   exec: BeadsExec,
   options: LifecycleStoreOptions,
-): LifecycleStore & WorkManagementStore {
+): LifecycleStore & WorkManagementStore & LifecycleV2MigrationStore {
   const store = options.store;
+  const writeVersion = options.lifecycleWriteVersion ?? 1;
+  if (writeVersion !== 1 && writeVersion !== 2)
+    throw new Error("lifecycle write version must be 1 or 2");
+  function assertWritable(version: number, operation: string): void {
+    if (version !== writeVersion)
+      throw lifecycleStoreError(
+        operation,
+        store,
+        `lifecycle write version ${writeVersion} cannot mutate version ${version}; reviewed conversion is required`,
+      );
+  }
   const lockDependencies =
     options.lockDependencies ?? defaultLockDependencies();
 
@@ -157,15 +176,23 @@ export function createLifecycleStore(
   }
 
   async function list(
-    statuses: readonly LifecycleStatus[],
+    statuses: readonly LifecycleStatus[] | "all",
   ): Promise<LifecycleIssue[]> {
     if (statuses.length === 0) {
       throw lifecycleStoreError("list issues", store, "statuses are required");
     }
-    for (const status of statuses) assertStatus(status, "list issue status");
+    if (statuses !== "all")
+      for (const status of statuses) assertStatus(status, "list issue status");
     const value = await executeJson(
       "list issues",
-      ["list", "-s", statuses.join(","), "-n", "0", "--json"],
+      [
+        "list",
+        ...(statuses === "all" ? ["--all"] : ["-s", statuses.join(",")]),
+        ...INCLUDE_HIDDEN_BEADS_FLAGS,
+        "-n",
+        "0",
+        "--json",
+      ],
       true,
     );
     return decodeEnvelope(value, "list issues", store).map(
@@ -176,7 +203,7 @@ export function createLifecycleStore(
   async function readyIds(): Promise<ReadonlySet<string>> {
     const value = await executeJson(
       "list ready issues",
-      ["ready", "--json"],
+      ["ready", "-n", "0", "--json"],
       true,
     );
     const ids = decodeEnvelope(value, "list ready issues", store).map(
@@ -199,9 +226,10 @@ export function createLifecycleStore(
 
   async function create(
     input: CreateTaskInput,
-    lifecycle: LifecycleMetadataV1,
+    lifecycle: LifecycleMetadata,
     owner: LockOwner,
   ): Promise<LifecycleIssue> {
+    assertWritable(lifecycle.version, "create task");
     assertNonEmpty(input.title, "task title");
     assertNonEmpty(input.why, "task why");
     if (input.workstream?.includes(",")) {
@@ -418,6 +446,18 @@ export function createLifecycleStore(
       owner,
       async () => {
         let current = await readOne(id, `read issue ${id}`);
+        if (
+          current.issue.lifecycle === null &&
+          Object.hasOwn(current.rawMetadata, "piLifecycle")
+        ) {
+          throw lifecycleStoreError(
+            `mutate issue ${id}`,
+            store,
+            "invalid or unsupported piLifecycle metadata",
+          );
+        }
+        if (current.issue.lifecycle !== null)
+          assertWritable(current.issue.lifecycle.version, `mutate issue ${id}`);
         const mutation = await operation(current.issue, async (blockerIds) => {
           for (const blockerId of blockerIds)
             assertIdentifier(blockerId, "blocker issue id");
@@ -427,6 +467,7 @@ export function createLifecycleStore(
           return current.issue;
         });
         if (mutation === null) return current.issue;
+        assertWritable(mutation.lifecycle.version, `mutate issue ${id}`);
         validateMutation(mutation, id, store);
         const mergedMetadata = mergeLifecycleMetadata(
           current.rawMetadata,
@@ -589,7 +630,92 @@ export function createLifecycleStore(
       );
     };
 
+  const applyLifecycleV2Migration: LifecycleV2MigrationStore["applyLifecycleV2Migration"] =
+    async (review, owner) => {
+      assertWritable(2, "convert lifecycle v2");
+      const approved = structuredClone(review);
+      if (approved.storePath !== store)
+        throw new Error("conversion target does not match the reviewed store");
+      const reviewed = planLifecycleV2Migration(
+        approved.source,
+        approved.classifications,
+      );
+      if (!isDeepStrictEqual(approved, { ...reviewed, storePath: store }))
+        throw new Error(
+          "reviewed migration plan fingerprint changed or report contents were edited",
+        );
+      return withFileOperationLock(
+        join(store, "pi-task-lifecycle"),
+        owner,
+        async () => {
+          const snapshot = await readLifecycleV2MigrationSnapshot({
+            list,
+            showMany,
+          });
+          const plan = planLifecycleV2Migration(
+            snapshot,
+            approved.classifications,
+          );
+          if (approved.fingerprint !== plan.fingerprint)
+            throw new Error(
+              "migration input fingerprint changed; obtain a fresh reviewed report",
+            );
+          if (plan.diagnostics.length > 0)
+            throw new Error(
+              `migration refused: ${plan.diagnostics.join("; ")}`,
+            );
+          const verified: LifecycleIssue[] = [];
+          for (const proposal of plan.proposals) {
+            try {
+              const before = snapshot.find((row) => row.id === proposal.id)!;
+              const current = await readOne(
+                proposal.id,
+                `revalidate conversion ${proposal.id}`,
+              );
+              if (!isDeepStrictEqual(current.issue, before))
+                throw new Error("migration input changed after preflight");
+              const metadata = {
+                ...current.rawMetadata,
+                piLifecycle: proposal.lifecycle,
+              };
+              await execute(`convert lifecycle ${proposal.id}`, [
+                "update",
+                proposal.id,
+                "--metadata",
+                JSON.stringify(metadata),
+                "--json",
+              ]);
+              const saved = await readOne(
+                proposal.id,
+                `verify conversion ${proposal.id}`,
+              );
+              if (
+                !isDeepStrictEqual(saved.issue, {
+                  ...before,
+                  metadata,
+                  lifecycle: proposal.lifecycle,
+                })
+              )
+                throw new Error(
+                  "converted record did not match the reviewed proposal",
+                );
+              verified.push(saved.issue);
+            } catch (error) {
+              throw new LifecycleV2MigrationApplyError(
+                verified.map((row) => row.id),
+                proposal.id,
+                error,
+              );
+            }
+          }
+          return verified;
+        },
+        lockDependencies,
+      );
+    };
+
   return {
+    applyLifecycleV2Migration,
     comments,
     mutateWorkManagement,
     show,
@@ -649,7 +775,7 @@ function decodeIssue(
         : requireRecord(record.metadata, "issue metadata");
     const rawLifecycle = rawMetadata.piLifecycle;
     const decodedLifecycle =
-      rawLifecycle === undefined ? null : decodeLifecycle(rawLifecycle);
+      rawLifecycle === undefined ? null : decodeLifecycleAny(rawLifecycle);
     const lifecycle =
       decodedLifecycle === null || !decodedLifecycle.ok
         ? null
@@ -727,7 +853,7 @@ function validateMutation(
   try {
     assertIdentifier(mutation.operationId, "mutation operation id");
     assertStatus(mutation.status, "mutation status");
-    const decoded = decodeLifecycle(mutation.lifecycle);
+    const decoded = decodeLifecycleAny(mutation.lifecycle);
     if (!decoded.ok) throw new Error(decoded.warning);
     if (
       !mutation.lifecycle.transitionHistory.some(
@@ -749,7 +875,7 @@ function validateMutation(
 
 function mergeLifecycleMetadata(
   metadata: Record<string, unknown>,
-  lifecycle: LifecycleMetadataV1,
+  lifecycle: LifecycleMetadata,
 ): Record<string, unknown> {
   const merged: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(metadata)) {
@@ -816,9 +942,14 @@ function verifyMutation(
       "lifecycle did not match the requested mutation",
     );
   }
+  if (lifecycle.version !== expected.lifecycle.version) fail("version");
   if (lifecycle.phase !== expected.lifecycle.phase) fail("phase");
-  if (!isDeepStrictEqual(lifecycle.execution, expected.lifecycle.execution))
-    fail("execution");
+  if (lifecycle.version === 2 && expected.lifecycle.version === 2) {
+    if (!isDeepStrictEqual(lifecycle, expected.lifecycle)) fail("lifecycle");
+  } else if (lifecycle.version === 1 && expected.lifecycle.version === 1) {
+    if (!isDeepStrictEqual(lifecycle.execution, expected.lifecycle.execution))
+      fail("execution");
+  }
   if (
     !isDeepStrictEqual(
       lifecycle.artifacts.map((artifact) => artifact.id),

@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../task-lifecycle/legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BeadsIssue } from "../beads.js";
@@ -6,7 +7,9 @@ import { waitingTask } from "./test-fixtures.js";
 import { selectReconciliationNotices, readNoticeCursor } from "./notices.js";
 const health: DaemonHealth = {
   state: "available",
-  protocolVersion: 1,
+  protocolVersion: 2,
+  supportedLifecycleVersions: [1, 2],
+  lifecycleWriteVersion: 1,
   runtimeVersion: "fixture",
   pid: 1,
   startedAt: "2026-01-01T00:00:00Z",
@@ -27,7 +30,7 @@ function issue(id = "jp-1"): BeadsIssue {
     title: "untrusted title",
     status: "blocked",
     labels: [],
-    lifecycle: task.lifecycle,
+    lifecycle: legacyLifecycle(task.lifecycle),
   };
 }
 
@@ -452,4 +455,37 @@ test("optional manual reminders are evaluated and deduplicated without polling",
   assert.equal(check.state, "pending");
   assert.equal(check.lastCheckedAt, null);
   assert.equal(check.nextCheckAt, null);
+});
+
+test("successful delivery with retained resources warns about cleanup once instead of implying completion", async () => {
+  const { withCheck, check, resource, NOW } = await import(
+    "../task-lifecycle/v2-test-fixtures.js"
+  );
+  const row: BeadsIssue = {
+    id: "jp-cleanup",
+    title: "Cleanup task",
+    status: "open",
+    labels: [],
+    lifecycle: withCheck({
+      phase: "actionable",
+      activeCheck: check({
+        state: "satisfied",
+        onSatisfied: "close",
+        lastObservation: "Delivered",
+        lastCheckedAt: NOW,
+      }),
+      resources: [resource()],
+    }),
+  };
+  const first = selectReconciliationNotices([row], health, null);
+  assert.equal(first.notices.length, 1);
+  assert.match(first.notices[0].message, /cleanup.*pending/i);
+  assert.doesNotMatch(
+    first.notices[0].message,
+    /task completed|check satisfied/,
+  );
+  assert.equal(
+    selectReconciliationNotices([row], health, first.cursor).notices.length,
+    0,
+  );
 });

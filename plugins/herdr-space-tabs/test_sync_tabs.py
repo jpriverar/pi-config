@@ -32,8 +32,8 @@ def snapshot():
 class TokenTests(unittest.TestCase):
     def test_counts_all_tabs_and_uses_each_spaces_active_id(self):
         self.assertEqual(workspace_tokens(snapshot()), {
-            "w1": {"active_tab": "tab: review", "tab_count": "2 tabs", "active_tasks": "0 in-progress"},
-            "w2": {"active_tab": "tab: research", "tab_count": "1 tab", "active_tasks": "0 in-progress"},
+            "w1": {"active_tab": "tab: review", "tab_count": "2 tabs", "active_tasks": "0 owned"},
+            "w2": {"active_tab": "tab: research", "tab_count": "1 tab", "active_tasks": "0 owned"},
         })
 
     def test_missing_foreign_and_zero_tab_states_never_guess(self):
@@ -43,7 +43,7 @@ class TokenTests(unittest.TestCase):
             self.assertEqual(workspace_tokens(value)["w1"]["active_tab"], "")
         value = snapshot()
         value["tabs"] = []
-        self.assertEqual(workspace_tokens(value)["w1"], {"active_tab": "", "tab_count": "0 tabs", "active_tasks": "0 in-progress"})
+        self.assertEqual(workspace_tokens(value)["w1"], {"active_tab": "", "tab_count": "0 tabs", "active_tasks": "0 owned"})
 
     def test_sanitizes_control_sequences_and_caps_the_complete_label(self):
         value = snapshot()
@@ -75,21 +75,29 @@ class ClaimCountTests(unittest.TestCase):
         value["panes"] = [pi_pane(), pi_pane("w1:p2"), pi_pane("w1:p3", "jp-two"),
                           pi_pane("w1:p4", state="unassigned"),
                           {**pi_pane("w1:p5", "jp-three"), "agent": "claude"}]
-        self.assertEqual(workspace_tokens(value)["w1"].get("active_tasks"), "2 in-progress")
-        self.assertEqual(workspace_tokens(value)["w2"].get("active_tasks"), "0 in-progress")
+        self.assertEqual(workspace_tokens(value)["w1"].get("active_tasks"), "2 owned")
+        self.assertEqual(workspace_tokens(value)["w2"].get("active_tasks"), "0 owned")
+
+    def test_owned_count_deduplicates_across_phases_without_claiming_runtime_activity(self):
+        value = snapshot()
+        value["panes"] = [pi_pane("w1:p" + str(i), "jp-one" if i < 3 else "jp-two") for i in range(5)]
+        for pane, phase in zip(value["panes"], ["active", "actionable", "waiting", "deferred", "done"]):
+            pane["tokens"]["pi_task_phase"] = phase
+        self.assertEqual(workspace_tokens(value)["w1"]["active_tasks"], "2 owned")
+        self.assertTrue(all(pane["agent_status"] == "idle" for pane in value["panes"]))
 
     def test_claims_follow_pane_membership_not_workstream_or_task_title(self):
         value = snapshot()
         pane = pi_pane()
         pane["tokens"]["pi_task"] = "Unassigned"
         value["panes"] = [pane]
-        self.assertEqual(workspace_tokens(value)["w1"].get("active_tasks"), "1 in-progress")
+        self.assertEqual(workspace_tokens(value)["w1"].get("active_tasks"), "1 owned")
         pane.update(workspace_id="w2", tab_id="w2:t1")
         result = workspace_tokens(value)
-        self.assertEqual(result["w1"].get("active_tasks"), "0 in-progress")
-        self.assertEqual(result["w2"].get("active_tasks"), "1 in-progress")
+        self.assertEqual(result["w1"].get("active_tasks"), "0 owned")
+        self.assertEqual(result["w2"].get("active_tasks"), "1 owned")
         value["panes"] = []
-        self.assertEqual(workspace_tokens(value)["w2"].get("active_tasks"), "0 in-progress")
+        self.assertEqual(workspace_tokens(value)["w2"].get("active_tasks"), "0 owned")
 
     def test_durable_claims_ignore_legacy_deadlines(self):
         for expires in ["1000000", "999999", None, "not-a-date"]:
@@ -99,7 +107,7 @@ class ClaimCountTests(unittest.TestCase):
                 if expires is None:
                     del pane["tokens"]["pi_task_expires_at"]
                 value["panes"] = [pane]
-                self.assertEqual(workspace_tokens(value)["w1"]["active_tasks"], "1 in-progress")
+                self.assertEqual(workspace_tokens(value)["w1"]["active_tasks"], "1 owned")
 
     def test_legacy_expired_report_is_unknown_not_unassigned(self):
         value = snapshot()
@@ -118,7 +126,7 @@ class ClaimCountTests(unittest.TestCase):
                 value["panes"] = [pi_pane(), unknown]
                 result = workspace_tokens(value)
                 self.assertEqual(result["w1"].get("active_tasks"), "tasks unavailable")
-                self.assertEqual(result["w2"].get("active_tasks"), "0 in-progress")
+                self.assertEqual(result["w2"].get("active_tasks"), "0 owned")
 
     def test_invalid_pane_membership_or_absent_panes_cannot_silently_zero_counts(self):
         for value in [{k: v for k, v in snapshot().items() if k != "panes"},

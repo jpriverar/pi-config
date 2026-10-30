@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../task-lifecycle/legacy-test-fixtures.js";
 import type { WorkManagementSync } from "../work-management/sync.js";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
@@ -380,7 +381,7 @@ test("idle ownership is preserved while its retained check is in the future", as
   const issue = waitingTask("expired", "time");
   issue.status = "in_progress";
   issue.lifecycle!.phase = "active";
-  issue.lifecycle!.execution = {
+  legacyLifecycle(issue.lifecycle!).execution = {
     sessionId: "old-owner",
     claimedAt: "2026-01-01T00:00:00Z",
     lastActivityAt: "2026-01-01T00:00:00Z",

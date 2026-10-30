@@ -13,6 +13,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import type { DaemonConfig } from "./config.js";
 
 export const MAX_PRIVATE_BYTES = 64 * 1024;
+export const MAX_PRIVATE_REPORT_BYTES = 16 * 1024 * 1024;
 export class RuntimeBoundaryError extends Error {
   constructor(
     readonly code: string,
@@ -205,6 +206,23 @@ export async function writePrivateJson(
   const limit = options.maxBytes ?? MAX_PRIVATE_BYTES;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1024 * 1024)
     throw new Error("Invalid private-file budget");
+  return writePrivateJsonFile(path, value, limit, options.exclusive === true);
+}
+
+export async function writePrivateReportJson(
+  path: string,
+  value: unknown,
+): Promise<void> {
+  await verifyParents(path);
+  return writePrivateJsonFile(path, value, MAX_PRIVATE_REPORT_BYTES, true);
+}
+
+async function writePrivateJsonFile(
+  path: string,
+  value: unknown,
+  limit: number,
+  exclusive: boolean,
+): Promise<void> {
   const text = JSON.stringify(value);
   if (Buffer.byteLength(text) > limit)
     throw new RuntimeBoundaryError(
@@ -228,7 +246,7 @@ export async function writePrivateJson(
   }
   await handle.close();
   try {
-    if (options.exclusive) {
+    if (exclusive) {
       await link(temporary, path);
       await unlink(temporary);
     } else await rename(temporary, path);

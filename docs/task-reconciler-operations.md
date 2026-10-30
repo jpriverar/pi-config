@@ -10,7 +10,9 @@ Ordinary task mutations and execution-lease renewal remain available in Pi.
 Once enabled, the daemon may reconcile dependency waits, observe due PR/time
 checks, and record native facts about interrupted worktree operations without an
 open Pi session. It never expires ownership or initiates worktree deletion.
-Wait, defer, and close require explicit release through `worktree_pool` first.
+V1 wait/defer/close require explicit resource release first. V2 blocking may
+retain worktrees and ownership; close/defer/task release still require safe
+resource cleanup.
 The daemon cannot claim work, launch agents, merge PRs, or infer manual outcomes. Missing or ambiguous evidence
 is not success. This is a single-host design, not a distributed worker lease.
 
@@ -60,6 +62,138 @@ is not success. This is a single-host design, not a distributed worker lease.
 6. Observe a bounded window of authorized real work. Verify persisted task state
    and notices, not merely a green health file. Do not manufacture manual outcomes
    or create throwaway live tasks to exercise the daemon.
+
+## Reviewed lifecycle v2 cutover
+
+This is a separate approval gate from catalog activation. Lifecycle writes still
+default to version 1. Building or publishing compatible code does not activate v2,
+convert tasks, reload clients, or change the live sidebar. See the
+[v2 behavior contract](task-lifecycle-v2.md).
+
+1. **Inventory compatible participants.** Record the exact approved package commit,
+   built runtime version and every Pi client/daemon using the canonical store.
+   Before any v2 write, all writers must reject present invalid/unsupported
+   `piLifecycle` metadata instead of adopting it as legacy. Files on disk do not
+   prove a running client loaded the guard. Coordinate safe idle reloads; do not
+   terminate busy sessions or children. Readers supporting both schemas can be
+   staged while the writer stays at 1. Verify the installed Beads supports
+   `list --all --include-gates --include-infra --include-templates -n 0`
+   and `ready -n 0`. Complete lifecycle discovery must include hidden native
+   records; unsupported flags/statuses or bounded-read failures block the operation
+   rather than falling back to an incomplete population.
+
+   RPC and health envelopes are now version 2, independent of schema/policy-file
+   versions. Health/runtime information declares `supportedLifecycleVersions`
+   and `lifecycleWriteVersion`. A Pi request carries its expected writer version;
+   mismatches and older peers fail incompatibly, without local reconciliation
+   fallback. A client-only update can therefore interrupt reconciliation until
+   the matching daemon is explicitly updated. Include that window in approval.
+
+2. **Quiesce writers and preserve evidence.** After approval, stop/drain the daemon
+   through its verified administration path and pause client task/activity writes.
+   Include Work Management metadata writers and direct Beads editors. Take a
+   consistent supported Beads-store backup and verify its restore procedure;
+   retain policy/configuration and native pool evidence separately. A report is
+   not a complete store backup. Inspect native claims against retained resources;
+   the planner checks record consistency, not the live filesystem/pool.
+
+3. **Generate a private, report-only candidate.** The report requires an explicit
+   store and a new output path. It issues only native list/show reads, disables
+   read-triggered backups and writes an exclusive mode-0600 artifact:
+
+   ```sh
+   npm run lifecycle:report-v2 -- --store STORE --output REPORT
+   npm run lifecycle:report-v2 -- --store STORE --output REVIEWED_REPORT --classifications CLASSIFICATIONS
+   ```
+
+   The second output must also be new. Classification is an object keyed by task
+   ID, for example `{ "jp-example": { "purpose": "completion", "reason": "Keep the agreed merge requirement" } }`.
+   Classification input files must also be private (mode `0600`). Every legacy
+   condition requires an explicit purpose and reason. Unmet legacy
+   gates and native dependencies remain completion requirements; the planner
+   does not infer purpose from `onSatisfied` or check kind. A fulfilled check may
+   be explicitly classified continuation. No owner is inferred from labels,
+   history or stale task text. Existing unowned tasks remain unowned; unmanaged
+   records remain unmanaged; v2 records are validated and left unchanged.
+   Deferred v1 tasks with unresolved native blockers also need an explicit
+   completion classification even if v1 cleared their waiting field. After
+   activation, an explicit claim may initialize truly untracked native-open work
+   under the [safe initialization rules](task-lifecycle-v2.md#work-boundaries-and-tools);
+   the report itself does not adopt these tasks.
+
+   Review source lifecycle evidence/raw metadata, native edges, proposed owners,
+   phases, conditions, pauses, captured destinations and blocking diagnostics.
+   The report preserves deprecated v1 lease/snapshot evidence outside the v2
+   schema. Duplicate owners/resources, unresolved resource operations, unsupported
+   criteria, native conflicts and incomplete reads block conversion. Exit 0 means
+   a report without blocking diagnostics; exit 2 means a saved blocked report;
+   exit 1 means the report failed. The complete lifecycle review artifact has a
+   16 MiB limit, including its full source/history and proposals. Classification
+   inputs and catalog plans retain their separate 1 MiB limits; ordinary runtime
+   JSON retains its 64 KiB default. Oversized populations fail rather than being
+   filtered, pruned or silently split into partial plans.
+   Neither exit 0 nor a fingerprint establishes operator approval or live safety.
+
+4. **Approve the exact conversion and driver.** There is deliberately no report
+   `--apply` flag, startup conversion, public migration tool, or force path.
+   The library's `applyLifecycleV2Migration(reviewedReport, owner)` is the
+   explicit apply boundary; the report includes its source, proposals,
+   classifications, fingerprint and `storePath`. Use it only from
+   the separately reviewed operator driver for this cutover. It requires writer
+   2 and the exact reviewed store. Normal v2 mutations still refuse v1 records.
+   Load the saved artifact through `readLifecycleV2MigrationReport` from
+   `lib/task-lifecycle/v2-migration-io.ts`: it enforces the 16 MiB report budget,
+   private file/parent checks and strict UTF-8 JSON decoding. The generic catalog
+   reader keeps its smaller default and is not the lifecycle-report loader.
+
+   It first checks the report's contents against its fingerprint; the binding
+   covers proposed conversions as well as source data and classification decisions.
+   Under the shared lifecycle mutation lock it rereads the complete population
+   and full records, recomputes the fingerprint, validates the entire plan, then
+   writes/read-backs each conversion. It preserves unrelated metadata, native
+   statuses/edges and existing WM bindings. Stale input, unsupported writer or
+   blocking diagnostics cause no conversion writes. Do not edit the saved report
+   to bypass a refusal; obtain a fresh report and review.
+
+   **This is not a multi-record database transaction.** An I/O failure or foreign
+   writer can leave a partial cutover. The error lists verified task IDs and the
+   uncertain record; that write may have applied. It never retries, downgrades
+   records or rolls back automatically. Keep writers quiesced, inspect the store
+   and backup, and obtain a fresh reviewed recovery decision before proceeding.
+
+5. **Select writer 2 and reload only approved participants.** Preserve the other
+   policy fields and its `version: 1`; set `lifecycleWriteVersion: 2` in the exact
+   client/daemon policy sources. Update the installed runtime/config snapshot
+   through the existing approved service path. At safe idle boundaries reload
+   every affected client onto the approved code and policy before resuming work.
+   Verify fresh daemon health, exact built runtime version, protocol 2, supported
+   schemas `[1, 2]`, and writer 2. Check each client's actual tool surface exposes
+   block/resume/release instead of wait and the pool allocation boundary is
+   compatible. A successful health check alone cannot inventory all loaded clients.
+
+6. **Validate real behavior within approved work.** Verify title/project/area and
+   stable owner retention through a meaningful block, Ready and resume; completion
+   requirements after corrective feedback; exact safe resource release; and
+   release-before-switch uniqueness including Done/Deferred. Reopening/claiming
+   must not fabricate ownership for a fork. Check the actual installed candidate,
+   not just unit results. Do not create throwaway live tasks or manufacture check
+   outcomes without separate approval. Record cases not exercised.
+
+7. **Optional sidebar changes are separate.** The new `pi_task_phase` and
+   `pi_task_status` tokens do not repurpose `pi_task_state`, native runtime state,
+   or `pi_waiting`. Review the exact live config diff before adding the task-status
+   row. Do not enable a plugin or edit the live config merely because the checked-in
+   example changed. Existing optional counts now label distinct tasks as owned.
+
+### Lifecycle rollback limits
+
+Before the first v2 record, an approved compatible-code/policy rollback can leave
+v1 data unchanged. Once v2 records exist, setting the writer back to 1 is not a
+reverse migration: writes refuse rather than reconstructing an execution lease.
+Do not downgrade records, delete lifecycle metadata, or run unguarded old clients.
+A whole-store restore can discard newer task facts and cannot undo external
+publication. Prefer forward recovery; any restore or reverse migration needs its
+own reviewed decision accounting for all post-cutover work and writers.
 
 ## Reviewed area and project activation
 
@@ -201,7 +335,8 @@ remote items is always a distinct, explicitly authorized operation.
 ## Health and diagnostics
 
 `status` is read-only. A healthy heartbeat shows process liveness, runtime/protocol
-version, scan timestamps, queue counts and bounded diagnostics; it does not prove
+version, supported lifecycle schemas, configured writer, scan timestamps, queue
+counts and bounded diagnostics; it does not prove
 all external systems are reachable. Healthy service operation can coexist with
 individual checks in error/backoff. Discovery defaults to one minute, PR polling
 to fifteen minutes, with one local lane and two external observations.
@@ -324,7 +459,12 @@ The integration uses a temporary CLI-backed fixture store, real temporary Git/po
 state, fake GitHub and the built foreground daemon. It covers queue pressure past
 100 tasks, two clients, failed observations, retained pipes, dirty-resource
 refusal, concurrent lease renewal, commit-before-reply loss, crash/restart, exact
-manual retry/replacement protection and graceful shutdown. It is not a real
+manual retry/replacement protection and graceful shutdown. A v2 built-process case
+also verifies capability reporting, writer mismatch refusal, and owner/requirement
+retention after a manual continuation. The separate real-Beads v2 integration
+covers ownership handoff, retained resources, stale pauses, concurrent claims,
+explicit initialization of untracked work, and hidden native ownership discovery.
+The daemon fixture is not a real
 embedded-Dolt or live launchd test. Packaging tests use an injected launcher;
 actual macOS plist lint runs without loading the agent. Real launchd install/start
 and live unattended transitions remain separately approval-gated.

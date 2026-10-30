@@ -31,8 +31,12 @@ The description still owns the whole agreed outcome; validation and the final
 update have not vanished. If it needs correction, `task_update` can also change
 `description` to reflect the user's agreement—not the most recently completed
 phase. Omit a field to preserve it; `next_step: null` clears only the hint, not the
-mission or lifecycle. Writes require current active ownership. Update before
-waiting/deferring; claim before changing content on resume.
+mission or lifecycle. Content/journal writes require current In-progress
+ownership. Record the next action before blocking or deferring. On useful
+approved resumption, use `task_resume` for an already-owned v2 task, then update
+content; a same-owner claim does not resume it. With v1 tools, claim waiting
+work before changing content. Resource cleanup is independent and does not
+require resuming an owned Ready/Blocked v2 task.
 
 Native description, next-step and comment writes use plain single-line text;
 next steps are limited to 2000 Unicode code points. Link longer evidence instead
@@ -59,32 +63,68 @@ valid claim. Use native dependencies for genuine prerequisites, not every relate
 link. Completing an implementation task that ends at PR publication does not
 prove its PR merged.
 
-## Wait without retaining an idle checkout
+## Pause work and manage resources independently
 
-Save durable work, finish child use of the checkout, resolve local changes, and
-explicitly release managed worktrees before waiting, deferring or closing.
-Preserve failed cleanup/ownership facts rather than hiding them with a transition.
+Use the actual available tools and matching record/writer version. A mismatch is
+a compatibility problem, not permission to migrate, reload or fall back to a
+conflicting API.
 
-Use the existing lifecycle:
+### V2: block, resume, release
 
-- Claim waiting work when there is a useful authorized fix, then return to its
-  retained condition. Do not create a task per comment.
-- Use `onSatisfied: actionable` if an agent still owes validation, communication,
-  cleanup or a handoff after the check. For example, deployment becoming available
-  leaves behavior validation and the final reply actionable in this same task.
-  Auto-close is only suitable when the condition's satisfaction fulfills all
-  remaining completion requirements.
-- Use the supported dependency, PR, time or manual wait for the current blocker;
-  record later conditions in the handoff. A manual wait needs no invented polling
-  deadline or reminder. Add reminders only when requested.
-- Defer intentionally parked work. Cancel or supersede abandoned work explicitly;
-  a PR closed without merge is not successful delivery. Revisit related commitments
-  rather than automatically completing them.
+| Observed boundary                                                                 | Action                                                                                                                                  |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| All useful approved work has actually paused, including productive children       | `task_block` with the exact existing or atomically registered condition; retain ownership.                                              |
+| Owned Ready/Blocked work has a useful approved next action                        | `task_resume`, then perform the work. Same-owner `task_claim` is idempotent, not a resume.                                              |
+| Owned Done/Deferred work needs more agreed execution                              | `task_reopen`, then resume; terminal association alone is not execution permission.                                                     |
+| Intentional handoff or switch                                                     | Safely release every resource, `task_release` X, then `task_claim` Y. If Y fails, X stays released; do not invent or restore ownership. |
+| Only a parent turn ends, the pane is idle, or a productive child is still running | No lifecycle transition merely for appearance or inactivity. Blocking does not stop children.                                           |
 
-The current task checks observe merges, requested changes and conflicts, not every
-ordinary comment, approval or CI transition. There is no deployment-specific
-check. The daemon updates state/notices; it does not launch an agent. Do not
-promise unattended follow-through or silently add a watcher to compensate.
+Claim unowned work rather than resuming it. Claiming unowned Blocked work acquires
+responsibility without resuming; execution still needs a useful approved next
+action and an explicit resume.
+
+A pause and a completion requirement are separate. Requested PR changes may make
+X Ready for corrections without satisfying its merge requirement: resume X and
+retain that exact requirement. Clear or replace an unmet completion requirement
+only through an explicitly authorized, reasoned abandonment/supersession. Do not
+create a checkpoint task for each comment, or treat stale task text as approval.
+
+Release idle checkouts when work is durable and no child uses them. A v2 block may
+retain a dirty or otherwise unreleasable checkout while productive work is truly
+paused; record the cleanup facts and retain ownership. Do not discard work, commit
+unfinished material, terminate a process, or delay an approved pause just to make
+a cleanup precondition pass. Closing, deferring, and releasing the task still
+require safe resource cleanup. Pending/uncertain releases require exact native
+observation or authorized retry, not a second checkout or a forced task release.
+
+Done/Deferred and readiness retain ownership until explicit release. A fresh
+session ID does not inherit the old owner's task; an Unavailable display is not
+proof of no owner. Keep failed/ambiguous facts visible and use the original owner
+and established recovery path. There is no inactivity takeover.
+
+### V1: legacy wait and claim
+
+When only `task_wait` exists, save durable work, finish child use, resolve local
+changes, and explicitly release managed worktrees before waiting, deferring or
+closing. `task_wait` relinquishes v1 ownership. Claim waiting work for a useful
+approved fix, retaining its condition. Do not invent `task_block`, `task_resume`,
+or `task_release` calls on this surface, or enable v2 to avoid a refusal.
+
+### Conditions and remaining delivery
+
+Use `onSatisfied: actionable` when validation, communication, cleanup or handoff
+remains owed after a check. Auto-close is suitable only when the condition fulfills
+the whole remaining finish line; Done is not independent delivery evidence.
+Use one supported dependency group or typed PR/time/manual check. The current PR
+adapter observes merge, requested changes and conflicts, not arbitrary comments,
+approval-as-success, fresh review responses or CI transitions. Unsupported
+observations require a structured manual check; never invent predicate fields or
+polling deadlines. Add reminders only when requested.
+
+Defer intentionally parked work; explicitly cancel or supersede abandoned work.
+A PR closed without merge is not successful delivery. The daemon updates facts
+and notices but does not launch an agent. Do not promise unattended follow-through
+or silently add a watcher to compensate.
 
 ## Communicate where it advances the work
 

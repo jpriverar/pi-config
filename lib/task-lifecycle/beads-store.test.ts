@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "./legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -230,9 +231,9 @@ test("updates labels in one command and rejects no-op or overlap", async () => {
 
 test("stores mission and next step without changing lifecycle metadata", async () => {
   const state = claimedMutation().lifecycle;
-  state.execution!.sessionId = OWNER.sessionId;
+  legacyLifecycle(state).execution!.sessionId = OWNER.sessionId;
   let current: Record<string, unknown> = {
-    ...rawIssue(state),
+    ...rawIssue(legacyLifecycle(state)),
     status: "in_progress",
     description: "Build the feature",
   };
@@ -261,7 +262,10 @@ test("stores mission and next step without changing lifecycle metadata", async (
     },
     OWNER,
     (issue) => {
-      assert.equal(issue.lifecycle?.execution?.sessionId, OWNER.sessionId);
+      assert.equal(
+        legacyLifecycle(issue.lifecycle)?.execution?.sessionId,
+        OWNER.sessionId,
+      );
       validations += 1;
     },
   );
@@ -313,7 +317,10 @@ test("revalidates ownership under lock before appending a comment", async () => 
     "progress",
     OWNER,
     (issue) => {
-      assert.equal(issue.lifecycle?.execution?.sessionId, OWNER.sessionId);
+      assert.equal(
+        legacyLifecycle(issue.lifecycle)?.execution?.sessionId,
+        OWNER.sessionId,
+      );
     },
   );
 
@@ -351,7 +358,22 @@ test("list preserves Beads edge summaries with unknown target status", async () 
     { id: "jp-blocker", status: "unknown", dependencyType: "blocks" },
   ]);
   assert.deepEqual(calls, [
-    ["bd", ["list", "-s", "open", "-n", "0", "--json", "--db", STORE]],
+    [
+      "bd",
+      [
+        "list",
+        "-s",
+        "open",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "-n",
+        "0",
+        "--json",
+        "--db",
+        STORE,
+      ],
+    ],
   ]);
 });
 
@@ -417,6 +439,54 @@ test("keeps unsupported lifecycle metadata uncoerced and unmanaged", async () =>
   assert.deepEqual(read.metadata.piLifecycle, { version: 2 });
 });
 
+for (const [name, rawLifecycle] of [
+  ["unsupported", { version: 99, privateMarker: "do-not-echo" }],
+  ["malformed", { version: 1, privateMarker: "do-not-echo" }],
+  ["null", null],
+] as const) {
+  test(
+    "refuses mutation of present " + name + " lifecycle metadata",
+    async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "task-invalid-mutation-"));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      let current = rawIssue(null);
+      current.metadata = {
+        piLifecycle: rawLifecycle,
+        unrelated: "preserve-me",
+      };
+      const before = structuredClone(current);
+      let writes = 0;
+      let operationCalled = false;
+      const store = createLifecycleStore(async (_command, args) => {
+        assert.ok(["show", "update"].includes(args[0]));
+        if (args[0] === "update") {
+          writes++;
+          current = {
+            ...current,
+            status: args[args.indexOf("-s") + 1],
+            metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+          };
+        }
+        return result(current);
+      }, options(root));
+
+      await assert.rejects(
+        store.mutate("jp-1", OWNER, () => {
+          operationCalled = true;
+          return claimedMutation();
+        }),
+        (error: Error) =>
+          /jp-1.*invalid or unsupported.*piLifecycle/.test(error.message) &&
+          !error.message.includes("do-not-echo"),
+      );
+
+      assert.equal(operationCalled, false);
+      assert.equal(writes, 0);
+      assert.deepEqual(current, before);
+    },
+  );
+}
+
 test("lists statuses and reads native ready IDs through the explicit store", async () => {
   const calls: Array<[string, readonly string[]]> = [];
   const exec: BeadsExec = async (command, args) => {
@@ -431,8 +501,23 @@ test("lists statuses and reads native ready IDs through the explicit store", asy
   assert.equal(listed[0].id, "jp-1");
   assert.deepEqual([...ready], ["jp-1"]);
   assert.deepEqual(calls, [
-    ["bd", ["list", "-s", "open,blocked", "-n", "0", "--json", "--db", STORE]],
-    ["bd", ["ready", "--json", "--db", STORE]],
+    [
+      "bd",
+      [
+        "list",
+        "-s",
+        "open,blocked",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "-n",
+        "0",
+        "--json",
+        "--db",
+        STORE,
+      ],
+    ],
+    ["bd", ["ready", "-n", "0", "--json", "--db", STORE]],
   ]);
 });
 
@@ -729,7 +814,7 @@ test("replayed identical metadata does not issue another Beads update", async (t
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls: string[] = [];
   const mutation = claimedMutation();
-  const raw = rawIssue(mutation.lifecycle);
+  const raw = rawIssue(legacyLifecycle(mutation.lifecycle));
   raw.status = mutation.status;
   raw.metadata = { unrelated: { keep: true }, piLifecycle: mutation.lifecycle };
   const store = createLifecycleStore(async (_command, args) => {
@@ -1083,7 +1168,10 @@ test("malformed sync state cannot block an owned native progress log", async () 
       return result(current);
     }, options());
     const validate = (issue: import("./types.js").LifecycleIssue) => {
-      if (issue.lifecycle?.execution?.sessionId !== OWNER.sessionId)
+      if (
+        legacyLifecycle(issue.lifecycle)?.execution?.sessionId !==
+        OWNER.sessionId
+      )
         throw new Error("foreign owner");
     };
     await store.appendComment("jp-1", "progress", OWNER, validate);
@@ -1375,7 +1463,7 @@ test("lifecycle and WM mutations preserve project identity and captured targets"
   ) as WorkManagementState;
   f.catalog.projects[P].areaId = B;
   const claimed = claimedMutation();
-  claimed.lifecycle.execution!.sessionId = OWNER.sessionId;
+  legacyLifecycle(claimed.lifecycle).execution!.sessionId = OWNER.sessionId;
   const mutated = await f.store.mutate("jp-1", OWNER, () => claimed);
   assert.deepEqual(mutated.metadata.piProject, { version: 1, projectId: P });
   assert.deepEqual(mutated.metadata.piWorkManagement, wm);
@@ -1389,7 +1477,10 @@ test("lifecycle and WM mutations preserve project identity and captured targets"
     OWNER,
     (issue) => {
       assert.equal(issue.lifecycle?.phase, "active");
-      assert.equal(issue.lifecycle?.execution?.sessionId, OWNER.sessionId);
+      assert.equal(
+        legacyLifecycle(issue.lifecycle)?.execution?.sessionId,
+        OWNER.sessionId,
+      );
     },
   );
   assert.equal(updated.metadata.next_step, "Verify the current candidate");

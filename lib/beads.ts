@@ -1,3 +1,5 @@
+import { ownerOf } from "./task-lifecycle/ownership.js";
+import { requiresCompletionCleanup } from "./task-lifecycle/presentation.js";
 import {
   summarizeWorkManagement,
   decodeWorkManagement,
@@ -14,11 +16,11 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { decodeLifecycle } from "./task-lifecycle/model.js";
+import { decodeLifecycleAny } from "./task-lifecycle/v2-model.js";
 import { NEXT_STEP_KEY, readNextStep } from "./task-lifecycle/next-step.js";
 import type {
   LifecycleCheck,
-  LifecycleMetadataV1,
+  LifecycleMetadata,
   LifecyclePhase,
   NativeDependency,
 } from "./task-lifecycle/types.js";
@@ -44,6 +46,13 @@ export type IssueStatus =
   | "closed";
 export type Readiness = "in_progress" | "blocked" | "ready" | "waiting";
 
+// Use the infra bundle for ephemeral rows: the narrower flag is absent in Beads 1.1.2.
+export const INCLUDE_HIDDEN_BEADS_FLAGS = [
+  "--include-gates",
+  "--include-infra",
+  "--include-templates",
+] as const;
+
 export interface BeadsIssue {
   id: string;
   title: string;
@@ -53,7 +62,7 @@ export interface BeadsIssue {
   status: IssueStatus;
   labels: string[];
   updatedAt?: string;
-  lifecycle?: LifecycleMetadataV1 | null;
+  lifecycle?: LifecycleMetadata | null;
   lifecycleWarning?: string;
   workManagement?: NonNullable<ReturnType<typeof summarizeWorkManagement>>;
   projectReference?: ProjectReference;
@@ -139,7 +148,7 @@ export interface BeadsClient {
   ): Promise<BeadsResult<T>>;
 
   listIssues(
-    statuses?: readonly IssueStatus[],
+    statuses?: readonly IssueStatus[] | "all",
   ): Promise<BeadsResult<BeadsIssue[]>>;
 
   listReadyIssueIds(): Promise<BeadsResult<ReadonlySet<string>>>;
@@ -283,7 +292,7 @@ function decodeIssue(value: unknown, index: number): BeadsIssue {
     if (nextStep.warning) contextWarnings.push(nextStep.warning);
     const rawLifecycle = metadata.piLifecycle;
     if (rawLifecycle !== undefined) {
-      const lifecycle = decodeLifecycle(rawLifecycle);
+      const lifecycle = decodeLifecycleAny(rawLifecycle);
       if (lifecycle.ok) decoded.lifecycle = lifecycle.value;
       else {
         decoded.lifecycle = null;
@@ -472,15 +481,28 @@ export function createBeadsClient(
     listIssues(statuses = ["open", "in_progress", "blocked"]) {
       return readBd(
         "list issues",
-        ["list", "-s", statuses.join(","), "-n", "0", "--json"],
+        statuses === "all"
+          ? [
+              "list",
+              "--all",
+              ...INCLUDE_HIDDEN_BEADS_FLAGS,
+              "-n",
+              "0",
+              "--json",
+            ]
+          : ["list", "-s", statuses.join(","), "-n", "0", "--json"],
         decodeIssues,
       );
     },
     listReadyIssueIds() {
-      return readBd("list ready issues", ["ready", "--json"], (value) => {
-        const issues = decodeIssues(value);
-        return new Set(issues.map((issue) => issue.id));
-      });
+      return readBd(
+        "list ready issues",
+        ["ready", "-n", "0", "--json"],
+        (value) => {
+          const issues = decodeIssues(value);
+          return new Set(issues.map((issue) => issue.id));
+        },
+      );
     },
     showIssues(ids) {
       const normalizedIds = ids.map(normalizeId);
@@ -688,14 +710,22 @@ export function classifyReadiness(
       } else if (issue.lifecycle.phase === "waiting") {
         readiness = "waiting";
         if (
-          issue.lifecycle.waiting?.kind === "dependency" &&
+          (issue.lifecycle.version === 1
+            ? issue.lifecycle.waiting
+            : issue.lifecycle.condition
+          )?.kind === "dependency" &&
           blockingTaskIds.length === 0
         ) {
           warnings.push("dependency wait has no unresolved blocker");
         }
       }
+      const cleanupRequired = requiresCompletionCleanup(issue.lifecycle);
       for (const resource of issue.lifecycle.resources) {
-        if (
+        if (cleanupRequired && resource.cleanupState !== "released") {
+          warnings.push(
+            `cleanup required for worktree ${resource.claimId} (${resource.cleanupState.replace("_", " ")}); release it explicitly before closing`,
+          );
+        } else if (
           issue.lifecycle.phase === "waiting" &&
           resource.cleanupState === "active"
         ) {
@@ -744,6 +774,19 @@ export function classifyReadiness(
       warnings,
     };
   });
+}
+
+export function isClaimableIssue(issue: ClassifiedIssue): boolean {
+  return (
+    issue.readiness === "ready" &&
+    !issue.lifecycleWarning &&
+    issue.lifecycle !== null &&
+    ownerOf(issue.lifecycle) === null
+  );
+}
+
+export function isOwnedReadyIssue(issue: ClassifiedIssue): boolean {
+  return issue.readiness === "ready" && Boolean(ownerOf(issue.lifecycle));
 }
 
 export function lifecycleAnnotation(

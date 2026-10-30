@@ -132,13 +132,13 @@ export class MemoryLifecycleStore implements LifecycleStore {
       this.concurrent -= 1;
     }
   }
-  async list(statuses: readonly LifecycleStatus[]) {
+  async list(statuses: readonly LifecycleStatus[] | "all") {
     return this.access(() => {
       this.reads += 1;
       if (this.failList) throw new Error("private fixture list error");
       return structuredClone(
-        [...this.issues.values()].filter((issue) =>
-          statuses.includes(issue.status),
+        [...this.issues.values()].filter(
+          (issue) => statuses === "all" || statuses.includes(issue.status),
         ),
       );
     });

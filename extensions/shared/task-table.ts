@@ -1,3 +1,8 @@
+import {
+  lifecycleStatusLabel,
+  requiresCompletionCleanup,
+} from "../../lib/task-lifecycle/presentation.js";
+import { ownerOf } from "../../lib/task-lifecycle/ownership.js";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import {
   hyperlink,
@@ -49,7 +54,13 @@ export interface TaskTableCells {
 
 function stateLabel(issue: ClassifiedIssue, now: number): string {
   let label: string;
-  if (issue.readiness === "in_progress") label = "ACTIVE";
+  if (issue.lifecycle?.version === 2)
+    label = lifecycleStatusLabel(
+      issue.lifecycle.phase,
+      ownerOf(issue.lifecycle) !== null,
+      requiresCompletionCleanup(issue.lifecycle),
+    )!;
+  else if (issue.readiness === "in_progress") label = "ACTIVE";
   else if (issue.readiness === "ready") label = "ACTIONABLE";
   else label = "WAITING";
 

@@ -72,6 +72,7 @@ export async function createDaemonRuntime(
   );
   const store = createLifecycleStore(execBeads, {
     store: config.store,
+    lifecycleWriteVersion: policy.lifecycleWriteVersion,
     lockDependencies: operationLock,
     readWorkManagementConfig: () => loadWorkManagementConfig(config.store),
     readCatalog: () => catalog.read(),
@@ -133,6 +134,7 @@ export async function createDaemonRuntime(
     pool,
     now: Date.now,
     uuid: randomUUID,
+    lifecycleWriteVersion: policy.lifecycleWriteVersion,
     executionTimeoutMs: policy.executionTimeoutMs,
     activityWriteIntervalMs: policy.activityWriteIntervalMs,
     prPollIntervalMs: policy.prPollIntervalMs,
@@ -146,6 +148,7 @@ export async function createDaemonRuntime(
     config,
     now: Date.now,
     abortLocalCommands: () => shutdown.abort(),
+    lifecycleWriteVersion: policy.lifecycleWriteVersion,
     workManagement: createWorkManagementSync({
       // Known delivery receipts must drain after lifecycle cancellation, within the existing deadlines.
       store: createLifecycleStore(
@@ -160,6 +163,7 @@ export async function createDaemonRuntime(
         },
         {
           store: config.store,
+          lifecycleWriteVersion: policy.lifecycleWriteVersion,
           lockDependencies: {
             ...operationLock,
             sleep: (ms: number) => sleep(ms),

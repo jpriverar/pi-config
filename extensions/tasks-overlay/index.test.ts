@@ -2095,3 +2095,35 @@ test("legacy alias recovery refreshes status and no-op recovery stays quiet", as
   assert.equal(h.emittedEvents.length, 1);
   assert.deepEqual(h.renamedSessions, []);
 });
+
+test("the overlay shows owned Ready work as resumable without changing its completion condition", async () => {
+  const { withCheck } = await import(
+    "../../lib/task-lifecycle/v2-test-fixtures.js"
+  );
+  const lifecycle = withCheck({ phase: "actionable", pause: null });
+  const before = structuredClone(lifecycle);
+  const h = createHarness({
+    catalog: catalogFixture(),
+    readyIds: ["jp-held"],
+    issues: [
+      {
+        ...issue("jp-held", "open", []),
+        projectReference: { kind: "valid", projectId: P },
+        lifecycle,
+      },
+    ],
+    entries: [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "global" } },
+      },
+    ],
+    renderWidth: 180,
+  });
+  await show(h);
+  assert.match(h.render(), /Ready to resume/);
+  assert.match(h.render(), /jp-held/);
+  assert.deepEqual(lifecycle, before);
+  assert.ok(h.calls.every((args) => args[0] !== "update"));
+});

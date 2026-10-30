@@ -4,8 +4,11 @@ import type {
   Artifact,
   LifecycleCheck,
   LifecycleIssue,
+  LifecycleMetadata,
   LifecycleStatus,
   LifecycleStore,
+  TaskOwner,
+  TaskPause,
 } from "./types.js";
 
 export interface ReconciliationCandidate {
@@ -19,29 +22,46 @@ export interface ReconciliationScan {
   diagnostics: readonly { taskId?: string; code: string }[];
 }
 
-function canReconcile(issue: LifecycleIssue): boolean {
+function canReconcile(
+  issue: LifecycleIssue,
+  writeVersion: 1 | 2,
+): issue is LifecycleIssue & { lifecycle: LifecycleMetadata } {
+  const state = issue.lifecycle;
   return (
-    (issue.status === "open" ||
-      issue.status === "in_progress" ||
-      issue.status === "blocked") &&
-    (issue.lifecycle?.phase === "active" ||
-      issue.lifecycle?.phase === "waiting")
+    state !== null &&
+    state.version === writeVersion &&
+    ["open", "in_progress", "blocked"].includes(issue.status) &&
+    (state.phase === "active" ||
+      state.phase === "waiting" ||
+      (state.version === 2 && state.phase === "actionable"))
   );
+}
+
+function conditionKind(
+  state: LifecycleMetadata | null,
+): "dependency" | "check" | null {
+  return state === null
+    ? null
+    : ((state.version === 1 ? state.waiting : state.condition)?.kind ?? null);
 }
 
 export function selectDueCandidates(
   issues: readonly LifecycleIssue[],
   blockerStatuses: ReadonlyMap<string, LifecycleStatus>,
   nowMs: number,
+  writeVersion: 1 | 2 = 1,
 ): ReconciliationCandidate[] {
   const candidates: ReconciliationCandidate[] = [];
   for (const issue of issues) {
-    if (!canReconcile(issue)) continue;
+    if (!canReconcile(issue, writeVersion)) continue;
     const lifecycle = issue.lifecycle!;
     const reasons: ReconciliationCandidate["reasons"][number][] = [];
     const deadlines: number[] = [];
     const enteredAt = Date.parse(lifecycle.stateEnteredAt);
-    if (lifecycle.phase === "active") {
+    if (
+      lifecycle.phase === "active" ||
+      (lifecycle.version === 2 && lifecycle.owner !== null)
+    ) {
       const pending = lifecycle.resources.filter(
         (r) =>
           r.cleanupState === "acquiring" ||
@@ -65,7 +85,7 @@ export function selectDueCandidates(
         }
       }
     }
-    if (lifecycle.waiting?.kind === "dependency") {
+    if (conditionKind(lifecycle) === "dependency") {
       const blockers = issue.dependencies.filter(
         (dep) => dep.dependencyType === "blocks",
       );
@@ -74,13 +94,20 @@ export function selectDueCandidates(
         deadlines.push(enteredAt);
       }
     }
+    const cachedSettlement =
+      lifecycle.version === 2 &&
+      lifecycle.activeCheck?.state === "satisfied" &&
+      lifecycle.pause !== null;
     if (
-      lifecycle.waiting?.kind === "check" &&
+      conditionKind(lifecycle) === "check" &&
       lifecycle.activeCheck !== null &&
-      lifecycle.activeCheck.kind !== "manual"
+      (cachedSettlement ||
+        (lifecycle.activeCheck.kind !== "manual" &&
+          (lifecycle.version === 1 ||
+            lifecycle.activeCheck.state !== "satisfied")))
     ) {
       const next = lifecycle.activeCheck.nextCheckAt;
-      if (next === null || Date.parse(next) <= nowMs) {
+      if (cachedSettlement || next === null || Date.parse(next) <= nowMs) {
         reasons.push("check");
         deadlines.push(next === null ? enteredAt : Date.parse(next));
       }
@@ -102,6 +129,7 @@ export function selectDueCandidates(
 export async function scanReconciliation(
   store: LifecycleStore,
   nowMs: number,
+  writeVersion: 1 | 2 = 1,
 ): Promise<ReconciliationScan> {
   const issues = await store.list(["open", "in_progress", "blocked"]);
   const diagnostics: { taskId?: string; code: string }[] = [];
@@ -113,7 +141,10 @@ export async function scanReconciliation(
     ) {
       diagnostics.push({ taskId: issue.id, code: "malformed_lifecycle" });
     }
-    if (!canReconcile(issue) || issue.lifecycle?.waiting?.kind !== "dependency")
+    if (
+      !canReconcile(issue, writeVersion) ||
+      conditionKind(issue.lifecycle) !== "dependency"
+    )
       continue;
     for (const dependency of issue.dependencies) {
       if (dependency.dependencyType === "blocks") targets.add(dependency.id);
@@ -147,7 +178,10 @@ export async function scanReconciliation(
   }
   await flush();
   for (const issue of issues) {
-    if (!canReconcile(issue) || issue.lifecycle?.waiting?.kind !== "dependency")
+    if (
+      !canReconcile(issue, writeVersion) ||
+      conditionKind(issue.lifecycle) !== "dependency"
+    )
       continue;
     if (
       issue.dependencies.some(
@@ -158,7 +192,7 @@ export async function scanReconciliation(
     }
   }
   return {
-    candidates: selectDueCandidates(issues, statuses, nowMs),
+    candidates: selectDueCandidates(issues, statuses, nowMs, writeVersion),
     diagnostics,
   };
 }
@@ -183,7 +217,7 @@ export interface ReconcileRequest {
   expectedCheckFingerprint?: string;
 }
 
-export interface PreparedCheck {
+interface PreparedCheckBase {
   taskId: string;
   operationId: string;
   fingerprint: string;
@@ -191,6 +225,21 @@ export interface PreparedCheck {
   artifacts: readonly Artifact[];
   manualOutcome?: "satisfied" | "action_required";
 }
+
+export interface PreparedCheckV1 extends PreparedCheckBase {
+  lifecycleVersion?: 1;
+}
+
+export interface PreparedCheckV2 extends PreparedCheckBase {
+  lifecycleVersion: 2;
+  conditionFingerprint: string;
+  pause: TaskPause | null;
+  owner: Pick<TaskOwner, "sessionId" | "claimedAt"> | null;
+  ownershipOperationId: string | null;
+  actorSessionId: string;
+}
+
+export type PreparedCheck = PreparedCheckV1 | PreparedCheckV2;
 
 export interface ReconcileResult {
   outcome: "applied" | "unchanged" | "already_applied" | "stale";
@@ -223,7 +272,9 @@ function digest(value: unknown): string {
     .digest("hex");
 }
 
-export function fingerprintCheck(issue: LifecycleIssue): string | null {
+export function fingerprintCheck(
+  issue: Pick<LifecycleIssue, "id" | "lifecycle">,
+): string | null {
   const lifecycle = issue.lifecycle;
   const check = lifecycle?.activeCheck;
   if (check === null || check === undefined) return null;
@@ -270,7 +321,7 @@ export function reconciliationOperationId(request: ReconcileRequest): string {
 }
 
 export function reconciliationAlreadyApplied(
-  issue: LifecycleIssue,
+  issue: Pick<LifecycleIssue, "id" | "lifecycle">,
   operationId: string,
 ): boolean {
   const prefix = operationId.slice(0, operationId.lastIndexOf(":") + 1);

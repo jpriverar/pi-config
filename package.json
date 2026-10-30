@@ -15,6 +15,7 @@
   },
   "scripts": {
     "build:reconciler": "node scripts/build-task-reconciler.mjs",
+    "lifecycle:report-v2": "tsx scripts/report-task-lifecycle-v2.ts",
     "catalog": "tsx scripts/work-catalog.ts",
     "probe:reconciler": "tsx tests/task-reconciler-readonly-probe.ts",
     "test": "tsx --test --test-concurrency=2 $(find tests extensions lib -type f -name '*.test.ts' -print 2>/dev/null) && node --test tests/manifest.test.mjs && python3 -B -m unittest discover -s plugins/herdr-space-tabs -p 'test_*.py'",

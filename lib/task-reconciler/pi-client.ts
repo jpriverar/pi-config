@@ -64,6 +64,7 @@ export async function requestPiReconciliation(
   request: ReconcileRequest,
   signal?: AbortSignal,
   store = resolveBeadsDir(),
+  lifecycleVersion?: 1 | 2,
 ) {
   let config;
   try {
@@ -74,7 +75,7 @@ export async function requestPiReconciliation(
       `Reconciliation daemon configuration unavailable. ${reconcilerSetupGuidance}`,
     );
   }
-  return requestReconciliation(config, request, signal);
+  return requestReconciliation(config, request, signal, lifecycleVersion);
 }
 const pendingHealth = new Map<string, Promise<DaemonHealth>>();
 export async function readPiDaemonHealth(

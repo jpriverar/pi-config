@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../lib/task-lifecycle/legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -112,7 +113,7 @@ test(
     const dirty = waitingTask("dirty");
     dirty.lifecycle!.phase = "actionable";
     dirty.lifecycle!.activeCheck = null;
-    dirty.lifecycle!.waiting = null;
+    legacyLifecycle(dirty.lifecycle!).waiting = null;
     dirty.status = "open";
     tasks.push(manual, merged, failed, retained, renewed, dirty);
     await fs.writeFile(join(db, "rows.json"), JSON.stringify(tasks));
@@ -287,7 +288,10 @@ test(
       "failed observations persisted",
     );
     const afterRenewal = await store.show("renewed");
-    assert.equal(afterRenewal.lifecycle!.execution!.expiresAt, renewedExpiry);
+    assert.equal(
+      legacyLifecycle(afterRenewal.lifecycle!).execution!.expiresAt,
+      renewedExpiry,
+    );
     assert.equal(afterRenewal.lifecycle!.phase, "active");
     assert.equal(afterRenewal.lifecycle!.resources[0].cleanupState, "active");
     await fs.access(renewalResource.path);
@@ -397,5 +401,146 @@ test(
         return true;
       }
     }, "test-owned retained pipe child exit");
+  },
+);
+
+test(
+  "built v2 daemon advertises its writer and retains ownership after a manual continuation",
+  { timeout: 60_000 },
+  async (t) => {
+    const { withCheck, issue, OWNER, NOW } = await import(
+      "../lib/task-lifecycle/v2-test-fixtures.js"
+    );
+    const { blockLifecycleV2, fingerprintConditionV2 } = await import(
+      "../lib/task-lifecycle/v2-model.js"
+    );
+    const root = await fs.realpath(await fs.mkdtemp("/tmp/pi-recs-v2-e2e-"));
+    let child: ChildProcess | undefined, done: Promise<unknown> | undefined;
+    t.after(async () => {
+      if (child && child.exitCode === null && child.signalCode === null)
+        child.kill("SIGTERM");
+      if (done) await done;
+      await fs.rm(root, { recursive: true, force: true });
+    });
+    const db = join(root, "db"),
+      repos = join(root, "repos");
+    await fs.mkdir(db);
+    await fs.mkdir(repos);
+    const bd = join(root, "bd.mjs"),
+      gh = join(root, "gh.mjs");
+    await fs.writeFile(
+      bd,
+      `#!${process.execPath}\n${await fs.readFile(join(packageRoot, "tests/fixtures/task-reconciler/store.mjs"), "utf8")}`,
+    );
+    await fs.writeFile(
+      gh,
+      `#!${process.execPath}\nthrow new Error('manual check must not call GitHub');\n`,
+    );
+    await fs.chmod(bd, 0o700);
+    await fs.chmod(gh, 0o700);
+    const current = withCheck();
+    const paused = blockLifecycleV2(current, {
+      operationId: "pause",
+      sessionId: OWNER.sessionId,
+      now: NOW,
+      reason: "Await manual verification",
+      conditionFingerprint: fingerprintConditionV2(current, [])!,
+    });
+    const task = issue(paused, "blocked");
+    await fs.writeFile(join(db, "rows.json"), JSON.stringify([task]));
+    const policy = join(root, "policy.json"),
+      pool = join(root, "pool.json"),
+      configPath = join(root, "config.json");
+    await fs.writeFile(
+      policy,
+      JSON.stringify({ ...fixturePolicy, lifecycleWriteVersion: 2 }),
+    );
+    await fs.writeFile(
+      pool,
+      JSON.stringify({
+        version: 2,
+        root: join(root, "pool"),
+        repositoryRoot: repos,
+        defaultCapacity: 3,
+        exclude: [],
+        repositories: [],
+      }),
+    );
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        store: db,
+        runtimeRoot: join(root, "run"),
+        poolConfigPath: pool,
+        lifecycleConfigPath: policy,
+        executables: { node: process.execPath, bd, gh, git: "/usr/bin/git" },
+        githubAccounts: {},
+        limits: {
+          scanIntervalMs: 1000,
+          heartbeatIntervalMs: 100,
+          heartbeatStaleMs: 2000,
+          requestTimeoutMs: 10000,
+        },
+      }),
+    );
+    const config = await loadDaemonConfig(configPath);
+    const built = await buildReconciler({ packageRoot });
+    const env = {
+      HOME: root,
+      PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+      GIT_TERMINAL_PROMPT: "0",
+    };
+    child = spawn(
+      process.execPath,
+      [
+        join(built.directory, built.manifest.entry),
+        "run",
+        "--config",
+        configPath,
+      ],
+      { env, stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let stderr = "";
+    child.stderr!.on("data", (data) => {
+      stderr = (stderr + data.toString()).slice(-8000);
+    });
+    done = once(child, "exit");
+    await until(async () => {
+      assert.equal(child!.exitCode, null, stderr);
+      return (await readDaemonHealth(config)).state === "available";
+    }, "v2 daemon readiness");
+    const health = await readDaemonHealth(config);
+    assert.equal(health.state, "available");
+    if (health.state !== "available")
+      throw new Error("missing available health");
+    assert.equal(health.lifecycleWriteVersion, 2);
+    assert.deepEqual(health.supportedLifecycleVersions, [1, 2]);
+    const store = createLifecycleStore(
+      (_command, args) => runBoundedCommand(bd, args, { env }),
+      { store: db, lifecycleWriteVersion: 2 },
+    );
+    const binding = {
+      requestId: "manual-v2",
+      taskId: task.id,
+      manualOutcome: "action_required" as const,
+      expectedCheckFingerprint: fingerprintCheck(await store.show(task.id))!,
+    };
+    await assert.rejects(requestReconciliation(config, binding, undefined, 1), {
+      code: "incompatible",
+    });
+    assert.equal((await store.show(task.id)).lifecycle?.phase, "waiting");
+    await requestReconciliation(config, binding, undefined, 2);
+    const saved = (await store.show(task.id)).lifecycle;
+    assert.equal(saved?.version, 2);
+    if (saved?.version !== 2) throw new Error("writer changed the schema");
+    assert.equal(saved.phase, "actionable");
+    assert.deepEqual(saved.owner, OWNER);
+    assert.equal(saved.pause, null);
+    assert.equal(saved.condition?.purpose, "completion");
+    assert.equal(saved.activeCheck?.state, "action_required");
+    child.kill("SIGTERM");
+    await done;
+    assert.equal(child.exitCode, 0);
   },
 );

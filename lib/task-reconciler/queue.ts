@@ -46,6 +46,7 @@ export interface QueueSnapshot {
   diagnostics: readonly QueueDiagnostic[];
 }
 export interface Reconciler {
+  readonly lifecycleWriteVersion?: 1 | 2;
   start(): void;
   reconcile(request: ReconcileRequest): Promise<ReconcileResult>;
   snapshot(): QueueSnapshot;
@@ -60,6 +61,7 @@ export interface ReconcilerDependencies {
   now(): number;
   abortLocalCommands(): void;
   workManagement?: WorkManagementSync;
+  lifecycleWriteVersion?: 1 | 2;
 }
 interface Entry {
   request: ReconcileRequest;
@@ -259,7 +261,11 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
     scanning = true;
     lastScanAttemptAt = timestamp();
     try {
-      const snapshot = await scanReconciliation(deps.store, deps.now());
+      const snapshot = await scanReconciliation(
+        deps.store,
+        deps.now(),
+        deps.lifecycleWriteVersion ?? 1,
+      );
       if (stopping) return;
       lastScanSuccessAt = timestamp();
       const currentDiagnostics = new Set(
@@ -488,6 +494,7 @@ export function createReconciler(deps: ReconcilerDependencies): Reconciler {
   }
 
   return {
+    lifecycleWriteVersion: deps.lifecycleWriteVersion ?? 1,
     start() {
       if (stopping) throw new Error("reconciler is stopped");
       if (started) return;

@@ -1,3 +1,6 @@
+export const PROTOCOL_VERSION = 2;
+export const SUPPORTED_LIFECYCLE_VERSIONS = Object.freeze([1, 2]);
+
 export class ProtocolError extends Error {
   constructor(
     readonly code: "invalid_frame" | "invalid_request" | "incompatible",
@@ -60,7 +63,7 @@ export function identifier(value: unknown): string {
     throw new ProtocolError("invalid_request", "invalid task identifier");
   return result;
 }
-export function protocolVersion(value: unknown): void {
-  if (value !== 1)
+export function protocolVersion(value: unknown, expected = 1): void {
+  if (value !== expected)
     throw new ProtocolError("incompatible", "incompatible protocol version");
 }

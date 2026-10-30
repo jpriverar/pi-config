@@ -178,3 +178,136 @@ test("summary exposes pending and attention without trusting stored URLs", () =>
     url: "https://app.datadoghq.com/cases/case-1",
   });
 });
+
+test("v2 work phases retain captured WM destinations independently of ownership", async () => {
+  const { desiredWorkManagementStatus } = await import("./model.js");
+  const { state, withCheck, check, OWNER, NOW } = await import(
+    "../task-lifecycle/v2-test-fixtures.js"
+  );
+  const configured = {
+    ...target,
+    statuses: {
+      ...target.statuses,
+      actionable: "Configured Ready",
+      active: "Configured Doing",
+      waiting: "Configured Blocked",
+      deferred: "Configured Deferred",
+      completed: "Configured Done",
+      waitingOnPullRequest: "Configured Review",
+    },
+  };
+  const binding = newWorkManagementState(configured, "task", "why");
+  const before = structuredClone(binding);
+  configured.statuses.actionable = "Changed destination";
+  for (const [phase, wanted] of [
+    ["actionable", "Configured Ready"],
+    ["active", "Configured Doing"],
+    ["deferred", "Configured Deferred"],
+    ["done", "Configured Done"],
+  ] as const) {
+    const lifecycle = state({
+      phase,
+      owner: OWNER,
+      disposition:
+        phase === "done"
+          ? {
+              kind: "completed",
+              reason: "Delivered",
+              at: NOW,
+              evidenceArtifactIds: [],
+            }
+          : null,
+    });
+    assert.equal(
+      desiredWorkManagementStatus(binding.target, lifecycle),
+      wanted,
+    );
+  }
+  const ready = withCheck({ phase: "actionable", pause: null });
+  assert.equal(
+    desiredWorkManagementStatus(binding.target, ready),
+    "Configured Ready",
+  );
+  const { blockLifecycleV2, fingerprintConditionV2 } = await import(
+    "../task-lifecycle/v2-model.js"
+  );
+  const current = withCheck({
+    activeCheck: check({ kind: "github_pull_request", nextCheckAt: NOW }),
+  });
+  const waiting = blockLifecycleV2(current, {
+    operationId: "pause",
+    sessionId: OWNER.sessionId,
+    now: NOW,
+    reason: "Review",
+    conditionFingerprint: fingerprintConditionV2(current, [])!,
+  });
+  assert.equal(
+    desiredWorkManagementStatus(binding.target, waiting),
+    "Configured Review",
+  );
+  assert.deepEqual(binding, before);
+});
+
+test("v2 blocked/manual and terminal dispositions use existing WM policy keys without changing bindings", async () => {
+  const { desiredWorkManagementStatus } = await import("./model.js");
+  const { state, withCheck, OWNER, NOW } = await import(
+    "../task-lifecycle/v2-test-fixtures.js"
+  );
+  const { blockLifecycleV2, fingerprintConditionV2 } = await import(
+    "../task-lifecycle/v2-model.js"
+  );
+  const binding = newWorkManagementState(
+    {
+      ...target,
+      statuses: {
+        ...target.statuses,
+        waiting: "Configured Blocked",
+        cancelled: "Configured Cancelled",
+        superseded: "Configured Superseded",
+      },
+    },
+    "task",
+    "why",
+  );
+  const before = structuredClone(binding);
+  const current = withCheck();
+  const blocked = blockLifecycleV2(current, {
+    operationId: "pause",
+    sessionId: OWNER.sessionId,
+    now: NOW,
+    reason: "Manual verification",
+    conditionFingerprint: fingerprintConditionV2(current, [])!,
+  });
+  assert.equal(
+    desiredWorkManagementStatus(binding.target, blocked),
+    "Configured Blocked",
+  );
+  for (const [kind, expected] of [
+    ["cancelled", "Configured Cancelled"],
+    ["superseded", "Configured Superseded"],
+  ] as const) {
+    const lifecycle = state({
+      phase: "done",
+      owner: OWNER,
+      disposition: {
+        kind,
+        at: NOW,
+        reason: "Explicit disposition",
+        evidenceArtifactIds: [],
+        ...(kind === "superseded" ? { supersedingTaskId: "jp-next" } : {}),
+      },
+    });
+    assert.equal(
+      desiredWorkManagementStatus(binding.target, lifecycle),
+      expected,
+    );
+    assert.equal(
+      desiredWorkManagementStatus(binding.target, {
+        ...lifecycle,
+        owner: null,
+      }),
+      expected,
+    );
+  }
+  assert.deepEqual(binding, before);
+});

@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../../lib/task-lifecycle/legacy-test-fixtures.js";
 import {
   A,
   B,
@@ -92,6 +93,7 @@ function createHarness(
     catalog?: WorkCatalog | null;
     catalogError?: string;
     issues?: BeadsIssue[];
+    hiddenIds?: string[];
     readyIds?: string[];
     closed?: BeadsIssue[];
     unavailable?: Query;
@@ -142,7 +144,15 @@ function createHarness(
           : args.includes("closed")
             ? "closed"
             : "active";
-      if (unavailable === query) {
+      const statuses = args.includes("--all")
+        ? ["open", "in_progress", "blocked", "deferred", "closed"]
+        : args[0] === "list"
+          ? args[args.indexOf("-s") + 1].split(",")
+          : [];
+      if (
+        unavailable === query ||
+        (unavailable === "closed" && statuses.includes("closed"))
+      ) {
         return { code: 1, stdout: "", stderr: "private failure" };
       }
       const result =
@@ -150,12 +160,19 @@ function createHarness(
           ? (options.closed ?? [])
           : query === "ready"
             ? issues.filter((item) => readyIds.has(item.id))
-            : issues.filter((item) =>
-                args[args.indexOf("-s") + 1].split(",").includes(item.status),
+            : [...issues, ...(options.closed ?? [])].filter((item) =>
+                statuses.includes(item.status),
               );
       return {
         code: 0,
-        stdout: JSON.stringify(result.map(rawIssue)),
+        stdout: JSON.stringify(
+          result
+            .filter(
+              (item) =>
+                args.includes("--all") || !options.hiddenIds?.includes(item.id),
+            )
+            .map(rawIssue),
+        ),
         stderr: "",
       };
     },
@@ -305,7 +322,7 @@ test("keeps aggregate counts when an active task belongs to another session", as
   assert.doesNotMatch(harness.renderHeader(), /jp-other/);
 });
 
-test("keeps aggregate counts when the session owns multiple active tasks", async () => {
+test("ambiguous ownership is unavailable rather than an inferred assignment", async () => {
   const first = issue("jp-first", "in_progress");
   first.lifecycle = activeLifecycle("session-1");
   const second = issue("jp-second", "in_progress");
@@ -314,7 +331,7 @@ test("keeps aggregate counts when the session owns multiple active tasks", async
 
   await start(harness);
 
-  assert.match(harness.renderHeader(), /2 in-progress/);
+  assert.match(harness.renderHeader(), /tasks unavailable/);
   assert.doesNotMatch(harness.renderHeader(), /jp-first|jp-second/);
 });
 
@@ -588,16 +605,28 @@ test("claim and release events re-read ownership, including failed close", async
 });
 
 for (const unavailable of ["ready", "closed"] as const) {
-  test(`${unavailable} count failure cannot hide the assigned task in Pi or Herdr`, async () => {
+  test(`${unavailable} read failure respects the ownership discovery boundary`, async () => {
     const task = issue("jp-owned", "in_progress");
     task.lifecycle = activeLifecycle("session-1");
     const h = createHarness({ issues: [task], herdr: true, unavailable });
     await start(h);
     await setImmediate();
-    assert.match(h.renderHeader(), /jp-owned • Task jp-owned/);
-    assert.doesNotMatch(h.renderHeader(), /tasks unavailable/);
+    if (unavailable === "closed") {
+      assert.match(h.renderHeader(), /tasks unavailable/);
+      assert.equal(h.metadata.at(-1)?.pi_task_state, "unavailable");
+      assert.equal(h.metadata.at(-1)?.pi_task, "Task unavailable");
+      assert.notEqual(h.metadata.at(-1)?.pi_task_state, "unassigned");
+    } else {
+      assert.match(h.renderHeader(), /jp-owned • Task jp-owned/);
+      assert.doesNotMatch(h.renderHeader(), /tasks unavailable/);
+      assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-owned");
+    }
     assert.equal(h.calls.length, 1);
-    assert.equal(h.metadata.at(-1)?.pi_task, "Task jp-owned");
+    assert.equal(
+      legacyLifecycle(task.lifecycle).execution?.sessionId,
+      "session-1",
+    );
+    assert.ok(h.calls.every((args) => args[0] === "list"));
     await h.handlers.get("session_shutdown")?.({}, h.context);
   });
 }
@@ -730,7 +759,8 @@ test("Herdr preserves an idle task label instead of reporting legacy lease expir
     ...issue("jp-idle", "in_progress"),
     lifecycle: activeLifecycle("session-1"),
   };
-  owned.lifecycle.execution!.expiresAt = "2026-09-15T12:00:00Z";
+  legacyLifecycle(owned.lifecycle)!.execution!.expiresAt =
+    "2026-09-15T12:00:00Z";
   const h = createHarness({ herdr: true, issues: [owned] });
   await start(h);
   await setImmediate();
@@ -774,7 +804,11 @@ for (const { scope, name, expected } of [
     });
     await start(h);
     assert.equal(h.renderHeader().trimEnd(), expected);
-    assert.equal(h.calls.length, 3, "the area needs no additional task query");
+    assert.equal(
+      h.calls.length,
+      3,
+      "separate complete ownership, normal browsing and native readiness",
+    );
   });
 }
 
@@ -1246,4 +1280,189 @@ test("legacy owned workstream is explicit and independent of the session name an
     "My notes • Actual project │ owned • Task owned",
   );
   assert.equal(h.calls.length, 1);
+});
+
+async function ownedV2(
+  phase: "active" | "actionable" | "waiting" | "deferred" | "done",
+): Promise<BeadsIssue> {
+  const { state, withCheck, OWNER, NOW } = await import(
+    "../../lib/task-lifecycle/v2-test-fixtures.js"
+  );
+  const { blockLifecycleV2, fingerprintConditionV2, nativeStatusV2 } =
+    await import("../../lib/task-lifecycle/v2-model.js");
+  const owner = { ...OWNER, sessionId: "session-1" };
+  const current = withCheck({ owner });
+  const lifecycle =
+    phase === "waiting"
+      ? blockLifecycleV2(current, {
+          operationId: "pause",
+          sessionId: owner.sessionId,
+          now: NOW,
+          reason: "Wait",
+          conditionFingerprint: fingerprintConditionV2(current, [])!,
+        })
+      : phase === "actionable"
+        ? withCheck({ phase, owner, pause: null })
+        : state({
+            phase,
+            owner,
+            disposition:
+              phase === "done"
+                ? {
+                    kind: "completed",
+                    reason: "Delivered",
+                    at: NOW,
+                    evidenceArtifactIds: [],
+                  }
+                : null,
+          });
+  return {
+    ...ownedCatalogIssue(),
+    lifecycle,
+    status: nativeStatusV2(lifecycle),
+  };
+}
+
+for (const [phase, label] of [
+  ["waiting", "Blocked"],
+  ["actionable", "Ready to resume"],
+  ["deferred", "Deferred"],
+  ["done", "Done"],
+] as const) {
+  test(`header and optional Herdr keep title/project/area for owned ${phase}`, async () => {
+    const row = await ownedV2(phase);
+    const h = createHarness({
+      catalog: catalogViewFixture().catalog,
+      entries: [
+        {
+          type: "custom",
+          customType: "jp-project-scope",
+          data: { version: 2, scope: { kind: "global" } },
+        },
+      ],
+      issues: [row],
+      herdr: true,
+    });
+    await start(h);
+    await setImmediate();
+    const metadata = h.metadata.at(-1)!;
+    assert.equal(metadata.pi_task_state, "assigned");
+    assert.equal(metadata.pi_task_id, row.id);
+    assert.equal(metadata.pi_task_phase, phase);
+    assert.equal(metadata.pi_task_status, label);
+    assert.ok(metadata.pi_project);
+    assert.ok(metadata.pi_area);
+    assert.match(h.renderHeader(240), new RegExp(row.id));
+    assert.ok(h.renderHeader(240).includes(label));
+    assert.equal(h.calls.length, 1);
+    await h.handlers.get("session_shutdown")?.({}, h.context);
+  });
+}
+
+test("new lifecycle transitions refresh phase without clearing identity or wakeup text", async () => {
+  const h = createHarness({
+    catalog: catalogViewFixture().catalog,
+    entries: [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "global" } },
+      },
+    ],
+    issues: [ownedCatalogIssue()],
+    herdr: true,
+  });
+  await start(h);
+  h.events.emit("pi:wakeup-waiting", "Waiting until 15:05");
+  for (const [toolName, phase] of [
+    ["task_block", "waiting"],
+    ["task_resume", "active"],
+  ] as const) {
+    h.setIssues([await ownedV2(phase)]);
+    await h.handlers.get("tool_execution_end")?.({ toolName }, h.context);
+    await setImmediate();
+    const metadata = h.metadata.at(-1)!;
+    assert.equal(metadata.pi_task_state, "assigned");
+    assert.equal(metadata.pi_task_phase, phase);
+    assert.equal(metadata.pi_waiting, "Waiting until 15:05");
+  }
+  const released = await ownedV2("actionable");
+  if (released.lifecycle?.version !== 2) throw new Error("invalid fixture");
+  released.lifecycle.owner = null;
+  h.setIssues([released]);
+  await h.handlers.get("tool_execution_end")?.(
+    { toolName: "task_release" },
+    h.context,
+  );
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.pi_task_state, "unassigned");
+  assert.equal(h.metadata.at(-1)!.pi_task_phase, null);
+  assert.equal(h.metadata.at(-1)!.pi_project, null);
+  assert.equal(h.metadata.at(-1)!.pi_area, null);
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+});
+
+test("native-hidden ownership still supplies the header and Herdr identity", async () => {
+  const row = await ownedV2("actionable");
+  const h = createHarness({
+    catalog: catalogViewFixture().catalog,
+    entries: [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "global" } },
+      },
+    ],
+    issues: [row],
+    hiddenIds: [row.id],
+    herdr: true,
+  });
+  await start(h);
+  await setImmediate();
+  assert.equal(h.metadata.at(-1)!.pi_task_id, row.id);
+  assert.match(h.renderHeader(240), /Ready to resume/);
+  assert.equal(h.calls.length, 1);
+  await h.handlers.get("session_shutdown")?.({}, h.context);
+});
+
+test("complete ownership discovery does not add native-hidden work to backlog counts", async () => {
+  const h = createHarness({
+    issues: [issue("jp-visible"), issue("jp-hidden")],
+    hiddenIds: ["jp-hidden"],
+    readyIds: ["jp-visible", "jp-hidden"],
+  });
+  await start(h);
+  assert.match(h.renderHeader(240), /1 ready/);
+  assert.doesNotMatch(h.renderHeader(240), /2 ready/);
+  assert.equal(h.calls.filter((args) => args.includes("--all")).length, 1);
+  assert.equal(
+    h.calls.filter((args) => args[0] === "list" && !args.includes("--all"))
+      .length,
+    1,
+  );
+});
+
+test("owned successful work with retained resources has an explicit cleanup header", async () => {
+  const row = await ownedV2("actionable");
+  const { resource, NOW } = await import(
+    "../../lib/task-lifecycle/v2-test-fixtures.js"
+  );
+  row.lifecycle!.activeCheck!.onSatisfied = "close";
+  row.lifecycle!.activeCheck!.state = "satisfied";
+  row.lifecycle!.activeCheck!.lastCheckedAt = NOW;
+  row.lifecycle!.activeCheck!.lastObservation = "Delivered";
+  row.lifecycle!.resources = [resource()];
+  const h = createHarness({
+    catalog: catalogViewFixture().catalog,
+    entries: [
+      {
+        type: "custom",
+        customType: "jp-project-scope",
+        data: { version: 2, scope: { kind: "global" } },
+      },
+    ],
+    issues: [row],
+  });
+  await start(h);
+  assert.match(h.renderHeader(240), /Ready.*cleanup required/i);
 });

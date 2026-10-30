@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "./legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -92,10 +93,13 @@ function scannerStore(
       calls.push([...args]);
       let records: unknown[];
       if (args[0] === "list") {
-        assert.deepEqual(args.slice(0, 6), [
+        assert.deepEqual(args.slice(0, args.indexOf("--db")), [
           "list",
           "-s",
           "open,in_progress,blocked",
+          "--include-gates",
+          "--include-infra",
+          "--include-templates",
           "-n",
           "0",
           "--json",
@@ -202,7 +206,7 @@ test("selects pending resource repair using its transition timestamp", () => {
       },
     ],
   });
-  issue.lifecycle!.waiting = { kind: "check" };
+  legacyLifecycle(issue.lifecycle!).waiting = { kind: "check" };
   issue.lifecycle!.activeCheck = {
     ...checkTask("manual").lifecycle!.activeCheck!,
     kind: "manual",
@@ -477,7 +481,7 @@ test("idle ownership is not reconciliation work, but due checks still are", () =
   const issue = checkTask("idle", AFTER);
   issue.status = "in_progress";
   issue.lifecycle!.phase = "active";
-  issue.lifecycle!.execution = {
+  legacyLifecycle(issue.lifecycle!).execution = {
     sessionId: "owner",
     claimedAt: BEFORE,
     lastActivityAt: BEFORE,

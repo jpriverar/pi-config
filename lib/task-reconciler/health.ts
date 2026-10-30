@@ -10,6 +10,7 @@ import {
 } from "./files.js";
 import {
   identifier,
+  PROTOCOL_VERSION,
   integer,
   oneOf,
   protocolVersion,
@@ -23,7 +24,9 @@ export type DaemonHealth =
   | { state: "unavailable" | "incompatible"; reason: string }
   | {
       state: "available" | "stale";
-      protocolVersion: 1;
+      protocolVersion: typeof PROTOCOL_VERSION;
+      supportedLifecycleVersions: readonly number[];
+      lifecycleWriteVersion: number;
       runtimeVersion: string;
       pid: number;
       startedAt: string;
@@ -32,7 +35,7 @@ export type DaemonHealth =
     };
 export type AvailableDaemonHealth = Extract<
   DaemonHealth,
-  { protocolVersion: 1 }
+  { protocolVersion: typeof PROTOCOL_VERSION }
 >;
 export interface DaemonIdentity {
   version: 1;
@@ -83,16 +86,42 @@ export function parseDaemonHealth(value: unknown): DaemonHealth {
       reason: text(v.reason),
     };
   }
+  if (value !== null && typeof value === "object" && "protocolVersion" in value)
+    protocolVersion(value.protocolVersion, PROTOCOL_VERSION);
   const v = record(value, [
     "state",
     "protocolVersion",
+    "supportedLifecycleVersions",
+    "lifecycleWriteVersion",
     "runtimeVersion",
     "pid",
     "startedAt",
     "heartbeatAt",
     "queue",
   ]);
-  protocolVersion(v.protocolVersion);
+  protocolVersion(v.protocolVersion, PROTOCOL_VERSION);
+  if (
+    !Array.isArray(v.supportedLifecycleVersions) ||
+    v.supportedLifecycleVersions.length === 0 ||
+    v.supportedLifecycleVersions.length > 16
+  )
+    throw new ProtocolError(
+      "invalid_request",
+      "invalid lifecycle capabilities",
+    );
+  const supportedLifecycleVersions = v.supportedLifecycleVersions.map(
+    (version) => integer(version, 1),
+  );
+  const lifecycleWriteVersion = integer(v.lifecycleWriteVersion, 1);
+  if (
+    new Set(supportedLifecycleVersions).size !==
+      supportedLifecycleVersions.length ||
+    !supportedLifecycleVersions.includes(lifecycleWriteVersion)
+  )
+    throw new ProtocolError(
+      "invalid_request",
+      "invalid lifecycle capabilities",
+    );
   const q = record(v.queue, [
     "lastScanAttemptAt",
     "lastScanSuccessAt",
@@ -121,7 +150,9 @@ export function parseDaemonHealth(value: unknown): DaemonHealth {
   });
   return {
     state: oneOf(v.state, ["available", "stale"]),
-    protocolVersion: 1,
+    protocolVersion: PROTOCOL_VERSION,
+    supportedLifecycleVersions,
+    lifecycleWriteVersion,
     runtimeVersion: text(v.runtimeVersion, 128),
     pid: integer(v.pid, 1),
     startedAt: timestamp(v.startedAt),
@@ -154,7 +185,7 @@ export async function readDaemonHealth(
       "instanceId",
       "health",
     ]);
-    protocolVersion(v.version);
+    protocolVersion(v.version, PROTOCOL_VERSION);
     if (v.store !== paths.store || v.instanceId !== identity.instanceId)
       throw new RuntimeBoundaryError(
         "identity_mismatch",

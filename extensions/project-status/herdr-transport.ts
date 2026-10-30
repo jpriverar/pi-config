@@ -66,6 +66,8 @@ export function createHerdrMetadataSender(
       "pi_model",
       "pi_task",
       "pi_task_state",
+      "pi_task_phase",
+      "pi_task_status",
       "pi_task_id",
       "pi_task_expires_at",
       "pi_project",

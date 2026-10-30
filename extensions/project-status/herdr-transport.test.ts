@@ -19,6 +19,8 @@ const values: PaneMetadata = {
   pi_model: "Model $(touch nope)",
   pi_task: "Review auth; stay safe",
   pi_task_state: "assigned",
+  pi_task_phase: "active",
+  pi_task_status: "In progress",
   pi_task_id: "jp-one",
   pi_task_expires_at: "2000000",
   pi_project: "API",
@@ -86,6 +88,10 @@ test("publishes only owned keys with argv, sequence and finite execution limits"
     "pi_task=Review auth; stay safe",
     "--token",
     "pi_task_state=assigned",
+    "--token",
+    "pi_task_phase=active",
+    "--token",
+    "pi_task_status=In progress",
     "--token",
     "pi_task_id=jp-one",
     "--token",
@@ -355,4 +361,33 @@ test("waiting labels are sanitized, cleared, and do not refresh task counts", as
   const index = calls[1].indexOf("pi_waiting");
   assert.ok(index > 0);
   assert.equal(calls[1][index - 1], "--clear-token");
+});
+
+test("phase-only updates publish status without conflating ownership or triggering new space polling", async () => {
+  const calls: string[][] = [];
+  const send = createHerdrMetadataSender(environment, async (_file, args) => {
+    calls.push([...args]);
+    return replyFor(args);
+  })!;
+  const signal = new AbortController().signal;
+  await send(
+    { ...values, pi_task_phase: "active", pi_task_status: "In progress" },
+    1,
+    signal,
+  );
+  await send(
+    {
+      ...values,
+      pi_task_phase: "waiting",
+      pi_task_status: "Blocked",
+      pi_waiting: "Waiting until 15:05",
+    },
+    2,
+    signal,
+  );
+  assert.equal(calls.length, 4);
+  assert.ok(calls[3].includes("pi_task_phase=waiting"));
+  assert.ok(calls[3].includes("pi_task_status=Blocked"));
+  assert.ok(calls[3].includes("pi_task_state=assigned"));
+  assert.ok(calls[3].includes("pi_waiting=Waiting until 15:05"));
 });

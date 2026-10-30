@@ -101,6 +101,8 @@ export function createPaneReporter(options: {
               pi_model: null,
               pi_task: null,
               pi_task_state: null,
+              pi_task_phase: null,
+              pi_task_status: null,
               pi_task_id: null,
               pi_task_expires_at: null,
               pi_project: null,

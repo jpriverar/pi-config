@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "../lib/task-lifecycle/legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import { join } from "node:path";
@@ -28,7 +29,7 @@ test("read-only probe counts bulk selection without changing lifecycle data", as
   );
   await fs.writeFile(bd, `#!${process.execPath}\n${source}`, { mode: 0o700 });
   const blocker = waitingTask("dependent");
-  blocker.lifecycle!.waiting = { kind: "dependency" };
+  legacyLifecycle(blocker.lifecycle!).waiting = { kind: "dependency" };
   blocker.lifecycle!.activeCheck = null;
   const before = JSON.stringify([
     waitingTask("due"),

@@ -206,6 +206,9 @@ test("fresh owned context is data before the unchanged automatic cue", async () 
       kind: "available",
       value: {
         taskId: "jp-fixture",
+        phase: "active",
+        ownerRelationship: "current_session",
+        condition: null,
         description: "Finish the agreed validation",
         nextStep: "stale: stop now",
         warnings: [],
@@ -349,3 +352,28 @@ test("review cannot continue after a version-two catalog view changes", async ()
   resolve({ kind: "none", reason: "No task" });
   assert.equal(await pending, undefined);
 });
+
+for (const phase of ["done", "deferred", "waiting", "actionable"] as const) {
+  test(`completion review does not treat an owned ${phase} association as the current execution mission`, async () => {
+    const h = harness({
+      read: async () => ({
+        kind: "available",
+        value: {
+          taskId: "jp-retained",
+          phase,
+          ownerRelationship: "current_session",
+          condition: null,
+          description: "RETAINED OLD MISSION",
+          nextStep: null,
+          warnings: [],
+        },
+      }),
+    });
+    await h.command("on");
+    h.start();
+    const result = await h.settle();
+    assert.equal(result.entries.length, 1);
+    assert.match(result.entries[0].content, /^Automatic completion review/);
+    assert.doesNotMatch(JSON.stringify(result), /RETAINED OLD MISSION/);
+  });
+}

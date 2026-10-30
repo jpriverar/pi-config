@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 export interface LifecycleConfig {
   version: 1;
+  lifecycleWriteVersion?: 1 | 2;
   executionTimeoutMs: number;
   activityWriteIntervalMs: number;
   sessionReconcileLimit: number;
@@ -43,9 +44,20 @@ export function loadLifecycleConfig(path: string): LifecycleConfig {
     }
   }
   for (const key of Object.keys(record)) {
-    if (!keys.includes(key as keyof LifecycleConfig)) {
+    if (
+      key !== "lifecycleWriteVersion" &&
+      !keys.includes(key as keyof LifecycleConfig)
+    ) {
       throw new Error(`task lifecycle config has unknown field ${key}`);
     }
   }
-  return record as unknown as LifecycleConfig;
+  const lifecycleWriteVersion = Object.hasOwn(record, "lifecycleWriteVersion")
+    ? record.lifecycleWriteVersion
+    : 1;
+  if (lifecycleWriteVersion !== 1 && lifecycleWriteVersion !== 2) {
+    throw new Error(
+      "task lifecycle config lifecycleWriteVersion must be 1 or 2",
+    );
+  }
+  return { ...record, lifecycleWriteVersion } as unknown as LifecycleConfig;
 }

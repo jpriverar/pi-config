@@ -11,6 +11,8 @@ import { MAX_PRIVATE_BYTES } from "./files.js";
 import { parseDaemonHealth, type DaemonHealth } from "./health.js";
 import {
   identifier,
+  integer,
+  PROTOCOL_VERSION,
   oneOf,
   protocolVersion,
   ProtocolError,
@@ -41,12 +43,33 @@ export interface ReconcileReply {
   task: { id: string; status: LifecycleStatus; phase: LifecyclePhase | null };
 }
 export type ProtocolRequest =
-  | { version: 1; store: string; kind: "status" }
-  | { version: 1; store: string; kind: "reconcile"; request: ReconcileRequest };
+  | { version: typeof PROTOCOL_VERSION; store: string; kind: "status" }
+  | {
+      version: typeof PROTOCOL_VERSION;
+      store: string;
+      kind: "reconcile";
+      lifecycleVersion: number;
+      request: ReconcileRequest;
+    };
 export type ProtocolResponse =
-  | { version: 1; ok: false; code: ReplyErrorCode; outcomeUnknown: boolean }
-  | { version: 1; ok: true; kind: "status"; health: DaemonHealth }
-  | { version: 1; ok: true; kind: "reconcile"; reply: ReconcileReply };
+  | {
+      version: typeof PROTOCOL_VERSION;
+      ok: false;
+      code: ReplyErrorCode;
+      outcomeUnknown: boolean;
+    }
+  | {
+      version: typeof PROTOCOL_VERSION;
+      ok: true;
+      kind: "status";
+      health: DaemonHealth;
+    }
+  | {
+      version: typeof PROTOCOL_VERSION;
+      ok: true;
+      kind: "reconcile";
+      reply: ReconcileReply;
+    };
 
 export function encodeFrame(value: unknown): Buffer {
   const body = Buffer.from(JSON.stringify(value));
@@ -138,21 +161,31 @@ export function parseReconcileRequest(value: unknown): ReconcileRequest {
   return request;
 }
 export function parseRequest(value: unknown): ProtocolRequest {
-  const v = record(value, ["version", "kind", "store", "request"], ["request"]);
-  protocolVersion(v.version);
+  const v = record(
+    value,
+    ["version", "kind", "store", "request", "lifecycleVersion"],
+    ["request", "lifecycleVersion"],
+  );
+  protocolVersion(v.version, PROTOCOL_VERSION);
   const store = text(v.store, 4096);
   if (!isAbsolute(store))
     throw new ProtocolError("invalid_request", "store must be absolute");
   const kind = oneOf(v.kind, ["status", "reconcile"]);
   if (kind === "status") {
-    if (Object.hasOwn(v, "request"))
+    if (Object.hasOwn(v, "request") || Object.hasOwn(v, "lifecycleVersion"))
       throw new ProtocolError(
         "invalid_request",
         "status cannot contain a task request",
       );
-    return { version: 1, kind, store };
+    return { version: PROTOCOL_VERSION, kind, store };
   }
-  return { version: 1, kind, store, request: parseReconcileRequest(v.request) };
+  return {
+    version: PROTOCOL_VERSION,
+    kind,
+    store,
+    lifecycleVersion: integer(v.lifecycleVersion, 1),
+    request: parseReconcileRequest(v.request),
+  };
 }
 export function parseResponse(value: unknown): ProtocolResponse {
   const v = record(
@@ -160,13 +193,13 @@ export function parseResponse(value: unknown): ProtocolResponse {
     ["version", "ok", "code", "outcomeUnknown", "kind", "health", "reply"],
     ["code", "outcomeUnknown", "kind", "health", "reply"],
   );
-  protocolVersion(v.version);
+  protocolVersion(v.version, PROTOCOL_VERSION);
   if (v.ok === false) {
     record(v, ["version", "ok", "code", "outcomeUnknown"]);
     if (typeof v.outcomeUnknown !== "boolean")
       throw new ProtocolError("invalid_request", "invalid outcome uncertainty");
     return {
-      version: 1,
+      version: PROTOCOL_VERSION,
       ok: false,
       code: oneOf(v.code, ERROR_CODES),
       outcomeUnknown: v.outcomeUnknown,
@@ -177,13 +210,18 @@ export function parseResponse(value: unknown): ProtocolResponse {
   const kind = oneOf(v.kind, ["status", "reconcile"]);
   if (kind === "status") {
     record(v, ["version", "ok", "kind", "health"]);
-    return { version: 1, ok: true, kind, health: parseDaemonHealth(v.health) };
+    return {
+      version: PROTOCOL_VERSION,
+      ok: true,
+      kind,
+      health: parseDaemonHealth(v.health),
+    };
   }
   record(v, ["version", "ok", "kind", "reply"]);
   const reply = record(v.reply, ["requestId", "outcome", "task"]);
   const task = record(reply.task, ["id", "status", "phase"]);
   return {
-    version: 1,
+    version: PROTOCOL_VERSION,
     ok: true,
     kind,
     reply: {

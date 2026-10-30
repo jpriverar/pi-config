@@ -1,5 +1,13 @@
 # Task lifecycle
 
+**Writer version:** lifecycle writes still default to v1. The transition and
+resource-hook procedures on this page describe that legacy mode unless stated
+otherwise. For the opt-in ownership/condition/pause model and block/resume/release
+API, read [Durable ownership: lifecycle v2](task-lifecycle-v2.md). Readers and
+displays understand both schemas; enabling a writer never converts records.
+Do not confuse lifecycle v2 with the independent catalog or WM configuration
+versions described below.
+
 The task-lifecycle extension keeps one Beads task aligned with one goal while
 tracking active Pi ownership, durable artifacts, external checks, and temporary
 worktrees separately. It is the sole task-domain extension: it owns lifecycle
@@ -32,7 +40,9 @@ task IDs are not stored as artifacts or duplicated in lifecycle metadata.
 The presentation layer reads the same normalized Beads data. Fresh empty
 sessions get a durable visible task table. Every model turn receives a bounded,
 scoped hidden summary marked as untrusted data. A separate bounded block adds
-the full description and `metadata.next_step` of the uniquely owned active task.
+the full description and `metadata.next_step` of the uniquely owned task. V2
+ownership is discovered across all phases, including Done/Deferred. Non-active
+context explicitly does not authorize execution.
 With an active catalog, a global/area/project selection changes the view, not
 ownership: an owned task outside that view retains its mission context with an
 outside-view warning. Invalid task membership is diagnosed, never guessed.
@@ -103,11 +113,12 @@ session-owned task outside the view stays visible with an outside-current-view
 marker. Filtered counts and model context label the browse view separately from
 working identity.
 
-A unique active task owned by the stable session ID supplies the working project
-and area. Pi's status shows that context explicitly beside the actual session name
-and active task. Successful claim adopts that project view once. Wait, defer or
-close that relinquishes ownership makes the session unassigned and adopts a global
-view. Creating another task does neither.
+A unique owned task supplies the working project and area. Pi's status shows
+that context beside the actual session name and task. V1 ownership exists only
+while Active; v2 preserves it across Ready, Blocked, Deferred and Done. Successful
+claim adopts the project view once. Only a transition that actually relinquishes
+ownership makes the session unassigned and adopts a global view: v1 wait/defer/close,
+or v2 explicit release. Creating another task does neither.
 
 Session names are independent: lifecycle, project operations and session setup do
 not generate, repair or clear them. Pi's native naming and explicit user names are
@@ -323,7 +334,10 @@ Automatic observation does not decide whether an artifact is important,
 deliverable, completion evidence, promoted, related to another artifact, or
 superseded; those remain explicit lifecycle decisions.
 
-### `task_wait`
+### `task_wait` (v1 only)
+
+V2 registers `task_block`, `task_resume` and `task_release` instead; see the
+[v2 tool contract](task-lifecycle-v2.md#work-boundaries-and-tools).
 
 Required: `taskId`. Optional: `kind`, either `dependency` or `check`.
 
@@ -596,8 +610,8 @@ does not expose `claimId` or `pathId` inputs for acquisition, and lifecycle hook
 do not inject private arguments. Pool `list`, `repair`, and unassociated legacy
 release remain available without attachment; ordinary acquisition does not.
 
-Acquire correlation is process-local until a validated successful result records
-the generated claim. If Pi stops after pool allocation but before that result is
+In v1, acquire correlation is process-local until a validated successful result
+records the generated claim. If Pi stops after pool allocation but before that result is
 finalized, use pool `list` or `repair` and explicit lifecycle reconciliation;
 automatic interrupted-acquire inference is deferred. Preflight reduces known
 failures but does not close the allocation-to-persistence crash/race window;
@@ -605,6 +619,11 @@ post-allocation association validation still runs. Known association failures
 identify the obstructing claim without exposing raw store errors. If recording
 fails after allocation, the checkout is retained; do not acquire another copy
 as a recovery shortcut.
+
+V2 closes that acquisition reservation gap through the pool's generic versioned
+allocation hook: lifecycle policy durably reserves exact identities before Git
+allocation. The pool remains task-agnostic; no private IDs enter its public tool
+schema. See [v2 resource safety](task-lifecycle-v2.md#observation-and-resource-safety).
 
 Associated release still persists `release_pending` before pool mutation and
 reconciles exact safe evidence. Normal release inspects local work before

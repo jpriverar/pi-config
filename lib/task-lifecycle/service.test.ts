@@ -1,3 +1,4 @@
+import { legacyLifecycle } from "./legacy-test-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -374,11 +375,87 @@ test("claims a legacy task into active ownership", async () => {
 
   assert.equal(saved.lifecycle?.phase, "active");
   assert.equal(saved.status, "in_progress");
-  assert.equal(saved.lifecycle?.execution?.sessionId, "s1");
+  assert.equal(legacyLifecycle(saved.lifecycle)?.execution?.sessionId, "s1");
   assert.equal(
-    saved.lifecycle?.execution?.expiresAt,
+    legacyLifecycle(saved.lifecycle)?.execution?.expiresAt,
     "2026-09-17T16:00:00.000Z",
   );
+});
+
+for (const [name, rawLifecycle] of [
+  ["unsupported version", { ...lifecycle(), version: 99 }],
+  ["future version", { ...lifecycle(), version: 2 }],
+  ["malformed version one", { version: 1, phase: "actionable" }],
+  ["explicit null", null],
+] as const) {
+  test("does not adopt present " + name + " lifecycle metadata", async () => {
+    const initial = {
+      ...issue(null),
+      metadata: { piLifecycle: rawLifecycle, unrelated: "preserve-me" },
+    };
+    const before = structuredClone(initial);
+    const store = new FakeStore(initial);
+
+    await assert.rejects(
+      service(store).claim("jp-1", session("s1"), "claim-invalid"),
+      /jp-1.*invalid or unsupported.*piLifecycle/,
+    );
+
+    assert.equal(store.writes, 0);
+    assert.deepEqual(store.saved, before);
+  });
+}
+
+test("claim preserves unsupported metadata through the native store", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "task-invalid-adoption-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let current = {
+    ...issue(null),
+    metadata: {
+      unrelated: { keep: true },
+      piLifecycle: {
+        version: 99,
+        owner: { sessionId: "original-owner" },
+        activeCheck: { id: "existing-check" },
+        artifacts: [{ id: "existing-artifact" }],
+        resources: [{ claimId: "existing-resource" }],
+      },
+    } as Record<string, unknown>,
+  };
+  const before = structuredClone(current);
+  let writes = 0;
+  const store = createLifecycleStore(
+    async (_command, args) => {
+      assert.ok(["ready", "show", "update"].includes(args[0]));
+      if (args[0] === "update") {
+        writes++;
+        current = {
+          ...current,
+          status: args[args.indexOf("-s") + 1] as LifecycleStatus,
+          metadata: JSON.parse(args[args.indexOf("--metadata") + 1]),
+        };
+      }
+      return { code: 0, stdout: JSON.stringify([current]), stderr: "" };
+    },
+    {
+      store: root,
+      lockDependencies: {
+        now: Date.now,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        isPidAlive: () => "live",
+        hostname: "host",
+        timeoutMs: 200,
+      },
+    },
+  );
+
+  await assert.rejects(
+    service(store).claim("jp-1", session("s1"), "claim-invalid"),
+    /jp-1.*invalid or unsupported.*piLifecycle/,
+  );
+
+  assert.equal(writes, 0);
+  assert.deepEqual(current, before);
 });
 
 test("claims a legacy blocked task without inventing a structured check", async () => {
@@ -388,7 +465,7 @@ test("claims a legacy blocked task without inventing a structured check", async 
 
   assert.equal(saved.lifecycle?.phase, "active");
   assert.equal(saved.status, "in_progress");
-  assert.equal(saved.lifecycle?.waiting, null);
+  assert.equal(legacyLifecycle(saved.lifecycle)?.waiting, null);
   assert.equal(saved.lifecycle?.activeCheck, null);
 });
 
@@ -407,7 +484,9 @@ test("claims dependency-waiting work without dropping blockers", async () => {
   const saved = await service(store).claim("jp-1", session("s1"), "claim-1");
 
   assert.equal(saved.lifecycle?.phase, "active");
-  assert.deepEqual(saved.lifecycle?.waiting, { kind: "dependency" });
+  assert.deepEqual(legacyLifecycle(saved.lifecycle)?.waiting, {
+    kind: "dependency",
+  });
   assert.equal(saved.dependencies[0]?.status, "open");
 });
 
@@ -422,14 +501,16 @@ test("claims check-waiting work without dropping its check", async () => {
   const saved = await service(store).claim("jp-1", session("s1"), "claim-1");
 
   assert.equal(saved.lifecycle?.phase, "active");
-  assert.deepEqual(saved.lifecycle?.waiting, { kind: "check" });
+  assert.deepEqual(legacyLifecycle(saved.lifecycle)?.waiting, {
+    kind: "check",
+  });
   assert.equal(saved.lifecycle?.activeCheck?.id, "check-1");
 });
 
 test("returns active work to its retained condition", async () => {
   const active = activeIssue("jp-1", "s1");
   active.lifecycle = {
-    ...active.lifecycle!,
+    ...legacyLifecycle(active.lifecycle!),
     waiting: { kind: "check" },
     activeCheck: lifecycleCheck(),
   };
@@ -443,7 +524,7 @@ test("returns active work to its retained condition", async () => {
   );
 
   assert.equal(saved.lifecycle?.phase, "waiting");
-  assert.equal(saved.lifecycle?.execution, null);
+  assert.equal(legacyLifecycle(saved.lifecycle)?.execution, null);
   assert.equal(saved.lifecycle?.activeCheck?.id, "check-1");
   assert.equal(saved.status, "blocked");
 });
@@ -504,8 +585,8 @@ for (const waiting of [null, "dependency", "check"] as const) {
     for (const operationId of ["claim-1", "claim-2", undefined]) {
       const saved = await sut.claim("jp-1", session("s1"), operationId);
 
-      assert.deepEqual(saved.lifecycle!.execution, {
-        ...before.lifecycle!.execution,
+      assert.deepEqual(legacyLifecycle(saved.lifecycle!).execution, {
+        ...legacyLifecycle(before.lifecycle!).execution,
         lastActivityAt: "2026-09-17T10:00:30.000Z",
         expiresAt: "2026-09-17T16:00:30.000Z",
       });
@@ -519,7 +600,11 @@ for (const waiting of [null, "dependency", "check"] as const) {
         "resources",
         "disposition",
       ] as const) {
-        assert.deepEqual(saved.lifecycle![key], before.lifecycle![key], key);
+        assert.deepEqual(
+          legacyLifecycle(saved.lifecycle!)[key],
+          legacyLifecycle(before.lifecycle!)[key],
+          key,
+        );
       }
       assert.deepEqual(saved.dependencies, before.dependencies);
       assert.equal(saved.status, before.status);
@@ -560,7 +645,9 @@ test("waits on native blockers without duplicating blocker IDs in metadata", asy
 
   assert.deepEqual(store.blockers, [["jp-1", "jp-blocker"]]);
   assert.equal(saved.status, "open");
-  assert.deepEqual(saved.lifecycle?.waiting, { kind: "dependency" });
+  assert.deepEqual(legacyLifecycle(saved.lifecycle)?.waiting, {
+    kind: "dependency",
+  });
   assert.equal(saved.lifecycle?.activeCheck, null);
   assert.doesNotMatch(JSON.stringify(saved.lifecycle), /jp-blocker/);
 });
@@ -596,7 +683,9 @@ test("waits on exactly one typed external check", async () => {
     ...check,
     nextCheckAt: null,
   });
-  assert.deepEqual(saved.lifecycle?.waiting, { kind: "check" });
+  assert.deepEqual(legacyLifecycle(saved.lifecycle)?.waiting, {
+    kind: "check",
+  });
 });
 
 test("canonicalizes and deduplicates attached artifacts by identity", async () => {
@@ -814,7 +903,9 @@ test("closes with a disposition and reopens according to native blockers", async
   );
   assert.equal(reopened.status, "open");
   assert.equal(reopened.lifecycle?.phase, "waiting");
-  assert.deepEqual(reopened.lifecycle?.waiting, { kind: "dependency" });
+  assert.deepEqual(legacyLifecycle(reopened.lifecycle)?.waiting, {
+    kind: "dependency",
+  });
 });
 
 for (const blockerStatus of [null, "open", "closed"] as const) {
@@ -865,10 +956,10 @@ for (const blockerStatus of [null, "open", "closed"] as const) {
     assert.equal(reopened.status, "open");
     assert.equal(reopened.lifecycle?.phase, phase);
     assert.deepEqual(
-      reopened.lifecycle?.waiting,
+      legacyLifecycle(reopened.lifecycle)?.waiting,
       blockerStatus === "open" ? { kind: "dependency" } : null,
     );
-    assert.equal(reopened.lifecycle?.execution, null);
+    assert.equal(legacyLifecycle(reopened.lifecycle)?.execution, null);
     assert.equal(reopened.lifecycle?.disposition, null);
     assert.equal(reopened.lifecycle?.activeCheck, null);
     assert.deepEqual(reopened.lifecycle?.artifacts, before.artifacts);
@@ -933,7 +1024,7 @@ test("blocks completed but permits cancelled with unresolved dependencies", asyn
 
   const checked = activeIssue("jp-1", "s1");
   checked.lifecycle = {
-    ...checked.lifecycle!,
+    ...legacyLifecycle(checked.lifecycle!),
     waiting: { kind: "check" },
     activeCheck: lifecycleCheck(),
   };
@@ -1090,7 +1181,10 @@ test("slow release observation does not block an unrelated task mutation", async
         ],
       },
     }));
-    assert.equal(unrelated.lifecycle?.execution?.sessionId, "other");
+    assert.equal(
+      legacyLifecycle(unrelated.lifecycle)?.execution?.sessionId,
+      "other",
+    );
     assert.equal(
       (await store.show("jp-1")).lifecycle?.resources[0].cleanupState,
       "release_pending",
@@ -1166,7 +1260,7 @@ test("release reconciliation discards changed task bindings", async (t) => {
       let expected!: LifecycleIssue;
       store.beforeMutate = () => {
         expected = structuredClone(store.saved);
-        change(expected.lifecycle!);
+        change(legacyLifecycle(expected.lifecycle!));
         store.saved = expected;
       };
       const writes = store.writes;
@@ -1195,12 +1289,15 @@ test("release reconciliation preserves concurrent activity renewal", async () =>
   const renewed = new Date(NOW_MS + 1_000).toISOString();
   store.beforeMutate = () => {
     store.saved = structuredClone(store.saved);
-    store.saved.lifecycle!.execution!.lastActivityAt = renewed;
+    legacyLifecycle(store.saved.lifecycle!).execution!.lastActivityAt = renewed;
     store.saved.title = "Concurrent title update";
   };
   const result = await sut.reconcileTask("jp-1", session("daemon"));
   assert.equal(result.lifecycle!.resources[0].cleanupState, "released");
-  assert.equal(result.lifecycle!.execution!.lastActivityAt, renewed);
+  assert.equal(
+    legacyLifecycle(result.lifecycle!).execution!.lastActivityAt,
+    renewed,
+  );
   assert.equal(result.title, "Concurrent title update");
 });
 
@@ -1450,7 +1547,10 @@ test("keeps phase and ownership active when resource release fails", async () =>
   );
 
   assert.equal(store.saved.lifecycle?.phase, "active");
-  assert.equal(store.saved.lifecycle?.execution?.sessionId, "s1");
+  assert.equal(
+    legacyLifecycle(store.saved.lifecycle)?.execution?.sessionId,
+    "s1",
+  );
 });
 
 class FakeTaskPool {
@@ -1601,7 +1701,7 @@ async function reserveLegacyCleanup(
   store: FakeStore,
   claimId: string,
 ) {
-  const execution = store.saved.lifecycle!.execution!;
+  const execution = legacyLifecycle(store.saved.lifecycle!).execution!;
   return sut.prepareWorktreeRelease(
     "jp-1",
     claimId,
@@ -1648,7 +1748,7 @@ test("defers only after releasing task worktrees", async () => {
 
   assert.equal(pool.releaseCalls.length, 1);
   assert.equal(saved.lifecycle?.phase, "deferred");
-  assert.equal(saved.lifecycle?.execution, null);
+  assert.equal(legacyLifecycle(saved.lifecycle)?.execution, null);
   assert.equal(saved.lifecycle?.resources[0]?.cleanupState, "released");
   assert.equal(saved.status, "deferred");
 });
@@ -2331,7 +2431,7 @@ test("closes a due satisfied check and wakes action-required work exactly once",
 test("does not clear a retained dependency when a blocker appears during reconciliation", async () => {
   const active = activeIssue("jp-1", "s1");
   active.lifecycle = {
-    ...active.lifecycle!,
+    ...legacyLifecycle(active.lifecycle!),
     waiting: { kind: "dependency" },
   };
   active.metadata = { piLifecycle: active.lifecycle };
@@ -2352,14 +2452,16 @@ test("does not clear a retained dependency when a blocker appears during reconci
   assert.equal(saved.lifecycle?.phase, "active");
   assert.equal(store.writes, 0);
   assert.equal(store.saved.lifecycle?.phase, "active");
-  assert.deepEqual(store.saved.lifecycle?.waiting, { kind: "dependency" });
+  assert.deepEqual(legacyLifecycle(store.saved.lifecycle)?.waiting, {
+    kind: "dependency",
+  });
 });
 
 test("satisfied retained checks do not close active work", async () => {
   const active = activeIssue("jp-1", "s1");
-  const execution = active.lifecycle!.execution;
+  const execution = legacyLifecycle(active.lifecycle!).execution;
   active.lifecycle = {
-    ...active.lifecycle!,
+    ...legacyLifecycle(active.lifecycle!),
     waiting: { kind: "check" },
     activeCheck: lifecycleCheck({
       kind: "github_pull_request",
@@ -2375,8 +2477,8 @@ test("satisfied retained checks do not close active work", async () => {
   }).reconcileTask("jp-1", session("reconciler"));
 
   assert.equal(saved.lifecycle?.phase, "active");
-  assert.deepEqual(saved.lifecycle?.execution, execution);
-  assert.equal(saved.lifecycle?.waiting, null);
+  assert.deepEqual(legacyLifecycle(saved.lifecycle)?.execution, execution);
+  assert.equal(legacyLifecycle(saved.lifecycle)?.waiting, null);
   assert.equal(saved.lifecycle?.activeCheck, null);
   assert.equal(saved.lifecycle?.checkHistory.at(-1)?.state, "satisfied");
 });
@@ -2484,11 +2586,11 @@ test("activity refresh is rate-limited and extends a long-running execution", as
 
   assert.equal(store.mutations, afterClaimMutations + 1);
   assert.equal(
-    refreshed[0].lifecycle?.execution?.lastActivityAt,
+    legacyLifecycle(refreshed[0].lifecycle)?.execution?.lastActivityAt,
     new Date(now).toISOString(),
   );
   assert.equal(
-    refreshed[0].lifecycle?.execution?.expiresAt,
+    legacyLifecycle(refreshed[0].lifecycle)?.execution?.expiresAt,
     new Date(now + 6 * 60 * 60 * 1_000).toISOString(),
   );
 });
@@ -2613,7 +2715,8 @@ test("rejects stale observation inputs inside the mutation lock", async (t) => {
       );
       assert.equal(prepared.kind, "observe");
       if (prepared.kind !== "observe") return;
-      store.beforeMutate = () => change(store.saved.lifecycle!);
+      store.beforeMutate = () =>
+        change(legacyLifecycle(store.saved.lifecycle!));
       const result = await sut.applyReconciliation(
         prepared.prepared,
         { outcome: "satisfied", observation: "merged" },
@@ -2633,9 +2736,9 @@ test("title and execution renewal do not invalidate a retained check", async () 
     ...store.saved,
     status: "in_progress",
     lifecycle: {
-      ...store.saved.lifecycle!,
+      ...legacyLifecycle(store.saved.lifecycle!),
       phase: "active",
-      execution: active.lifecycle!.execution,
+      execution: legacyLifecycle(active.lifecycle!).execution,
     },
   };
   store.saved.metadata.piLifecycle = store.saved.lifecycle;
@@ -2648,7 +2751,8 @@ test("title and execution renewal do not invalidate a retained check", async () 
   if (prepared.kind !== "observe") return;
   store.beforeMutate = () => {
     store.saved.title = "Renamed";
-    store.saved.lifecycle!.execution!.expiresAt = "2026-09-17T17:00:00Z";
+    legacyLifecycle(store.saved.lifecycle!).execution!.expiresAt =
+      "2026-09-17T17:00:00Z";
     store.saved.lifecycle!.artifacts[0].title = "Renamed PR";
   };
   const result = await sut.applyReconciliation(
@@ -2660,7 +2764,7 @@ test("title and execution renewal do not invalidate a retained check", async () 
   assert.equal(result.issue.lifecycle?.phase, "active");
   assert.equal(result.issue.lifecycle?.activeCheck, null);
   assert.equal(
-    result.issue.lifecycle?.execution?.expiresAt,
+    legacyLifecycle(result.issue.lifecycle)?.execution?.expiresAt,
     "2026-09-17T17:00:00Z",
   );
   assert.equal(result.issue.title, "Renamed");
@@ -2834,7 +2938,9 @@ for (const state of ["active", "acquiring", "release_pending"] as const) {
           "explicit-release",
         );
       if (action === "wait-existing") {
-        store.saved.lifecycle!.waiting = { kind: "dependency" };
+        legacyLifecycle(store.saved.lifecycle!).waiting = {
+          kind: "dependency",
+        };
         store.saved.dependencies = [
           { id: "jp-blocker", status: "open", dependencyType: "blocks" },
         ];
@@ -2890,7 +2996,7 @@ for (const state of ["active", "acquiring", "release_pending"] as const) {
               ? "deferred"
               : "waiting",
         );
-        assert.equal(saved.lifecycle!.execution, null);
+        assert.equal(legacyLifecycle(saved.lifecycle!).execution, null);
         assert.equal(pool.releaseCalls.length, 1);
       }
     });
@@ -2932,7 +3038,7 @@ test("the original owner can record artifacts after the legacy expiry timestamp"
     session("s1"),
     "observe-after-idle",
   );
-  assert.equal(saved.lifecycle?.execution?.sessionId, "s1");
+  assert.equal(legacyLifecycle(saved.lifecycle)?.execution?.sessionId, "s1");
   assert.equal(saved.lifecycle?.artifacts[0].id, "report");
 });
 
@@ -2943,7 +3049,9 @@ test("legacy automatic cleanup is cancelled without waiting for a lease renewal"
     session("s1"),
     "acquire",
   );
-  const original = structuredClone(store.saved.lifecycle!.execution);
+  const original = structuredClone(
+    legacyLifecycle(store.saved.lifecycle!).execution,
+  );
   const claimId = store.saved.lifecycle!.resources[0].claimId;
   await sut.prepareWorktreeRelease(
     "jp-1",
@@ -2953,7 +3061,7 @@ test("legacy automatic cleanup is cancelled without waiting for a lease renewal"
   );
   const saved = await sut.reconcileTask("jp-1", session("daemon"));
   assert.equal(saved.lifecycle?.resources[0].cleanupState, "active");
-  assert.deepEqual(saved.lifecycle?.execution, original);
+  assert.deepEqual(legacyLifecycle(saved.lifecycle)?.execution, original);
   assert.equal(pool.releaseCalls.length, 0);
   assert.equal(pool.entries.has(claimId), true);
 });
@@ -3033,9 +3141,11 @@ for (const retainedWorktree of [false, true]) {
       "replan",
     );
     assert.equal(saved.lifecycle!.phase, "waiting");
-    assert.deepEqual(saved.lifecycle!.waiting, { kind: "dependency" });
+    assert.deepEqual(legacyLifecycle(saved.lifecycle!).waiting, {
+      kind: "dependency",
+    });
     assert.equal(saved.lifecycle!.activeCheck, null);
-    assert.equal(saved.lifecycle!.execution, null);
+    assert.equal(legacyLifecycle(saved.lifecycle!).execution, null);
     assert.deepEqual(store.blockers, [["jp-1", "jp-blocker"]]);
   });
 }
@@ -3084,7 +3194,7 @@ test("manual waits do not prevent pending worktree release reconciliation", asyn
     "release-pending",
   );
   pool.entries.delete(claimId);
-  store.saved.lifecycle!.waiting = { kind: "check" };
+  legacyLifecycle(store.saved.lifecycle!).waiting = { kind: "check" };
   store.saved.lifecycle!.activeCheck = lifecycleCheck({
     predicate: { description: "Await approved evidence" },
   });
@@ -3181,3 +3291,30 @@ for (const outcome of [
     }
   });
 }
+
+test("a v2 prepared result cannot mutate a v1 task even when its check snapshot matches", async () => {
+  const { store, sut } = observationFixture();
+  const prepared = await sut.prepareReconciliation(
+    { taskId: "jp-1", requestId: "foreign-schema" },
+    session("reconciler"),
+  );
+  assert.equal(prepared.kind, "observe");
+  if (prepared.kind !== "observe") throw new Error("expected prepared check");
+  const before = structuredClone(store.saved);
+  const result = await sut.applyReconciliation(
+    {
+      ...prepared.prepared,
+      lifecycleVersion: 2,
+      conditionFingerprint: "a".repeat(64),
+      pause: null,
+      owner: null,
+      ownershipOperationId: null,
+      actorSessionId: "reconciler",
+    },
+    { outcome: "satisfied", observation: "merged" },
+    session("reconciler"),
+  );
+  assert.equal(result.outcome, "stale");
+  assert.deepEqual(store.saved, before);
+  assert.equal(store.writes, 0);
+});

@@ -5,9 +5,11 @@ sidebar_max_width = 100
 pi = [
   ["state_icon", { token = "$pi_task", bold = true, dim = false }],
   ["$pi_project", "$pi_area"],
+  ["$pi_task_status"],
   ["state_text", "$pi_model"],
   [{ token = "$pi_waiting", fg = "#d9a35f", dim = false }],
 ]
 
 [ui.sidebar.spaces]
+# The legacy token name counts distinct owned tasks, not running agents.
 rows = [["state_icon", "workspace"], ["$tab_count", "$active_tasks"]]
