@@ -175,20 +175,13 @@ export default function projectStatus(
 
   function renderStatus(
     ctx: ExtensionContext,
-    sessionName: string | undefined,
     taskState: TaskState,
     workContext: string | undefined,
     browse?: string,
   ): void {
     const theme = ctx.ui.theme;
     const leftParts: string[] = [];
-    const identity: string[] = [];
-    const hasTask = taskState !== "unavailable" && "sessionTask" in taskState;
-    if (sessionName && !hasTask) identity.push(theme.fg("accent", sessionName));
-    if (workContext) identity.push(theme.fg("muted", workContext));
-    if (!hasTask && taskState !== "unavailable")
-      identity.push(theme.fg("muted", "Unassigned"));
-    if (identity.length) leftParts.push(identity.join(theme.fg("dim", " • ")));
+    if (workContext) leftParts.push(theme.fg("muted", workContext));
 
     if (taskState === "unavailable") {
       leftParts.push(theme.fg("muted", "tasks unavailable"));
@@ -302,7 +295,7 @@ export default function projectStatus(
           : undefined;
     if (!listed.ok || identity?.kind === "unavailable") {
       currentTaskState = "unavailable";
-      renderStatus(ctx, currentSessionName, currentTaskState, workContext);
+      renderStatus(ctx, currentTaskState, workContext);
       return;
     }
     let selection: SessionWorkSelection;
@@ -311,7 +304,7 @@ export default function projectStatus(
         legacySelection ?? resolveSessionSelection(ctx.sessionManager, catalog);
     } catch {
       currentTaskState = "unavailable";
-      renderStatus(ctx, currentSessionName, currentTaskState, workContext);
+      renderStatus(ctx, currentTaskState, workContext);
       return;
     }
     const taskState = await getCounts(
@@ -324,7 +317,6 @@ export default function projectStatus(
     currentTaskState = taskState;
     renderStatus(
       ctx,
-      currentSessionName,
       currentTaskState,
       workContext ??
         (typeof taskState === "object" && "sessionTask" in taskState
@@ -354,7 +346,6 @@ export default function projectStatus(
             currentTaskState = "unavailable";
             renderStatus(
               next.ctx,
-              currentSessionName,
               currentTaskState,
               usesCatalog ? "identity unavailable" : undefined,
             );
