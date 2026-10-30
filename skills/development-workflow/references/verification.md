@@ -5,6 +5,20 @@ requirements. Evidence belongs to a candidate/revision, configuration and
 environment. Deployment health and feature behavior are separate claims; an
 artifact, task transition, loaded skill or completed agent session proves neither.
 
+## Carry acceptance criteria into every check
+
+Use the criteria accepted during Design: behavior/invariant, inputs or workload,
+expected result/threshold, and the local, isolated-environment or production proof
+that establishes it. Map them to commands, requests, browser scenarios or telemetry
+with the relevant candidate/configuration and observation window. Keep results and
+links in the existing task/design/PR report; no new evidence system is required.
+
+Select the smallest supported path that covers the behavior: local builds/tests
+or service execution, test drives, hotdogs, staging or repository-specific tools.
+Do not run every environment by ritual. Mock limits identify checks needing real
+dependencies. Source isolation in a worktree does not establish isolated ports,
+databases, queues, background jobs or downstream effects.
+
 ## Define the proof before an expensive run
 
 Identify the expected behavior, supported execution path, and evidence that would
@@ -27,14 +41,15 @@ not a merge date or a feature flag's global label alone.
 
 Record the relevant revision, target, observation window and result:
 
-| Result            | Meaning                                                                          |
-| ----------------- | -------------------------------------------------------------------------------- |
-| Proven            | The specified behavior was exercised or observed with supporting evidence.       |
-| Failed            | The observed behavior contradicted the assertion; identify the failing boundary. |
-| Blocked           | A prerequisite prevents the proof; name what must change and the next actor.     |
-| Not exercised     | This case has no adequate evidence, even if other checks passed.                 |
-| Explicitly waived | The user accepted a specific gap/risk for a stated scope. Preserve the decision. |
-| Not applicable    | This deliverable does not need this proof; explain why.                          |
+| Result            | Meaning                                                                           |
+| ----------------- | --------------------------------------------------------------------------------- |
+| Proven            | The specified behavior was exercised or observed with supporting evidence.        |
+| Failed            | The observed behavior contradicted the assertion; identify the failing boundary.  |
+| Blocked           | A prerequisite prevents the proof; name what must change and the next actor.      |
+| Not exercised     | This case has no adequate evidence, even if other checks passed.                  |
+| Inconclusive      | The check ran but traffic, telemetry or observations cannot establish the result. |
+| Explicitly waived | The user accepted a specific gap/risk for a stated scope. Preserve the decision.  |
+| Not applicable    | This deliverable does not need this proof; explain why.                           |
 
 A healthy service, completed agent session, or lack of traffic is not proof that
 the feature ran. Local coverage of one case does not establish every live case.

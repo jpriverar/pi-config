@@ -4,6 +4,25 @@ A task names a deliverable with an observable finish line. Confirm a short
 interpretation from established context; ask only about a material missing choice.
 A request for a review-ready PR does not silently become a production rollout.
 
+## Build and Test starts with planning
+
+Turn the accepted design and criteria into an executable plan before editing
+implementation files. Use available `writing-plans` guidance for multi-step work.
+Name the components/files, sequence, dependencies, risks and checks with expected
+results. Map every acceptance criterion to a concrete check; carry production
+checks forward as pending rather than pretending they can pass before deployment.
+
+Resolve material plan decisions with the engineer. Do not implement while the
+plan is explicitly under review. Once accepted at the appropriate level of detail,
+execute autonomously within scope and keep the plan/evidence synchronized. Small
+clear changes need a small plan, not a separate phase or task. Material departures
+return to the relevant design/scope decision.
+
+Establish the appropriate baseline or failing regression case, then implement and
+check continuously using available testing/debugging skills. Select supported
+local/service/test-environment paths that cover the criteria; see
+[verification](verification.md) before expensive or side-effecting runs.
+
 ## Make the change reviewable
 
 Build, run focused tests, self-review, and simplify before treating the candidate
@@ -70,7 +89,22 @@ Propose broader work rather than silently expanding the PR or creating tasks.
 After changes, recheck affected evidence and relevant interactions. Repeated
 opinions without new evidence need a concise decision, not an endless review loop.
 
-## Review requests and merge
+## Finish pre-merge validation
+
+Before calling the candidate validated, account for every required pre-merge
+criterion against its actual revision/configuration. Green CI, reviewer approval,
+a healthy test deployment or a completed specialist run is not a substitute for
+missing behavior proof. A failed check returns to a fix and affected verification;
+a missing environment remains blocked, and insufficient observations inconclusive.
+
+Prepare the rollout plan: applicable production checks/windows, initial exposure,
+configuration/flag changes, promotion/stop criteria and recovery/cleanup actions.
+Proceed to Deploy only with passing required pre-merge proof or a specific
+user-accepted exception that stays labeled as such. An exception is not a pass
+and grants no merge/release authority. Early drafts and feedback can happen before
+this boundary.
+
+## Deploy: review requests and release
 
 Use current PR state, actual review threads, repository requirements, checks,
 conflicts, related PRs, and relevant validation evidence to assess readiness.
@@ -86,6 +120,11 @@ Merge only under the applicable explicit authorization. A watcher's auto-merge o
 feedback options are capabilities, not permission. When invoking a specialist,
 retain its result and limitations, then return to this workflow; “nothing left
 to babysit” is not evidence that every commitment is complete.
+
+Use existing platform review, merge-queue and release automation when available
+and authorized; do not introduce competing writers. If automation changes the
+candidate, refresh affected tests/review/runtime evidence. Confirm the service's actual release path and any required release authorization rather than assuming
+merge deploys it.
 
 After merge, verify it, then carry out the remaining agreed delivery work: confirm
 the deployed revision/targeting, validate actual behavior, send the final agreed
