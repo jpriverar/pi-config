@@ -183,8 +183,11 @@ export default function projectStatus(
     const theme = ctx.ui.theme;
     const leftParts: string[] = [];
     const identity: string[] = [];
-    if (sessionName) identity.push(theme.fg("accent", sessionName));
+    const hasTask = taskState !== "unavailable" && "sessionTask" in taskState;
+    if (sessionName && !hasTask) identity.push(theme.fg("accent", sessionName));
     if (workContext) identity.push(theme.fg("muted", workContext));
+    if (!hasTask && taskState !== "unavailable")
+      identity.push(theme.fg("muted", "Unassigned"));
     if (identity.length) leftParts.push(identity.join(theme.fg("dim", " • ")));
 
     if (taskState === "unavailable") {

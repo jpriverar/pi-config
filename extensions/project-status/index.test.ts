@@ -390,7 +390,7 @@ test("explicit scope drives counts while the existing name stays visible", async
 
   assert.equal(
     harness.renderHeader().trimEnd(),
-    "pi-setup-580c8e67 │ Browse: pi-setup • 1 in-progress • 1 closed",
+    "pi-setup-580c8e67 • Unassigned │ Browse: pi-setup • 1 in-progress • 1 closed",
   );
   assert.doesNotMatch(harness.renderHeader(), /blocked|ready|waiting/);
 });
@@ -545,7 +545,8 @@ for (const unavailable of ["active", "ready", "closed"] as const) {
     const harness = createHarness({ unavailable });
     await assert.doesNotReject(start(harness));
 
-    assert.match(harness.renderHeader(), /tasks unavailable/);
+    assert.match(harness.renderHeader(), /pi-setup.*tasks unavailable/);
+    assert.doesNotMatch(harness.renderHeader(), /Unassigned/);
     assert.doesNotMatch(harness.renderHeader(), /Opus 4\.6|high|32%|disk|⛁/);
   });
 }
@@ -772,22 +773,22 @@ for (const { scope, name, expected } of [
   {
     scope: { kind: "global" },
     name: "api-580c8e67",
-    expected: "api-580c8e67 │ 3 ready",
+    expected: "api-580c8e67 • Unassigned │ 3 ready",
   },
   {
     scope: { kind: "area", areaId: B },
     name: "api-580c8e67",
-    expected: "api-580c8e67 │ Browse: Tooling (area) • 1 ready",
+    expected: "api-580c8e67 • Unassigned │ Browse: Tooling (area) • 1 ready",
   },
   {
     scope: { kind: "project", projectId: P },
     name: "api-580c8e67",
-    expected: "api-580c8e67 │ Browse: API • 1 ready",
+    expected: "api-580c8e67 • Unassigned │ Browse: API • 1 ready",
   },
   {
     scope: { kind: "global" },
     name: "",
-    expected: "3 ready",
+    expected: "Unassigned │ 3 ready",
   },
 ] satisfies { scope: WorkScope; name: string; expected: string }[]) {
   test(`unassigned catalog ${scope.kind} header separates identity from browsing despite display ${JSON.stringify(name)}`, async () => {
@@ -825,7 +826,7 @@ test("empty global view keeps identity without a redundant browse label", async 
     ],
   });
   await start(h);
-  assert.equal(h.renderHeader().trimEnd(), "pi-setup");
+  assert.equal(h.renderHeader().trimEnd(), "pi-setup • Unassigned");
   assert.equal(h.calls.length, 3);
 });
 
@@ -903,7 +904,7 @@ test("unclassified projects do not display an invented area", async () => {
   await start(h);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "api-580c8e67 │ Browse: API • 1 ready",
+    "api-580c8e67 • Unassigned │ Browse: API • 1 ready",
   );
 });
 
@@ -920,7 +921,7 @@ for (const failure of ["catalog", "scope"] as const) {
     await start(h);
     assert.equal(
       h.renderHeader().trimEnd(),
-      "api-580c8e67 • API • Product │ zz-owned • Task zz-owned",
+      "API • Product │ zz-owned • Task zz-owned",
     );
     if (failure === "catalog") options.catalogError = "Catalog unavailable";
     else options.entries.push(projectEntry("missing-project"));
@@ -945,14 +946,14 @@ test("a project's changed area appears on the next refresh without renaming the 
   await start(h);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "custom-580c8e67 • API • Product │ zz-owned • Task zz-owned",
+    "API • Product │ zz-owned • Task zz-owned",
   );
   fixture.catalog.projects[P].areaId = B;
   fixture.catalog.revision += 1;
   await h.handlers.get("turn_end")!({}, h.context);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "custom-580c8e67 • API • Tooling │ zz-owned • Task zz-owned",
+    "API • Tooling │ zz-owned • Task zz-owned",
   );
 });
 
@@ -968,7 +969,7 @@ test("area headers retain Unicode and fit narrow terminal widths", async () => {
   await start(h);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "session-580c8e67 • API • 開発🧰 │ zz-owned • Task zz-owned",
+    "API • 開発🧰 │ zz-owned • Task zz-owned",
   );
   for (const width of [0, 1, 12, 24, 60]) {
     assert.ok(visibleWidth(h.renderHeader(width)) <= width);
@@ -999,7 +1000,10 @@ test("scope changes during status refresh discard the old projection", async () 
   await h.handlers.get("session_start")!({}, h.context);
   assert.equal(h.renderHeader(), "");
   await h.handlers.get("session_info_changed")!({}, h.context);
-  assert.equal(h.renderHeader().trimEnd(), "pi-setup │ Browse: Maintenance");
+  assert.equal(
+    h.renderHeader().trimEnd(),
+    "pi-setup • Unassigned │ Browse: Maintenance",
+  );
 });
 
 test("corrupt catalog reports unavailable rather than global counts", async () => {
@@ -1034,7 +1038,7 @@ test("catalog view changes keep the session-owned task visible with an outside-v
   await h.handlers.get("session_start")!({}, h.context);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "pi-setup • Maintenance • Tooling │ zz-owned • Task zz-owned (outside current view)",
+    "Maintenance • Tooling │ zz-owned • Task zz-owned (outside current view)",
   );
 });
 
@@ -1113,7 +1117,7 @@ test("browse changes refresh counts without a session rename and ignore retired 
   await setImmediate();
   assert.equal(
     h.renderHeader().trimEnd(),
-    "pi-setup │ Browse: Maintenance • 1 ready",
+    "pi-setup • Unassigned │ Browse: Maintenance • 1 ready",
   );
   assert.equal(h.context.sessionManager.getSessionName(), "pi-setup");
   const calls = h.calls.length;
@@ -1141,7 +1145,7 @@ for (const transport of ["success", "failure", "absent"] as const) {
     await setImmediate();
     assert.match(
       h.renderHeader(),
-      /pi-setup • API • Product.*zz-owned • Task zz-owned.*outside current view/,
+      /API • Product.*zz-owned • Task zz-owned.*outside current view/,
     );
     assert.equal(h.calls.length, 1);
     if (transport === "absent") assert.deepEqual(h.metadata, []);
@@ -1222,7 +1226,7 @@ for (const name of ["Investigation notes", ""]) {
     await setImmediate();
     assert.equal(
       h.renderHeader(200).trimEnd(),
-      `${name ? name + " • " : ""}API • Product │ zz-owned • Task zz-owned (outside current view)`,
+      "API • Product │ zz-owned • Task zz-owned (outside current view)",
     );
     assert.equal(h.context.sessionManager.getSessionName(), name || undefined);
     assert.equal(h.metadata.at(-1)!.displayAgent, "zz-owned • Task zz-owned");
@@ -1258,7 +1262,7 @@ test("manual names and catalog project renames update independent status fields"
   await h.handlers.get("session_info_changed")!({}, h.context);
   assert.equal(
     h.renderHeader(200).trimEnd(),
-    "Renamed notes • API renamed • Product │ zz-owned • Task zz-owned",
+    "API renamed • Product │ zz-owned • Task zz-owned",
   );
   assert.equal(h.context.sessionManager.getSessionName(), "Renamed notes");
   assert.equal(h.calls.length, 2);
@@ -1277,7 +1281,7 @@ test("legacy owned workstream is explicit and independent of the session name an
   await start(h);
   assert.equal(
     h.renderHeader(200).trimEnd(),
-    "My notes • Actual project │ owned • Task owned",
+    "Actual project │ owned • Task owned",
   );
   assert.equal(h.calls.length, 1);
 });
@@ -1324,14 +1328,16 @@ async function ownedV2(
 }
 
 for (const [phase, label] of [
+  ["active", "In progress"],
   ["waiting", "Blocked"],
   ["actionable", "Ready to resume"],
   ["deferred", "Deferred"],
   ["done", "Done"],
 ] as const) {
-  test(`header and optional Herdr keep title/project/area for owned ${phase}`, async () => {
+  test(`owned ${phase} header prioritizes task identity without renaming the session`, async () => {
     const row = await ownedV2(phase);
     const h = createHarness({
+      sessionName: "Conversation notes unrelated to this task",
       catalog: catalogViewFixture().catalog,
       entries: [
         {
@@ -1354,6 +1360,13 @@ for (const [phase, label] of [
     assert.ok(metadata.pi_area);
     assert.match(h.renderHeader(240), new RegExp(row.id));
     assert.ok(h.renderHeader(240).includes(label));
+    assert.doesNotMatch(h.renderHeader(240), /Conversation notes|Unassigned/);
+    assert.match(h.renderHeader(80), /zz-owned/);
+    assert.equal(
+      h.context.sessionManager.getSessionName(),
+      "Conversation notes unrelated to this task",
+    );
+    assert.equal(h.context.sessionManager.getSessionId(), "session-1");
     assert.equal(h.calls.length, 1);
     await h.handlers.get("session_shutdown")?.({}, h.context);
   });
@@ -1396,6 +1409,8 @@ test("new lifecycle transitions refresh phase without clearing identity or wakeu
   );
   await setImmediate();
   assert.equal(h.metadata.at(-1)!.pi_task_state, "unassigned");
+  assert.match(h.renderHeader(), /pi-setup • Unassigned/);
+  assert.doesNotMatch(h.renderHeader(), /zz-owned|Product/);
   assert.equal(h.metadata.at(-1)!.pi_task_phase, null);
   assert.equal(h.metadata.at(-1)!.pi_project, null);
   assert.equal(h.metadata.at(-1)!.pi_area, null);
