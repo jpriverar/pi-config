@@ -373,7 +373,7 @@ test("does not expose hostile task metadata in the project status surface", asyn
   assert.doesNotMatch(harness.renderHeader(), /\u001b|hostile|Do\nnot/);
 });
 
-test("explicit scope drives counts while the existing name stays visible", async () => {
+test("explicit scope drives counts without a session identity label", async () => {
   const harness = createHarness({
     sessionName: "pi-setup-580c8e67",
     entries: [projectEntry("pi-setup")],
@@ -390,12 +390,12 @@ test("explicit scope drives counts while the existing name stays visible", async
 
   assert.equal(
     harness.renderHeader().trimEnd(),
-    "pi-setup-580c8e67 │ Browse: pi-setup • 1 in-progress • 1 closed",
+    "Browse: pi-setup • 1 in-progress • 1 closed",
   );
   assert.doesNotMatch(harness.renderHeader(), /blocked|ready|waiting/);
 });
 
-test("session name changes visible identity without changing explicit scope", async () => {
+test("session rename leaves explicit browse counts unchanged", async () => {
   const harness = createHarness({
     sessionName: "pi-setup-580c8e67",
     entries: [projectEntry("pi-setup")],
@@ -409,7 +409,11 @@ test("session name changes visible identity without changing explicit scope", as
   harness.setSessionName("investigate-crash");
   await harness.handlers.get("session_info_changed")?.({}, harness.context);
 
-  assert.match(harness.renderHeader(), /investigate-crash/);
+  assert.doesNotMatch(harness.renderHeader(), /investigate-crash|Unassigned/);
+  assert.equal(
+    harness.context.sessionManager.getSessionName(),
+    "investigate-crash",
+  );
   assert.match(harness.renderHeader(), /1 in-progress/);
   assert.doesNotMatch(harness.renderHeader(), /pi-setup-580c8e67|blocked/);
 });
@@ -443,11 +447,11 @@ test("abandons an in-flight session-info refresh when the session shuts down", a
 
   await assert.doesNotReject(refresh);
   assert.deepEqual(harness.staleAccesses, []);
-  assert.match(harness.renderHeader(), /pi-setup/);
+  assert.equal(harness.renderHeader().trimEnd(), "Browse: pi-setup");
   assert.doesNotMatch(harness.renderHeader(), /replacement/);
 });
 
-test("explicit global scope counts all work while displaying the name", async () => {
+test("explicit global scope displays counts without the session name", async () => {
   const harness = createHarness({
     sessionName: "manual display name",
     entries: [projectEntry(null)],
@@ -459,12 +463,12 @@ test("explicit global scope counts all work while displaying the name", async ()
 
   await start(harness);
 
-  assert.match(harness.renderHeader(), /manual display name/);
+  assert.doesNotMatch(harness.renderHeader(), /manual display name|Unassigned/);
   assert.match(harness.renderHeader(), /1 in-progress/);
   assert.match(harness.renderHeader(), /1 blocked/);
 });
 
-test("legacy exact-name sessions still drive identity and scope", async () => {
+test("legacy exact-name sessions retain their count scope", async () => {
   const harness = createHarness({
     sessionName: "PI-SETUP",
     issues: [
@@ -481,7 +485,10 @@ test("legacy exact-name sessions still drive identity and scope", async () => {
 
   await start(harness);
 
-  assert.match(harness.renderHeader(), /PI-SETUP/);
+  assert.equal(
+    harness.renderHeader().trimEnd(),
+    "Browse: PI-SETUP • 1 in-progress • 1 closed",
+  );
   assert.match(harness.renderHeader(), /1 in-progress/);
   assert.match(harness.renderHeader(), /1 closed/);
   assert.doesNotMatch(harness.renderHeader(), /blocked|ready|waiting/);
@@ -491,7 +498,7 @@ test("keeps runtime telemetry out of the project header", async () => {
   const harness = createHarness();
   await start(harness);
 
-  assert.match(harness.renderHeader(), /pi-setup/);
+  assert.equal(harness.renderHeader().trimEnd(), "Browse: pi-setup");
   assert.doesNotMatch(harness.renderHeader(), /Opus 4\.6|high|32%|disk 200G|⛁/);
   await harness.handlers.get("model_select")?.({}, harness.context);
   assert.doesNotMatch(harness.renderHeader(), /gpt-5\.4|Context|82%/);
@@ -529,11 +536,11 @@ test("fits dense global status within the terminal width", async () => {
   assert.match(rendered, /1 blocked/);
 });
 
-test("empty queries render zero task counts without hiding identity", async () => {
-  const harness = createHarness();
+test("empty successful global queries hide the status widget", async () => {
+  const harness = createHarness({ entries: [projectEntry(null)] });
   await start(harness);
 
-  assert.match(harness.renderHeader(), /pi-setup/);
+  assert.equal(harness.renderHeader(), "");
   assert.doesNotMatch(
     harness.renderHeader(),
     /Opus 4\.6|high|32%|disk|⛁|in-progress|blocked|ready|waiting|needs you|closed|unavailable/,
@@ -541,11 +548,12 @@ test("empty queries render zero task counts without hiding identity", async () =
 });
 
 for (const unavailable of ["active", "ready", "closed"] as const) {
-  test(`${unavailable} query failure renders task state unavailable and preserves identity`, async () => {
+  test(`${unavailable} query failure reports unavailable instead of counts or a session name`, async () => {
     const harness = createHarness({ unavailable });
     await assert.doesNotReject(start(harness));
 
-    assert.match(harness.renderHeader(), /tasks unavailable/);
+    assert.equal(harness.renderHeader().trimEnd(), "tasks unavailable");
+    assert.doesNotMatch(harness.renderHeader(), /Unassigned/);
     assert.doesNotMatch(harness.renderHeader(), /Opus 4\.6|high|32%|disk|⛁/);
   });
 }
@@ -772,17 +780,17 @@ for (const { scope, name, expected } of [
   {
     scope: { kind: "global" },
     name: "api-580c8e67",
-    expected: "api-580c8e67 │ 3 ready",
+    expected: "3 ready",
   },
   {
     scope: { kind: "area", areaId: B },
     name: "api-580c8e67",
-    expected: "api-580c8e67 │ Browse: Tooling (area) • 1 ready",
+    expected: "Browse: Tooling (area) • 1 ready",
   },
   {
     scope: { kind: "project", projectId: P },
     name: "api-580c8e67",
-    expected: "api-580c8e67 │ Browse: API • 1 ready",
+    expected: "Browse: API • 1 ready",
   },
   {
     scope: { kind: "global" },
@@ -812,7 +820,7 @@ for (const { scope, name, expected } of [
   });
 }
 
-test("empty global view keeps identity without a redundant browse label", async () => {
+test("empty catalog global view hides the status widget", async () => {
   const h = createHarness({
     ...catalogViewFixture(),
     issues: [],
@@ -825,7 +833,7 @@ test("empty global view keeps identity without a redundant browse label", async 
     ],
   });
   await start(h);
-  assert.equal(h.renderHeader().trimEnd(), "pi-setup");
+  assert.equal(h.renderHeader(), "");
   assert.equal(h.calls.length, 3);
 });
 
@@ -901,10 +909,7 @@ test("unclassified projects do not display an invented area", async () => {
     entries: [projectEntry("api")],
   });
   await start(h);
-  assert.equal(
-    h.renderHeader().trimEnd(),
-    "api-580c8e67 │ Browse: API • 1 ready",
-  );
+  assert.equal(h.renderHeader().trimEnd(), "Browse: API • 1 ready");
 });
 
 for (const failure of ["catalog", "scope"] as const) {
@@ -920,7 +925,7 @@ for (const failure of ["catalog", "scope"] as const) {
     await start(h);
     assert.equal(
       h.renderHeader().trimEnd(),
-      "api-580c8e67 • API • Product │ zz-owned • Task zz-owned",
+      "API • Product │ zz-owned • Task zz-owned",
     );
     if (failure === "catalog") options.catalogError = "Catalog unavailable";
     else options.entries.push(projectEntry("missing-project"));
@@ -928,8 +933,8 @@ for (const failure of ["catalog", "scope"] as const) {
     assert.equal(
       h.renderHeader().trimEnd(),
       failure === "catalog"
-        ? "api-580c8e67 • identity unavailable │ tasks unavailable"
-        : "api-580c8e67 • API • Product │ tasks unavailable",
+        ? "identity unavailable │ tasks unavailable"
+        : "API • Product │ tasks unavailable",
     );
   });
 }
@@ -945,14 +950,14 @@ test("a project's changed area appears on the next refresh without renaming the 
   await start(h);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "custom-580c8e67 • API • Product │ zz-owned • Task zz-owned",
+    "API • Product │ zz-owned • Task zz-owned",
   );
   fixture.catalog.projects[P].areaId = B;
   fixture.catalog.revision += 1;
   await h.handlers.get("turn_end")!({}, h.context);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "custom-580c8e67 • API • Tooling │ zz-owned • Task zz-owned",
+    "API • Tooling │ zz-owned • Task zz-owned",
   );
 });
 
@@ -968,7 +973,7 @@ test("area headers retain Unicode and fit narrow terminal widths", async () => {
   await start(h);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "session-580c8e67 • API • 開発🧰 │ zz-owned • Task zz-owned",
+    "API • 開発🧰 │ zz-owned • Task zz-owned",
   );
   for (const width of [0, 1, 12, 24, 60]) {
     assert.ok(visibleWidth(h.renderHeader(width)) <= width);
@@ -999,7 +1004,7 @@ test("scope changes during status refresh discard the old projection", async () 
   await h.handlers.get("session_start")!({}, h.context);
   assert.equal(h.renderHeader(), "");
   await h.handlers.get("session_info_changed")!({}, h.context);
-  assert.equal(h.renderHeader().trimEnd(), "pi-setup │ Browse: Maintenance");
+  assert.equal(h.renderHeader().trimEnd(), "Browse: Maintenance");
 });
 
 test("corrupt catalog reports unavailable rather than global counts", async () => {
@@ -1034,7 +1039,7 @@ test("catalog view changes keep the session-owned task visible with an outside-v
   await h.handlers.get("session_start")!({}, h.context);
   assert.equal(
     h.renderHeader().trimEnd(),
-    "pi-setup • Maintenance • Tooling │ zz-owned • Task zz-owned (outside current view)",
+    "Maintenance • Tooling │ zz-owned • Task zz-owned (outside current view)",
   );
 });
 
@@ -1063,7 +1068,8 @@ for (const conflict of ["deferred status", "non-active execution"] as const) {
       sessionName: "API-session1",
     });
     await start(h);
-    assert.match(h.renderHeader(), /API-session1.*identity unavailable/);
+    assert.match(h.renderHeader(), /identity unavailable/);
+    assert.doesNotMatch(h.renderHeader(), /API-session1|Unassigned/);
     assert.doesNotMatch(h.renderHeader(), /unassigned/);
     assert.equal(h.calls.length, 1);
   });
@@ -1085,7 +1091,7 @@ test("deferred ownership facts do not broaden visible task counts", async () => 
     readyIds: [deferred.id],
   });
   await start(h);
-  assert.match(h.renderHeader(), /pi-setup/);
+  assert.doesNotMatch(h.renderHeader(), /pi-setup|Unassigned/);
   assert.doesNotMatch(h.renderHeader(), /1 ready|1 waiting|1 in-progress/);
 });
 
@@ -1096,7 +1102,8 @@ test("a malformed browse filter cannot hide valid working identity", async () =>
     entries: [projectEntry("unknown")],
   });
   await start(h);
-  assert.match(h.renderHeader(), /pi-setup • API • Product/);
+  assert.match(h.renderHeader(), /API • Product/);
+  assert.doesNotMatch(h.renderHeader(), /pi-setup|Unassigned/);
   assert.match(h.renderHeader(), /tasks unavailable/);
   assert.equal(h.calls.length, 1);
 });
@@ -1111,10 +1118,7 @@ test("browse changes refresh counts without a session rename and ignore retired 
     h.context.sessionManager.getSessionId(),
   );
   await setImmediate();
-  assert.equal(
-    h.renderHeader().trimEnd(),
-    "pi-setup │ Browse: Maintenance • 1 ready",
-  );
+  assert.equal(h.renderHeader().trimEnd(), "Browse: Maintenance • 1 ready");
   assert.equal(h.context.sessionManager.getSessionName(), "pi-setup");
   const calls = h.calls.length;
   h.events.emit("pi:work-scope-changed", "another-session");
@@ -1141,7 +1145,7 @@ for (const transport of ["success", "failure", "absent"] as const) {
     await setImmediate();
     assert.match(
       h.renderHeader(),
-      /pi-setup • API • Product.*zz-owned • Task zz-owned.*outside current view/,
+      /API • Product.*zz-owned • Task zz-owned.*outside current view/,
     );
     assert.equal(h.calls.length, 1);
     if (transport === "absent") assert.deepEqual(h.metadata, []);
@@ -1172,7 +1176,7 @@ test("Herdr label follows existing refresh snapshots without a second task read"
   );
   await setImmediate();
   assert.equal(h.metadata.at(-1)!.displayAgent, "pi-setup");
-  assert.match(h.renderHeader(), /pi-setup/);
+  assert.doesNotMatch(h.renderHeader(), /pi-setup|Unassigned/);
   h.setUnavailable("active");
   await h.handlers.get("turn_end")!({}, h.context);
   await setImmediate();
@@ -1222,7 +1226,7 @@ for (const name of ["Investigation notes", ""]) {
     await setImmediate();
     assert.equal(
       h.renderHeader(200).trimEnd(),
-      `${name ? name + " • " : ""}API • Product │ zz-owned • Task zz-owned (outside current view)`,
+      "API • Product │ zz-owned • Task zz-owned (outside current view)",
     );
     assert.equal(h.context.sessionManager.getSessionName(), name || undefined);
     assert.equal(h.metadata.at(-1)!.displayAgent, "zz-owned • Task zz-owned");
@@ -1258,7 +1262,7 @@ test("manual names and catalog project renames update independent status fields"
   await h.handlers.get("session_info_changed")!({}, h.context);
   assert.equal(
     h.renderHeader(200).trimEnd(),
-    "Renamed notes • API renamed • Product │ zz-owned • Task zz-owned",
+    "API renamed • Product │ zz-owned • Task zz-owned",
   );
   assert.equal(h.context.sessionManager.getSessionName(), "Renamed notes");
   assert.equal(h.calls.length, 2);
@@ -1277,7 +1281,7 @@ test("legacy owned workstream is explicit and independent of the session name an
   await start(h);
   assert.equal(
     h.renderHeader(200).trimEnd(),
-    "My notes • Actual project │ owned • Task owned",
+    "Actual project │ owned • Task owned",
   );
   assert.equal(h.calls.length, 1);
 });
@@ -1324,14 +1328,16 @@ async function ownedV2(
 }
 
 for (const [phase, label] of [
+  ["active", "In progress"],
   ["waiting", "Blocked"],
   ["actionable", "Ready to resume"],
   ["deferred", "Deferred"],
   ["done", "Done"],
 ] as const) {
-  test(`header and optional Herdr keep title/project/area for owned ${phase}`, async () => {
+  test(`owned ${phase} header prioritizes task identity without renaming the session`, async () => {
     const row = await ownedV2(phase);
     const h = createHarness({
+      sessionName: "Conversation notes unrelated to this task",
       catalog: catalogViewFixture().catalog,
       entries: [
         {
@@ -1354,6 +1360,13 @@ for (const [phase, label] of [
     assert.ok(metadata.pi_area);
     assert.match(h.renderHeader(240), new RegExp(row.id));
     assert.ok(h.renderHeader(240).includes(label));
+    assert.doesNotMatch(h.renderHeader(240), /Conversation notes|Unassigned/);
+    assert.match(h.renderHeader(80), /zz-owned/);
+    assert.equal(
+      h.context.sessionManager.getSessionName(),
+      "Conversation notes unrelated to this task",
+    );
+    assert.equal(h.context.sessionManager.getSessionId(), "session-1");
     assert.equal(h.calls.length, 1);
     await h.handlers.get("session_shutdown")?.({}, h.context);
   });
@@ -1396,6 +1409,9 @@ test("new lifecycle transitions refresh phase without clearing identity or wakeu
   );
   await setImmediate();
   assert.equal(h.metadata.at(-1)!.pi_task_state, "unassigned");
+  assert.doesNotMatch(h.renderHeader(), /pi-setup|Unassigned/);
+  assert.notEqual(h.renderHeader(), "");
+  assert.doesNotMatch(h.renderHeader(), /zz-owned|Product/);
   assert.equal(h.metadata.at(-1)!.pi_task_phase, null);
   assert.equal(h.metadata.at(-1)!.pi_project, null);
   assert.equal(h.metadata.at(-1)!.pi_area, null);
