@@ -622,6 +622,15 @@ clean release. Task ownership and lifecycle policy live in the separate
 `task-lifecycle` extension. Operational details and task-aware wrapper examples
 are in [Task lifecycle](docs/task-lifecycle.md).
 
+## Package smoke checks
+
+Run `npm run verify:smoke -- --package "$PWD"` to exercise package loading and
+task operations under both lifecycle writer versions. Each mode uses a temporary
+package snapshot, isolated fake Beads records and offline Pi RPC sessions. The
+command does not alter the supplied package configuration or start model turns.
+The v2 checks include rejecting an unready task and explicitly releasing ownership
+after close.
+
 ## Permission guardrail
 
 The permission-gate extension performs best-effort checks for several common
