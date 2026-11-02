@@ -33,6 +33,7 @@ const STATUS_RANK: Record<Readiness, number> = {
   waiting: 3,
 };
 const COLUMN_CAPS = [14, 18, 42, 56, 40] as const;
+const DAY_MS = 86_400_000;
 
 export interface RenderedTaskTable {
   lines: string[];
@@ -72,9 +73,28 @@ function stateLabel(issue: ClassifiedIssue, now: number): string {
       0,
       now - Date.parse(issue.lifecycleStateEnteredAt),
     );
-    label += ` · ${Math.floor(elapsed / 86_400_000)}d`;
+    label += ` · ${Math.floor(elapsed / DAY_MS)}d`;
   }
   return label;
+}
+
+// Waiting ages and overdue labels can change even in an immutable snapshot.
+export function taskTableValidUntil(
+  issues: readonly ClassifiedIssue[],
+  now: number,
+): number {
+  let validUntil = Infinity;
+  for (const issue of issues) {
+    const enteredAt = Date.parse(issue.lifecycleStateEnteredAt ?? "");
+    if (issue.readiness === "waiting" && Number.isFinite(enteredAt)) {
+      const days = Math.floor(Math.max(0, now - enteredAt) / DAY_MS);
+      validUntil = Math.min(validUntil, enteredAt + (days + 1) * DAY_MS);
+    }
+    const nextCheckAt = Date.parse(issue.activeCheck?.nextCheckAt ?? "");
+    if (issue.blockingTaskIds.length === 0 && nextCheckAt >= now)
+      validUntil = Math.min(validUntil, nextCheckAt + 1);
+  }
+  return validUntil;
 }
 
 function statusColor(readiness: Readiness): ThemeColor {

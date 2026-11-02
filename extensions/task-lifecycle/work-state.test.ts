@@ -13,7 +13,7 @@ import { target as wmTarget } from "../../lib/work-management/test-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 
 import type { BeadsIssue } from "../../lib/beads.js";
 import { SESSION_PROJECT_ENTRY_TYPE } from "../../lib/session-project.js";
@@ -272,17 +272,22 @@ async function start(harness: ReturnType<typeof createHarness>) {
   await flushDeferred();
 }
 
+function startupCard(
+  harness: ReturnType<typeof createHarness>,
+  renderTheme = theme,
+): Component {
+  const renderer = harness.renderers.get("jp-work-startup");
+  assert.ok(renderer, "startup renderer was not registered");
+  assert.equal(harness.appended.length, 1);
+  return renderer(harness.appended[0], {}, renderTheme);
+}
+
 function renderCard(
   harness: ReturnType<typeof createHarness>,
   width = 100,
   renderTheme = theme,
 ): string {
-  const renderer = harness.renderers.get("jp-work-startup");
-  assert.ok(renderer, "startup renderer was not registered");
-  assert.equal(harness.appended.length, 1);
-  return renderer(harness.appended[0], {}, renderTheme)
-    .render(width)
-    .join("\n");
+  return startupCard(harness, renderTheme).render(width).join("\n");
 }
 
 function issue(
@@ -442,6 +447,114 @@ test("malformed explicit metadata does not fall back to the display name", async
     /\[beta\].*Document beta release process/,
   );
   assert.doesNotMatch(hidden.message.content, /Work state — alpha/);
+});
+
+for (const empty of [false, true]) {
+  test(`startup table reuses formatting on ordinary redraws (empty=${empty})`, async (t) => {
+    let now = Date.parse("2026-11-02T12:00:00.000Z");
+    t.mock.method(Date, "now", () => now);
+    const harness = createHarness({
+      issues: empty ? [] : [issue("jp-cache", "open", [], "Cached task")],
+    });
+    await start(harness);
+    let formatCalls = 0;
+    const card = startupCard(harness, {
+      ...theme,
+      fg: (color, text) => {
+        formatCalls++;
+        return theme.fg(color, text);
+      },
+    });
+    const initial = card.render(140);
+    assert.match(initial.join("\n"), empty ? /Store is empty/ : /Cached task/);
+    assert.ok(formatCalls > 0);
+    formatCalls = 0;
+    now += 7 * 86_400_000;
+
+    assert.deepEqual(card.render(140), initial);
+    assert.equal(formatCalls, 0, "unchanged table must not be reformatted");
+  });
+}
+
+test("startup table cache follows terminal width changes", async () => {
+  const harness = createHarness({
+    issues: [issue("jp-cache", "open", [], "Cached task")],
+  });
+  await start(harness);
+  const card = startupCard(harness);
+  const wide = card.render(140).join("\n");
+  assert.match(wide, /ID\s+│\s+STATE/);
+
+  const narrow = card.render(40);
+  assert.match(narrow.join("\n"), /ID · jp-cache/);
+  assert.ok(narrow.every((line) => visibleWidth(line) <= 40));
+  assert.equal(card.render(140).join("\n"), wide);
+});
+
+test("startup table invalidation rebuilds theme-dependent output", async () => {
+  const harness = createHarness({ issues: [issue("jp-cache")] });
+  await start(harness);
+  let color = "\x1b[31m";
+  const card = startupCard(harness, {
+    ...theme,
+    fg: (_name, text) => `${color}${text}\x1b[39m`,
+  });
+  assert.ok(card.render(140).join("\n").includes("\x1b[31m"));
+  color = "\x1b[32m";
+  card.invalidate();
+
+  const changed = card.render(140).join("\n");
+  assert.ok(changed.includes("\x1b[32m"));
+  assert.ok(!changed.includes("\x1b[31m"));
+});
+
+test("startup table cache refreshes waiting ages at the day boundary", async (t) => {
+  const enteredAt = "2026-11-02T12:00:00.000Z";
+  let now = Date.parse("2026-11-03T11:59:59.999Z");
+  t.mock.method(Date, "now", () => now);
+  const task = issue("jp-age");
+  task.lifecycle = lifecycle("waiting", enteredAt);
+  const harness = createHarness({ issues: [task], readyIds: [] });
+  await start(harness);
+  const card = startupCard(harness);
+  assert.match(card.render(140).join("\n"), /WAITING · 0d/);
+
+  now++;
+  assert.match(card.render(140).join("\n"), /WAITING · 1d/);
+  now += 3 * 86_400_000;
+  assert.match(card.render(140).join("\n"), /WAITING · 4d/);
+});
+
+test("startup table cache preserves overdue boundaries and clock rollback", async (t) => {
+  const enteredAt = "2026-11-02T12:00:00.000Z";
+  const nextCheckAt = "2026-11-02T12:00:01.000Z";
+  let now = Date.parse(nextCheckAt) - 1;
+  t.mock.method(Date, "now", () => now);
+  const task = issue("jp-due");
+  task.lifecycle = lifecycle("waiting", enteredAt, {
+    id: "check-cache",
+    kind: "github_pull_request",
+    targetArtifactIds: [],
+    predicate: {},
+    onSatisfied: "actionable",
+    wakeOn: ["action_required"],
+    state: "pending",
+    createdAt: enteredAt,
+    lastCheckedAt: enteredAt,
+    nextCheckAt,
+    lastObservation: "open",
+    errorCount: 0,
+  });
+  const harness = createHarness({ issues: [task], readyIds: [] });
+  await start(harness);
+  const card = startupCard(harness);
+  assert.match(card.render(140).join("\n"), /next check 12:00/);
+  now++;
+  assert.match(card.render(140).join("\n"), /next check 12:00/);
+  now++;
+  assert.match(card.render(140).join("\n"), /overdue since 12:00/);
+  now = Date.parse(enteredAt);
+  assert.match(card.render(140).join("\n"), /next check 12:00/);
 });
 
 test("wide startup table shows the artifact schema with multiline task rows", async () => {
