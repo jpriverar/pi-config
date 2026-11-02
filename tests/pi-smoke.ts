@@ -13,8 +13,10 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -66,6 +68,40 @@ function packageArgument(argv: string[]): string {
     throw new Error("usage: pi-smoke.ts --package <package-directory>");
   }
   return resolve(argv[index + 1]);
+}
+
+// Separate module paths prevent cached policy from crossing writer modes.
+export async function createSmokePackage(
+  packagePath: string,
+  directory: string,
+  lifecycleWriteVersion: 1 | 2,
+): Promise<string> {
+  mkdirSync(directory);
+  for (const resource of [
+    "package.json",
+    "extensions",
+    "lib",
+    "skills",
+    "prompts",
+    "themes",
+  ]) {
+    await cp(join(packagePath, resource), join(directory, resource), {
+      recursive: true,
+      dereference: true,
+    });
+  }
+  symlinkSync(
+    join(scriptRepository, "node_modules"),
+    join(directory, "node_modules"),
+    "dir",
+  );
+  const policyPath = join(directory, "extensions/task-lifecycle/config.json");
+  const policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  writeFileSync(
+    policyPath,
+    JSON.stringify({ ...policy, lifecycleWriteVersion }),
+  );
+  return directory;
 }
 
 function guardedCleanup(path: string) {
@@ -166,6 +202,7 @@ if (command === "list") {
       metadata: metadataIndex === -1 ? {} : JSON.parse(clean[metadataIndex + 1]),
     };
     state.issues.push(issue);
+    state.ready.push(issue.id);
     save();
     output(issue);
   }
@@ -810,12 +847,26 @@ async function verifyContractHarness(
   packagePath: string,
   cwd: string,
   fakeBd: ReturnType<typeof createFakeBd>,
+  lifecycleWriteVersion: 1 | 2,
 ) {
   const harness = await createContractHarness(packagePath, cwd, fakeBd);
   assert.ok(
     harness.tools.has("work_catalog"),
     "catalog tool is registered by the task-domain extension",
   );
+
+  if (lifecycleWriteVersion === 2) {
+    await assert.rejects(
+      invokeTool(harness, "task_claim", { taskId: "jp-waiting" }),
+      /not natively ready/,
+    );
+    const state = JSON.parse(readFileSync(fakeBd.statePath, "utf8"));
+    const waiting = state.issues.find(
+      (issue: any) => issue.id === "jp-waiting",
+    );
+    assert.equal(waiting.status, "open");
+    assert.equal(waiting.metadata, undefined);
+  }
 
   const filed = await invokeTool(harness, "task_create", {
     title: "Release fixture",
@@ -825,6 +876,7 @@ async function verifyContractHarness(
   });
   const created = filed.details;
   assert.equal(created.status, "open");
+  assert.equal(created.lifecycle.version, lifecycleWriteVersion);
   assert.equal(created.lifecycle.phase, "actionable");
   const claimed = await invokeTool(harness, "task_claim", {
     taskId: created.id,
@@ -847,6 +899,18 @@ async function verifyContractHarness(
     evidenceArtifactIds: [],
   });
   assert.equal(closed.details.status, "closed");
+  if (lifecycleWriteVersion === 2) {
+    assert.equal(
+      closed.details.lifecycle.owner?.sessionId,
+      "smoke-contract-session",
+    );
+    const released = await invokeTool(harness, "task_release", {
+      taskId: created.id,
+      reason: "Smoke verified and fixture resources are released",
+    });
+    assert.equal(released.details.status, "closed");
+    assert.equal(released.details.lifecycle.owner, null);
+  }
   const commandCount = harness.execCalls.length;
   const previousDaemonConfig = process.env.PI_TASK_RECONCILER_CONFIG;
   process.env.PI_TASK_RECONCILER_CONFIG = join(cwd, "not-installed.json");
@@ -1037,19 +1101,22 @@ async function verifyContractHarness(
   assert.equal(scoped.details.metadata.piWorkManagement, undefined);
 }
 
-async function main() {
-  // The fake TUI must never publish fixture state into the caller's live pane.
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith("HERDR_")) delete process.env[key];
-  }
-  const packagePath = packageArgument(process.argv.slice(2));
+async function verifySmoke(
+  sourcePackage: string,
+  lifecycleWriteVersion: 1 | 2,
+) {
   const manifest = JSON.parse(
-    readFileSync(join(packagePath, "package.json"), "utf8"),
+    readFileSync(join(sourcePackage, "package.json"), "utf8"),
   );
   assert.deepEqual(manifest.pi, publicManifest);
 
   const root = mkdtempSync(join(tmpdir(), "pi-package-smoke-"));
   try {
+    const packagePath = await createSmokePackage(
+      sourcePackage,
+      join(root, "package"),
+      lifecycleWriteVersion,
+    );
     const workspace = join(root, "workspace");
     const agentDirectory = join(root, "agent");
     mkdirSync(workspace, { recursive: true });
@@ -1190,12 +1257,28 @@ async function main() {
     );
     assert.deepEqual(readiness.sort(), ["ready", "waiting"]);
 
-    await verifyContractHarness(packagePath, workspace, fakeBd);
+    await verifyContractHarness(
+      packagePath,
+      workspace,
+      fakeBd,
+      lifecycleWriteVersion,
+    );
     console.log(
-      `Pi package smoke verified (${publicManifest.extensions.length} extensions, ${publicManifest.skills.length} skill roots, ${publicManifest.themes.length} themes)`,
+      `Pi package smoke verified (lifecycle v${lifecycleWriteVersion}, ${publicManifest.extensions.length} extensions, ${publicManifest.skills.length} skill roots, ${publicManifest.themes.length} themes)`,
     );
   } finally {
     guardedCleanup(root);
+  }
+}
+
+async function main() {
+  // The fake TUI must never publish fixture state into the caller's live pane.
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("HERDR_")) delete process.env[key];
+  }
+  const packagePath = packageArgument(process.argv.slice(2));
+  for (const lifecycleWriteVersion of [1, 2] as const) {
+    await verifySmoke(packagePath, lifecycleWriteVersion);
   }
 }
 
