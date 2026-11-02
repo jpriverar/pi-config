@@ -55,6 +55,7 @@ import {
   renderTaskTable,
   sortTaskTableIssues,
   taskTableCells,
+  taskTableValidUntil,
 } from "../shared/task-table.js";
 
 const READY_CAP = 5;
@@ -317,14 +318,47 @@ function stateIssues(state: State): ClassifiedIssue[] {
 }
 
 class StartupWorkTable implements Component {
+  private cache?: {
+    width: number;
+    renderedAt: number;
+    validUntil: number;
+    lines: string[];
+  };
+
   constructor(
     private readonly state: State,
     private readonly theme: Theme,
   ) {}
 
-  invalidate() {}
+  invalidate() {
+    this.cache = undefined;
+  }
 
   render(width: number): string[] {
+    const now = Date.now();
+    if (
+      this.cache?.width === width &&
+      now >= this.cache.renderedAt &&
+      now < this.cache.validUntil
+    )
+      return this.cache.lines;
+
+    const issues = sortTaskTableIssues(stateIssues(this.state));
+    const lines = this.renderTable(width, issues, now);
+    this.cache = {
+      width,
+      renderedAt: now,
+      validUntil: taskTableValidUntil(issues, now),
+      lines,
+    };
+    return lines;
+  }
+
+  private renderTable(
+    width: number,
+    issues: ClassifiedIssue[],
+    now: number,
+  ): string[] {
     const margin = width >= 24 ? " " : "";
     const boxWidth = Math.max(12, width - margin.length * 2);
     const contentWidth = Math.max(1, boxWidth - 4);
@@ -342,7 +376,6 @@ class StartupWorkTable implements Component {
     const lines = [
       `${outerBorder("╭─")} ${this.theme.fg("accent", this.theme.bold(title))} ${outerBorder(`${"─".repeat(topFill)}╮`)}`,
     ];
-    const issues = sortTaskTableIssues(stateIssues(this.state));
 
     if (issues.length === 0) {
       const empty = this.state.project
@@ -362,7 +395,7 @@ class StartupWorkTable implements Component {
       return this.finish(lines, margin, boxWidth);
     }
 
-    const table = renderTaskTable(issues, this.theme, undefined, {
+    const table = renderTaskTable(issues, this.theme, now, {
       showProject:
         this.state.scopeKind !== undefined &&
         this.state.scopeKind !== "project",
@@ -376,6 +409,7 @@ class StartupWorkTable implements Component {
         contentWidth,
         fullDivider,
         fullRow,
+        now,
       );
     }
 
@@ -405,10 +439,11 @@ class StartupWorkTable implements Component {
     contentWidth: number,
     fullDivider: (left?: string, right?: string) => string,
     fullRow: (content: string) => string,
+    now: number,
   ) {
     issues.forEach((issue, issueIndex) => {
       if (issueIndex > 0) lines.push(fullDivider());
-      const cells = taskTableCells(issue, this.theme, undefined, {
+      const cells = taskTableCells(issue, this.theme, now, {
         showProject:
           this.state.scopeKind !== undefined &&
           this.state.scopeKind !== "project",
