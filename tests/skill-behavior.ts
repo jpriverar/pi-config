@@ -46,6 +46,7 @@ const workflowNames = [
   "plan",
   "validation",
   "deploy",
+  "pr-evidence",
 ] as const;
 function workflowScenario(scenario: { id: string }): boolean {
   return workflowNames.some((name) => scenario.id === `workflow/${name}`);
@@ -629,17 +630,29 @@ function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
+function processGroupExists(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
 async function waitForProcessGroupExit(pid: number): Promise<void> {
+  let denied: unknown;
   for (let attempt = 0; attempt < 80; attempt++) {
     try {
-      process.kill(-pid, 0);
+      if (!processGroupExists(pid)) return;
+      denied = undefined;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      denied = error;
     }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
   }
-  throw new Error(`process group ${pid} did not exit`);
+  throw denied ?? new Error(`process group ${pid} did not exit`);
 }
 
 async function terminateProcessGroup(
@@ -651,12 +664,19 @@ async function terminateProcessGroup(
     await exited;
     return;
   }
-  signalProcessGroup(child, "SIGTERM");
-  await Promise.race([
-    exited,
-    new Promise((resolvePromise) => setTimeout(resolvePromise, 250)),
-  ]);
-  signalProcessGroup(child, "SIGKILL");
+  try {
+    signalProcessGroup(child, "SIGTERM");
+    await Promise.race([
+      exited,
+      new Promise((resolvePromise) => setTimeout(resolvePromise, 250)),
+    ]);
+    if (processGroupExists(pid)) signalProcessGroup(child, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+    // Darwin can report EPERM for zombie-only groups; only ESRCH proves absence.
+    // Do not retry a denied signal or assume the group was successfully killed.
+    await waitForProcessGroupExit(pid);
+  }
   await exited;
   await waitForProcessGroupExit(pid);
 }

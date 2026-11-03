@@ -405,6 +405,110 @@ test("RPC abort rejects requests and waiters and confirms descendant exit", asyn
   await eventuallyMissing(childPid);
 });
 
+test("RPC cleanup does not force-kill an already exited process group", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-skill-rpc-graceful-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const executable = join(root, "fake-pi.sh");
+  await writeFile(
+    executable,
+    `#!/bin/sh\nread request\nprintf '%s\\n' '{"type":"response","id":"skill-test-1","command":"ready","success":true}'\nexec sleep 30\n`,
+  );
+  await chmod(executable, 0o755);
+  const rpc = new RpcProcess(
+    [],
+    root,
+    { PATH: process.env.PATH ?? "" },
+    { executable },
+  );
+  await rpc.request("ready");
+  const kill = process.kill.bind(process);
+  t.mock.method(
+    process,
+    "kill",
+    (pid: number, signal?: NodeJS.Signals | number) => {
+      if (signal === "SIGKILL") {
+        try {
+          kill(pid, 0);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+            throw Object.assign(new Error("denied unnecessary escalation"), {
+              code: "EPERM",
+            });
+          }
+          throw error;
+        }
+      }
+      return kill(pid, signal);
+    },
+  );
+  await assert.doesNotReject(rpc.stop());
+});
+
+test("RPC cleanup escalates for descendants that ignore SIGTERM", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-skill-rpc-stubborn-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const script = join(root, "fake-pi.mjs");
+  await writeFile(
+    script,
+    `
+    import { spawn } from 'node:child_process';
+    import { createInterface } from 'node:readline';
+    process.on('SIGTERM', () => process.exit(0));
+    createInterface({ input: process.stdin }).once('line', () => {
+      const child = spawn(process.execPath, ['-e',
+        'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000);'
+      ], { stdio: ['ignore', 'pipe', 'ignore'] });
+      child.stdout.once('data', () => process.stdout.write(JSON.stringify({
+        type: 'response', id: 'skill-test-1', command: 'ready', success: true,
+        data: { pid: child.pid }
+      }) + '\\n'));
+    });
+  `,
+  );
+  const rpc = new RpcProcess(
+    [script],
+    root,
+    { PATH: process.env.PATH ?? "" },
+    { executable: process.execPath },
+  );
+  const response = await rpc.request("ready");
+  const { pid } = response.data as { pid: number };
+  await rpc.stop();
+  await eventuallyMissing(pid);
+});
+
+test("RPC cleanup rejects denied process-group observations", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-skill-rpc-denied-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const executable = join(root, "fake-pi.sh");
+  await writeFile(
+    executable,
+    `#!/bin/sh\nread request\nprintf '%s\\n' '{"type":"response","id":"skill-test-1","command":"ready","success":true}'\nexec sleep 30\n`,
+  );
+  await chmod(executable, 0o755);
+  const rpc = new RpcProcess(
+    [],
+    root,
+    { PATH: process.env.PATH ?? "" },
+    { executable },
+  );
+  await rpc.request("ready");
+  const kill = process.kill.bind(process);
+  t.mock.method(
+    process,
+    "kill",
+    (pid: number, signal?: NodeJS.Signals | number) => {
+      if (signal === 0) {
+        throw Object.assign(new Error("denied process-group observation"), {
+          code: "EPERM",
+        });
+      }
+      return kill(pid, signal);
+    },
+  );
+  await assert.rejects(rpc.stop(), { code: "EPERM" });
+});
+
 test("selects a placement scenario independently of its skill and rejects unsafe options", () => {
   const args = [
     "--mode",

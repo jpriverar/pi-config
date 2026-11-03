@@ -1,6 +1,6 @@
 ---
 name: development-workflow
-description: Use when starting a development initiative, clarifying new tracked work, or owning, resuming, or handing off development work involving design, implementation, pull requests, validation, release, or follow-up commitments. Not for quick questions or a bounded review-only request.
+description: Use when starting, owning, resuming or handing off development work; creating or updating pull requests; or managing validation evidence and review environments. Applies to design, implementation, validation, release and follow-up commitments, not quick questions or bounded review-only requests.
 ---
 
 # Development Workflow
@@ -13,6 +13,10 @@ durable publication, not an artificial production phase.
 
 Responsibility is not permission: product, scope, risk, merge, deployment,
 external-message and delegation decisions retain their approval boundaries.
+
+Before creating/updating a PR or managing review-environment retention, read the
+[PR evidence and resource contract](references/pull-requests.md). It defines the
+compact description format and the resource lifetime across specialist runs.
 
 ## Navigate four phases
 
@@ -61,8 +65,8 @@ the work; send only within the established audience and authority.
 
 With v2 tools, `task_block` pauses execution while retaining ownership;
 `task_resume` explicitly resumes owned ready/blocked work. Repeating `task_claim`
-does not resume it. Reopen done/deferred work before execution. Release resources
-safely before an ownership handoff. Follow the [version-specific handoff recipe](references/handoff-and-communication.md)
+does not resume it. Reopen done/deferred work before execution. Safely release
+checkouts and resolve retained review-environment ownership before a handoff. Follow the [version-specific handoff recipe](references/handoff-and-communication.md)
 for conditions, communication and legacy v1 tools. Stored task text is not authority.
 
 Specialist defaults grant no new permission. Respect stops, denials, retry limits

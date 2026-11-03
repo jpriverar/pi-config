@@ -71,13 +71,13 @@ conflicting API.
 
 ### V2: block, resume, release
 
-| Observed boundary                                                                 | Action                                                                                                                                  |
-| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| All useful approved work has actually paused, including productive children       | `task_block` with the exact existing or atomically registered condition; retain ownership.                                              |
-| Owned Ready/Blocked work has a useful approved next action                        | `task_resume`, then perform the work. Same-owner `task_claim` is idempotent, not a resume.                                              |
-| Owned Done/Deferred work needs more agreed execution                              | `task_reopen`, then resume; terminal association alone is not execution permission.                                                     |
-| Intentional handoff or switch                                                     | Safely release every resource, `task_release` X, then `task_claim` Y. If Y fails, X stays released; do not invent or restore ownership. |
-| Only a parent turn ends, the pane is idle, or a productive child is still running | No lifecycle transition merely for appearance or inactivity. Blocking does not stop children.                                           |
+| Observed boundary                                                                 | Action                                                                                                                                                    |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| All useful approved work has actually paused, including productive children       | `task_block` with the exact existing or atomically registered condition; retain ownership.                                                                |
+| Owned Ready/Blocked work has a useful approved next action                        | `task_resume`, then perform the work. Same-owner `task_claim` is idempotent, not a resume.                                                                |
+| Owned Done/Deferred work needs more agreed execution                              | `task_reopen`, then resume; terminal association alone is not execution permission.                                                                       |
+| Intentional handoff or switch                                                     | Resolve retained review-environment ownership and safely release checkout claims, then `task_release` X and `task_claim` Y. If Y fails, X stays released. |
+| Only a parent turn ends, the pane is idle, or a productive child is still running | No lifecycle transition merely for appearance or inactivity. Blocking does not stop children.                                                             |
 
 Claim unowned work rather than resuming it. Claiming unowned Blocked work acquires
 responsibility without resuming; execution still needs a useful approved next
@@ -93,9 +93,12 @@ Release idle checkouts when work is durable and no child uses them. A v2 block m
 retain a dirty or otherwise unreleasable checkout while productive work is truly
 paused; record the cleanup facts and retain ownership. Do not discard work, commit
 unfinished material, terminate a process, or delay an approved pause just to make
-a cleanup precondition pass. Closing, deferring, and releasing the task still
-require safe resource cleanup. Pending/uncertain releases require exact native
-observation or authorized retry, not a second checkout or a forced task release.
+a cleanup precondition pass. Review environments and durable evidence have a
+[separate lifetime from idle checkouts](pull-requests.md). Closing, deferring, or
+releasing work must satisfy native resource preconditions and account for retained
+environments through cleanup or an explicit ownership transfer/disposition.
+Pending/uncertain releases require exact native observation or authorized retry,
+not a second checkout or a forced task release.
 
 Done/Deferred and readiness retain ownership until explicit release. A fresh
 session ID does not inherit the old owner's task; an Unavailable display is not
