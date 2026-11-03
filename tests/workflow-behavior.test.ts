@@ -22,11 +22,68 @@ test("invalid criteria are rejected before starting a paid model sample", async 
 
 test("every workflow scenario loads and can be scored before model execution", async () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "skill-scenarios");
-  for (const name of ["intent", "design", "plan", "validation", "deploy"]) {
+  for (const name of [
+    "intent",
+    "design",
+    "plan",
+    "validation",
+    "deploy",
+    "pr-evidence",
+  ]) {
     const fixture = await runner.loadScenario(`workflow/${name}`, root);
     assert.ok(fixture.context);
     assert.equal(runner.evaluateScenario(fixture, "").passed, false);
   }
+});
+
+test("PR evidence scenario rejects wide tables, missing proof and teardown claims", async () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "skill-scenarios");
+  const fixture = await runner.loadScenario("workflow/pr-evidence", root);
+  const response = `## Intent and success criteria
+Stop after three attempts; preserve organization isolation.
+## Changes
+Reuse the retry helper; unrelated timeout changes are out of scope.
+## Validation
+Tested bbb222 locally; aaa111 live evidence is historical, not current proof.
+| Behavior / check | Result | Evidence |
+|---|---|---|
+| Retry limit and isolation | Passed: three attempts, no cross-org reads | go test ./checkout -run 'TestRetryLimit\\|TestOrgIsolation'; https://github.com/example/checkout/actions/runs/42 |
+| Live retry path | Observed at aaa111 only; bbb222 unverified | https://github.com/example/checkout/blob/aaa111/fixtures/trace-abc123.json; isolated staging, fixture-7, 2030-05-06 10:00–10:05 UTC |
+## Try it yourself
+Keep checkout-review at aaa111 while Alex uses it. Last checked ready at 2030-05-06 10:10 UTC; expires 2030-05-10 10:00 UTC.
+Run checkout smoke --target checkout-review --org fixture-7. Coordinate reuse/update after Alex finishes; no TTL extension.
+## Gaps and risks
+Live worker restart is not exercised; current-head live proof and production observation remain pending.
+## Rollout and cleanup
+The author retains ownership. Keep the environment after merge if Alex or further verification still needs it; release only when no longer needed and authorized.
+Preserve the sanitized report in a durable PR-linked artifact before cleaning the run directory. Release the independent idle worktree. Production requires an authorized deploy and a 15-minute window.`;
+  assert.equal(runner.evaluateScenario(fixture, response).passed, true);
+  for (const incomplete of [
+    response.replace(
+      "| Behavior / check | Result | Evidence |",
+      "| Criterion | Check | Expected | Observed | Revision | Evidence |",
+    ),
+    response.replace(
+      "https://github.com/example/checkout/actions/runs/42",
+      "green CI",
+    ),
+    response.replace("2030-05-10", "eventually"),
+    response + "\nThe bbb222 live check passed.",
+    response + "\nI'll delete checkout-review now.",
+    response + "\nI extended the TTL.",
+  ]) {
+    assert.equal(runner.evaluateScenario(fixture, incomplete).passed, false);
+  }
+  const options = runner.parseArguments([
+    "--mode",
+    "control",
+    "--scenario",
+    fixture.id,
+    "--output",
+    "/fixture/output",
+  ]);
+  assert.deepEqual(runner.selectedScenarioIds(options), [fixture.id]);
+  assert.equal(runner.buildScenarioPrompt(fixture), fixture.prompt);
 });
 
 test("skill-read evidence recognizes a successful read through a symlinked checkout", async (t) => {

@@ -419,6 +419,14 @@ rerunning affected checks. No worthwhile simplification is a valid no-change
 result; this is not an unrelated refactor or a repeat-until-perfect loop. Skill
 completion remains evidence about a step, not completion of the whole task.
 
+PR creation and updates use the [PR evidence contract](skills/development-workflow/references/pull-requests.md):
+intent/success criteria, changes, a three-column Validation table, a short
+“Try it yourself” note, gaps/risks and rollout/cleanup. Evidence stays tied to the
+tested revision, with accessible artifacts and honest missing proof. The parent
+retains and reuses review environments across validation runs; merge is a cleanup
+checkpoint, not a delete signal while review or verification still depends on
+one. Independent idle worktrees and finished pollers can be released separately.
+
 ### Code review modes
 
 - `/review <target>` uses `correctness-review`: business logic, behavioral
@@ -475,7 +483,9 @@ automatic skill discovery, or correctness across every model/context.
 ### Workflow behavior evaluation
 
 The same runner supports `workflow/intent`, `workflow/design`, `workflow/plan`,
-`workflow/validation` and `workflow/deploy`. These cases submit ordinary-language
+`workflow/validation`, `workflow/deploy` and `workflow/pr-evidence`. The PR case
+checks the compact description, historical proof, reviewer reuse and cleanup
+pressure; lexical scoring still requires manual interpretation. These cases submit ordinary-language
 requests rather than `/skill:` commands. Only the selected workflow skill and the
 read guard load; fixture facts live in `context.md`. Successful skill/reference
 reads and failed tool calls are recorded from RPC messages, not inferred from

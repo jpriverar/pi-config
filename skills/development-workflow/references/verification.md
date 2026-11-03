@@ -22,7 +22,11 @@ databases, queues, background jobs or downstream effects.
 ## Define the proof before an expensive run
 
 Identify the expected behavior, supported execution path, and evidence that would
-establish it. Check the relevant prerequisites together:
+establish it. Before provisioning or delegating, inspect existing review resources
+and set their retention/cleanup disposition using the
+[PR evidence and resource contract](pull-requests.md). Pass that disposition to
+any authorized specialist instead of accepting its per-run teardown default.
+Check the relevant prerequisites together:
 
 - Service, environment, organization/region, revision and feature targeting.
 - Request routing, required data, and compatible downstream builds.

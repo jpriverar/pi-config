@@ -33,8 +33,10 @@ when its prerequisites are available. Early environment exploration is not proof
 for code changed afterward.
 
 Keep tests, CI fixes, rebases, review fixes and agreed pre-merge proof with the
-implementation. Keep the PR title, description, related PRs and merge order
-accurate. Planning notes belong in task evidence unless they are intended
+implementation. Use the [PR evidence and resource contract](pull-requests.md) for
+every draft or ready PR description and its updates. Keep the title, evidence,
+reuse instructions, related PRs and merge order accurate. Planning notes belong
+in task evidence unless they are intended
 repository deliverables. The [delivery map](../SKILL.md) is navigation, not new
 task states or a rule against early human feedback.
 

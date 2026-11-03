@@ -68,9 +68,10 @@ for the deployed revision under qualifying traffic. A healthy process alone
 answers none of those behavior questions. Production criteria remain pending
 until deployment; they are not obstacles to finishing pre-merge validation.
 
-Keep criteria and results in an existing task-linked design/PR/report, using a
-compact table when useful. Preserve observed evidence separately from the
-interpretation and any accepted exception. See [verification](verification.md).
+Keep criteria and results in an existing task-linked design/PR/report. Carry them
+into the [PR evidence format](pull-requests.md), with every criterion covered by a
+check or explicit gap. Preserve observations separately from interpretation and
+accepted exceptions. See [verification](verification.md).
 
 **Ready for Build and Test:** the approach and acceptance criteria are accepted,
 verification is feasible, blocking assumptions/alignment are resolved and required
