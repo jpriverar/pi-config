@@ -51,6 +51,20 @@ const workflowNames = [
 function workflowScenario(scenario: { id: string }): boolean {
   return workflowNames.some((name) => scenario.id === `workflow/${name}`);
 }
+function contextScenario(scenario: { id: string }): boolean {
+  return workflowScenario(scenario) || scenario.id === "review/evidence";
+}
+const reviewArtifactNames = [
+  "intent.md",
+  "limit-code.md",
+  "limit-ci.md",
+  "cache-code.md",
+  "cache-ci.md",
+  "retry-code.md",
+  "retry-ci.md",
+  "retry-trace.md",
+  "retry-access.md",
+] as const;
 const placementNames = [
   "current",
   "existing",
@@ -62,6 +76,7 @@ const placementNames = [
 ] as const;
 function scenarioSkill(id: string): SkillName {
   if ((skillNames as readonly string[]).includes(id)) return id as SkillName;
+  if (id === "review/evidence") return "correctness-review";
   if (
     placementNames.some((name) => id === `project-selection/${name}`) ||
     workflowScenario({ id })
@@ -71,12 +86,12 @@ function scenarioSkill(id: string): SkillName {
 }
 function proposalScenario(scenario: Scenario): boolean {
   return (
-    scenario.id.startsWith("project-selection/") || workflowScenario(scenario)
+    scenario.id.startsWith("project-selection/") || contextScenario(scenario)
   );
 }
 
 export function buildScenarioPrompt(scenario: Scenario): string {
-  return workflowScenario(scenario)
+  return contextScenario(scenario)
     ? scenario.prompt
     : `/skill:${scenario.name} ${scenario.prompt}`;
 }
@@ -101,6 +116,7 @@ export interface Scenario {
   name: SkillName;
   prompt: string;
   context?: string;
+  files?: Record<string, string>;
   required: string[];
   forbidden: string[];
 }
@@ -167,6 +183,7 @@ export interface ScenarioSummary {
   skill: SkillName;
   observations?: ReadEvidence;
   skillRead?: boolean;
+  artifactReads?: Array<{ path: string; read: boolean }>;
   discovered: boolean;
   passed: boolean;
   required: CriterionResult[];
@@ -237,8 +254,8 @@ export function parseArguments(argv: string[]): Options {
     throw new Error("--package is required in package mode");
   if (mode !== "package" && packageArgument)
     throw new Error("--package is only valid in package mode");
-  if (mode === "control" && (!scenario || !workflowScenario({ id: scenario })))
-    throw new Error("control mode requires one workflow scenario");
+  if (mode === "control" && (!scenario || !contextScenario({ id: scenario })))
+    throw new Error("control mode requires one guarded context scenario");
   return { mode, packageArgument, output, scenario, appendPolicy };
 }
 
@@ -337,16 +354,81 @@ export async function loadScenario(
     throw new Error(`${name} must define required and forbidden observations`);
   for (const criterion of [...required, ...forbidden])
     evaluateCriterion("", criterion);
+  let files: Record<string, string> | undefined;
+  if (id === "review/evidence") {
+    const root = await realpath(scenariosDirectory);
+    const source = await realpath(join(root, id));
+    if (!isWithin(root, source))
+      throw new Error(`scenario artifacts escape the source tree: ${source}`);
+    files = Object.fromEntries(
+      await Promise.all(
+        reviewArtifactNames.map(async (name) => {
+          const bytes = await readBoundedFile(join(source, name));
+          return [
+            name,
+            new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+          ];
+        }),
+      ),
+    );
+  }
   return {
     id,
     name,
     prompt: section(markdown, "Prompt"),
-    ...(workflowScenario({ id })
+    ...(contextScenario({ id })
       ? { context: section(markdown, "Context") }
       : {}),
+    ...(files ? { files } : {}),
     required,
     forbidden,
   };
+}
+
+export async function materializeScenario(
+  scenario: Scenario,
+  cwd: string,
+): Promise<void> {
+  const files = Object.entries(scenario.files ?? {});
+  for (const [name] of files) {
+    if (!/^[a-z0-9][a-z0-9.-]*\.md$/.test(name) || name === "context.md")
+      throw new Error(`invalid scenario artifact name: ${name}`);
+  }
+  if (scenario.context !== undefined)
+    await writeFile(join(cwd, "context.md"), scenario.context, { flag: "wx" });
+  for (const [name, content] of files)
+    await writeFile(join(cwd, name), content, { flag: "wx" });
+}
+
+export function scenarioReadPaths(
+  options: Options,
+  scenario: Scenario,
+  cwd: string,
+): string[] {
+  const roots = [cwd];
+  if (options.mode === "package") {
+    const skills = join(resolve(options.packageArgument!), "skills");
+    roots.push(join(skills, scenario.name));
+    if (scenario.id === "review/evidence") {
+      for (const name of ["pull-requests.md", "verification.md"])
+        roots.push(join(skills, "development-workflow", "references", name));
+    }
+  }
+  return roots;
+}
+
+export async function scenarioReadCoverage(
+  scenario: Scenario,
+  evidence: ReadEvidence,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<Array<{ path: string; read: boolean }>> {
+  return Promise.all(
+    Object.keys(scenario.files ?? {}).map(async (path) => ({
+      path,
+      read: await hasSuccessfulRead(evidence, join(cwd, path), signal),
+    })),
+  );
 }
 
 function evaluateCriterion(text: string, criterion: string): boolean {
@@ -945,16 +1027,13 @@ async function runScenario(
       "fixtures",
       "project-selection-guard.ts",
     );
-    if (scenario.context !== undefined)
-      await writeFile(join(fixture.cwd, "context.md"), scenario.context);
+    await materializeScenario(scenario, fixture.cwd);
     if (proposalScenario(scenario)) {
-      const roots = [await realpath(fixture.cwd)];
-      if (options.mode === "package")
-        roots.push(
-          await realpath(
-            join(resolve(options.packageArgument!), "skills", scenario.name),
-          ),
-        );
+      const roots = await Promise.all(
+        scenarioReadPaths(options, scenario, fixture.cwd).map((path) =>
+          realpath(path),
+        ),
+      );
       fixture.env.PI_SKILL_TEST_READ_ROOTS = JSON.stringify(roots);
     }
     throwIfAborted(controller.signal);
@@ -1002,7 +1081,7 @@ async function runScenario(
       };
     }
 
-    if (workflowScenario(scenario))
+    if (contextScenario(scenario))
       await rpc.request("set_auto_retry", { enabled: false });
     const settled = rpc.waitFor("agent_settled");
     await rpc.request("prompt", {
@@ -1019,7 +1098,7 @@ async function runScenario(
       join(outputDirectory, scenarioTranscriptName(scenario)),
       controller.signal,
     );
-    if (!workflowScenario(scenario)) return summary;
+    if (!contextScenario(scenario)) return summary;
     const response = await rpc.request("get_messages");
     const observations = collectReadEvidence(
       (response.data as { messages?: unknown } | undefined)?.messages,
@@ -1037,14 +1116,22 @@ async function runScenario(
         ),
         controller.signal,
       ));
+    const artifactReads = await scenarioReadCoverage(
+      scenario,
+      observations,
+      fixture.cwd,
+      controller.signal,
+    );
     return {
       ...summary,
       discovered,
       observations,
       skillRead,
+      artifactReads,
       passed:
         summary.passed &&
         observations.failedTools.length === 0 &&
+        artifactReads.every((artifact) => artifact.read) &&
         (options.mode === "control" || skillRead),
     };
   } finally {

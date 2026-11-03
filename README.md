@@ -429,9 +429,11 @@ one. Independent idle worktrees and finished pollers can be released separately.
 
 ### Code review modes
 
-- `/review <target>` uses `correctness-review`: business logic, behavioral
-  defects and concrete regression risks first. Findings identify a trigger,
-  expected/observed behavior and evidence; style preferences are not defects.
+- `/review <target>` uses `correctness-review`: concrete defects first, plus
+  whether primary validation evidence supports the agreed intent. It distinguishes
+  code bugs from proof gaps, checks revision/scope and uses targeted safe rechecks
+  within existing authority. The report gives a scoped conclusion, actionable
+  findings and evidence checked/missing; style preferences are not defects.
 - `/review-quality <target>` uses the existing Thermo-Nuclear rubric for an
   explicit strict structural/maintainability audit. Its approval bar is unchanged.
 
@@ -500,7 +502,7 @@ PI_SKILL_TEST_MODEL=provider/model node --import tsx tests/skill-behavior.ts \
   --scenario workflow/intent --output "$out"
 ```
 
-For a real no-guidance response, use `--mode control` with one workflow scenario
+For a real no-guidance response, use `--mode control` with one workflow or review scenario
 and omit `--package`. Unlike the legacy discovery-only `baseline` mode, control
 mode sends the same prompt to the model. No skill is loaded. Workflow runs disable
 provider auto-retry and retain the two-minute timeout and restricted reads.
@@ -511,6 +513,23 @@ Use fresh output directories and retain guidance versions. Read flagged outputs:
 lexical failures can be valid paraphrases, and passing text does not prove real
 service/tool orchestration. Do not claim a behavioral improvement when current
 guidance already produces the intended behavior.
+
+### Evidence review evaluation
+
+Use the same runner with `--scenario review/evidence` to test `correctness-review`
+against supported, defective and insufficiently evidenced changes. Nine small
+fictional artifacts are materialized separately from the implementer summaries.
+The guard allows only fixture reads, the selected skill and the two shared PR/verification
+references; it does not load the full delivery workflow or expose mutation tools.
+Passing requires successful reads of the primary artifacts (and the selected
+skill in package mode), not an assistant claim that it inspected them.
+
+Manually assess the conclusions as well as the coarse string diagnostics: preserve
+the genuine tenant-isolation finding, distinguish stale/skipped/constant-only
+proof from code defects, treat inaccessible evidence as unknown rather than
+fabricated, and respect stage and authority. These read-only samples cannot prove
+that live rechecks work or that every installed-context review follows the contract.
+Use the same explicit model/run-budget policy described above.
 
 ## Brief technical RFCs
 

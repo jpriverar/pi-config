@@ -1,5 +1,5 @@
 ---
-description: Review a pull request for correctness and business-logic defects
+description: Review correctness, intent and validation evidence for a code change
 argument-hint: "<PR-URL or review target>"
 ---
 
