@@ -81,10 +81,13 @@ Use a separate session or authorized reviewer agent for independent review. The
 implementer reading a rubric to itself is not independent review, and agent
 review does not replace required human/code-owner review.
 
-Supply the actual head, scope, material constraints, and prior findings with their
-disposition. Separate introduced defects, relevant structural problems,
-pre-existing debt, and optional improvements. Prior decisions inform review;
-new contrary evidence still deserves investigation.
+Supply the actual head, original intent/accepted criteria, scope, material
+constraints and prior findings with their disposition. Include primary validation
+artifacts, known gaps/waivers and review-environment reuse constraints—not only
+the implementer's summary. The reviewer checks code and whether evidence supports
+the scoped intent, distinguishing defects from missing proof. Separate introduced
+defects, relevant structural problems, pre-existing debt and optional improvements.
+Prior decisions inform review; new contrary evidence still deserves investigation.
 
 Apply legitimate in-scope fixes and explain rejected or deferred findings.
 Propose broader work rather than silently expanding the PR or creating tasks.
