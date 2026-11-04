@@ -52,8 +52,16 @@ artifacts, not only in the conversation.
 
 - **Act:** continue useful already-authorized work without asking whether to continue.
 - **Ask:** propose the concrete missing material decision or permission.
-- **Wait:** preserve the same task and next action when an external prerequisite remains.
+- **Wait:** only when no useful authorized work remains. Preserve the same task and next action for the external prerequisite.
 - **Close:** satisfy the agreed finish line, including communication and cleanup.
+
+Before waiting, match the remaining criteria to their actual prerequisites.
+An assistant-authored checkpoint, `next_step` or wakeup plan does not establish
+that all other work is blocked. Complete independent authorized investigation
+and preparation before reporting a wait. For example, missing browser automation
+blocks browser proof, not backend/UI-routing preflight or a concrete request for
+environment permission. Keep the blocked check and its restrictions intact;
+preparation never grants execution authority.
 
 Failed checks return to investigation/fix and affected verification. Changed
 assumptions can return to Design or Intent. Blocked or inconclusive proof remains
