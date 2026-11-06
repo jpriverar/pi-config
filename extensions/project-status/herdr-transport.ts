@@ -81,6 +81,12 @@ export function createHerdrMetadataSender(
         ...(value ? ["--token", `${key}=${value}`] : ["--clear-token", key]),
       );
     }
+    // The environment outlives stop(); the cleared display label prevents stale cues.
+    args.push(
+      ...(displayAgent && env.IN_WORKSPACE === "1"
+        ? ["--token", "pi_workspace=↗"]
+        : ["--clear-token", "pi_workspace"]),
+    );
     try {
       const options = {
         env,

@@ -17,10 +17,18 @@ The plugin runs from Herdr events, with no daemon or database polling.
 
 ## Display semantics
 
-The example layout shows Pi panes in four rows: state icon and bold task
-title; the owned task’s catalog project and area; task status; then native state
-text and model.
+The example layout shows Pi panes in four rows: state icon, optional Workspace
+cue and bold task title; the owned task’s catalog project and area; task status;
+then native state text and model.
 The pane/display-agent label is omitted so it does not repeat the task title.
+
+`pi_workspace` adds `↗` when the publisher has `IN_WORKSPACE=1`, the Workspaces
+runtime signal. The example inherits Herdr’s theme colors without changing
+selection backgrounds, task titles, connection labels or terminal canvases. The
+cue does not require an assigned task. It indicates Workspaces context, not
+generic SSH remoteness, and displays no machine name. Other flag values and
+shutdown/disable clear the cue; older publishers simply omit this optional token.
+
 `pi_project` and `pi_area` reuse the identity already resolved for Pi’s status
 line, independently of the browse filter and Herdr tab/space names. No extra
 catalog reads or polling are added. Renames and area moves appear on the next
@@ -69,8 +77,8 @@ pending alarm. This is session-local waiting, not a persistent alarm or an
 exact-time execution guarantee. The label updates on lifecycle transitions,
 not a countdown polling loop.
 
-The sidebar change is opt-in: separately review the `$pi_task_status` and
-`$pi_waiting` rows from the example before merging them into
+The sidebar change is opt-in: separately review the `$pi_workspace` token and
+the `$pi_task_status` and `$pi_waiting` rows from the example before merging them into
 your existing Pi rows, preserving other styles and labels. No Herdr binary or
 managed agent-state integration changes are required. Wakeup-only updates do
 not query Beads or refresh space task counts.
