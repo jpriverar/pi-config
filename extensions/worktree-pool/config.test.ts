@@ -102,7 +102,10 @@ describe("loadPoolConfig and resolveRepository", () => {
       defaultCapacity: 3,
       exclude: [],
     });
-    expect([...loaded.overrides]).toEqual([["dd-source", { capacity: 5 }]]);
+    expect([...loaded.overrides]).toEqual([
+      ["dd-source", { capacity: 5 }],
+      ["web-ui", { capacity: 5 }],
+    ]);
   });
 
   test("resolves a primary checkout lazily and derives origin HEAD only for acquisition", async () =>

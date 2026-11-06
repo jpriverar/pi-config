@@ -8,6 +8,10 @@
     {
       "name": "dd-source",
       "capacity": 5
+    },
+    {
+      "name": "web-ui",
+      "capacity": 5
     }
   ]
 }
