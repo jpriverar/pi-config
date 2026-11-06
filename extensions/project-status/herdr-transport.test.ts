@@ -3,9 +3,11 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { createPaneReporter } from "./herdr-pane.js";
 import { createHerdrMetadataSender } from "./herdr-transport.js";
-import type { PaneMetadata } from "./herdr-values.js";
+import { taskTokens, type PaneMetadata } from "./herdr-values.js";
 
 const environment = {
   HERDR_ENV: "1",
@@ -106,10 +108,82 @@ test("publishes only owned keys with argv, sequence and finite execution limits"
     "pi_context_critical=Context 90%",
     "--clear-token",
     "pi_waiting",
+    "--clear-token",
+    "pi_workspace",
   ]);
   assert.equal(calls[0].options.timeout, 1500);
   assert.equal(calls[0].options.maxBuffer, 64 * 1024);
   assert.equal(calls[0].options.env.HERDR_SOCKET_PATH, "/tmp/test.sock");
+});
+
+for (const tokens of [
+  values,
+  {
+    ...values,
+    ...taskTokens({ state: "unassigned", label: "Unassigned" }),
+    displayAgent: "Unassigned",
+  },
+]) {
+  test(`publishes a Workspace cue for ${tokens.pi_task_state} Pi sessions`, async () => {
+    const reports: string[][] = [];
+    const send = createHerdrMetadataSender(
+      { ...environment, IN_WORKSPACE: "1" },
+      async (_file, args) => {
+        if (args[0] === "pane") reports.push([...args]);
+        return replyFor(args);
+      },
+    )!;
+    assert.equal(await send(tokens, 1, new AbortController().signal), true);
+    const args = reports[0];
+    assert.equal(args[args.indexOf("pi_workspace=↗") - 1], "--token");
+    assert.ok(args.includes(`pi_task=${tokens.pi_task}`));
+  });
+}
+
+for (const flag of [undefined, "0", "true"]) {
+  test(`clears the Workspace cue when IN_WORKSPACE is ${flag ?? "unset"}`, async () => {
+    const reports: string[][] = [];
+    const send = createHerdrMetadataSender(
+      {
+        ...environment,
+        IN_WORKSPACE: flag,
+        WORKSPACE_NAME: "example-workspace",
+        SSH_CONNECTION: "192.0.2.1 12345 198.51.100.1 22",
+      },
+      async (_file, args) => {
+        if (args[0] === "pane") reports.push([...args]);
+        return replyFor(args);
+      },
+    )!;
+    assert.equal(await send(values, 1, new AbortController().signal), true);
+    const args = reports[0];
+    assert.equal(args[args.indexOf("pi_workspace") - 1], "--clear-token");
+    assert.ok(!args.includes("pi_workspace=↗"));
+  });
+}
+
+test("stopping a Workspace reporter clears its cue", async () => {
+  const reports: string[][] = [];
+  const send = createHerdrMetadataSender(
+    { ...environment, IN_WORKSPACE: "1" },
+    async (_file, args) => {
+      if (args[0] === "pane") reports.push([...args]);
+      return replyFor(args);
+    },
+  )!;
+  const reporter = createPaneReporter({
+    context: {
+      mode: "tui",
+      model: undefined,
+      getContextUsage: () => undefined,
+    } as unknown as ExtensionContext,
+    send,
+  })!;
+  await reporter.stop();
+  const stopped = reports.at(-1)!;
+  assert.equal(stopped[stopped.indexOf("pi_workspace") - 1], "--clear-token");
+  assert.ok(stopped.includes("--clear-display-agent"));
+  assert.ok(!stopped.includes("pi_workspace=↗"));
 });
 
 for (const stdout of [
@@ -262,10 +336,13 @@ test("failed refresh is retried only on the next delivery, after metadata acknow
 
 test("display labels use only fallback metadata and clear only their own field", async () => {
   const calls: string[][] = [];
-  const send = createHerdrMetadataSender(environment, async (_file, args) => {
-    calls.push([...args]);
-    return replyFor(args);
-  })!;
+  const send = createHerdrMetadataSender(
+    { ...environment, IN_WORKSPACE: "1" },
+    async (_file, args) => {
+      calls.push([...args]);
+      return replyFor(args);
+    },
+  )!;
   const signal = new AbortController().signal;
   await send(
     { ...values, displayAgent: " jp-one • Fix\n \u001b[31m$(touch nope) " },
@@ -283,6 +360,11 @@ test("display labels use only fallback metadata and clear only their own field",
     await send({ ...values, displayAgent }, 2, signal);
     assert.equal(calls.length, 1);
     assert.ok(calls[0].includes("--clear-display-agent"));
+    assert.equal(
+      calls[0][calls[0].indexOf("pi_workspace") - 1],
+      "--clear-token",
+    );
+    assert.ok(!calls[0].includes("pi_workspace=↗"));
     assert.ok(
       !calls[0].includes("--clear-title") &&
         !calls[0].includes("--display-agent"),
