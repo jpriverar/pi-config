@@ -27,6 +27,10 @@ import {
   type LeaseRecordGate,
 } from "./lease-records.js";
 import { inspectRepository } from "./git-state.js";
+import {
+  inspectRemovalRemnants,
+  removeRemovalRemnants,
+} from "./removal-remnants.js";
 import { inspectRelease, RELEASE_STATUS_ARGS } from "./release-inspection.js";
 import {
   createManagedWorktree,
@@ -126,6 +130,7 @@ export type WorktreePoolDependencies = {
   runGit: GitRunner;
   operationLock: OperationLockDependencies;
   uuid?: () => string;
+  stopWatch?: (path: string) => Promise<void>;
   afterNativeLock?: (path: string, claimId: string) => Promise<void>;
   replaceLeaseRecord?: (
     root: string,
@@ -366,6 +371,31 @@ export class WorktreePool {
             evidence: observation.evidence,
           };
         }
+        if (
+          record.state === "removing" &&
+          observation.evidence.registered === false
+        ) {
+          try {
+            await inspectRemovalRemnants(repository, record, this.deps.runGit);
+            return {
+              claimId: record.claimId,
+              path,
+              repaired: false,
+              state: "needs-attention",
+              evidence: observation.evidence,
+              reason: `partial removal left only safe remnants; use worktree_release with claim ID ${record.claimId}`,
+            };
+          } catch (error) {
+            return {
+              claimId: record.claimId,
+              path,
+              repaired: false,
+              state: "needs-attention",
+              evidence: observation.evidence,
+              reason: `partial removal requires inspection: ${errorMessage(error)}`,
+            };
+          }
+        }
         const releasable =
           (record.state === "active" || record.state === "removing") &&
           observation.authorityError === undefined &&
@@ -400,6 +430,34 @@ export class WorktreePool {
     if (record === undefined) return { path: "", released: false };
     if (record.state !== "active" && record.state !== "removing")
       return { path: record.path, released: false };
+    if (record.state === "removing") {
+      try {
+        if (!(await this.hasRegistration(repository, record.path))) {
+          await removeRemovalRemnants(
+            repository,
+            record,
+            this.deps.runGit,
+            this.deps.stopWatch,
+          );
+          if (
+            (await pathExists(record.path)) ||
+            (await this.hasRegistration(repository, record.path))
+          ) {
+            throw new Error(
+              "managed path or Git registration remains after partial-removal recovery",
+            );
+          }
+          await removeLeaseRecord(repository.poolRoot, claimId);
+          return { path: record.path, released: true };
+        }
+      } catch (error) {
+        return {
+          path: record.path,
+          released: false,
+          reason: `Cannot finish partial removal of ${record.path}: ${errorMessage(error)}; claim preserved as removing`,
+        };
+      }
+    }
     let original: RegisteredWorktree;
     try {
       original = (await this.verifyLeaseAuthority(repository, record)).worktree;

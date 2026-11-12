@@ -48,6 +48,24 @@ inspection failure reports its path and explains that force cannot help;
 no checkout is removed. Resolve the reported condition rather than blindly
 retrying with force.
 
+### Interrupted directory removal
+
+Git can unregister a checkout but fail to remove its directory when Watchman
+continues creating cookie files. Such a claim remains `removing` and keeps its
+task resource `release_pending`. Inspect it with `worktree_repair`, then retry
+`worktree_release` with the exact claim ID from the owning task session.
+
+Explicit release can finish an unregistered `removing` claim only when the
+validated managed directory is empty or contains only empty, regular,
+non-hardlinked Watchman cookie files. It stops only that canonical directory's
+exact Watchman watch, rechecks the directory and Git registrations, unlinks
+verified cookies individually, and removes the empty directory nonrecursively.
+Unknown contents, changed identities, symlinks, registrations, or Watchman
+inspection/deletion errors preserve the claim. `force` does not relax these
+checks. Recovery requires a working Watchman CLI/daemon when the residual
+directory exists; commands neither start a daemon nor change other watches.
+Repair remains non-destructive and reports whether explicit release can finish.
+
 The task-lifecycle extension guards acquisition and associated releases and
 records their results under the new tool names. Its lifecycle and resource
 ownership rules are unchanged. Install the worktree and lifecycle changes

@@ -11,6 +11,7 @@ import type {
   OwnerIdentity,
 } from "./operation-lock.js";
 import { WorktreePool } from "./pool.js";
+import { stopExactWatch } from "./watchman.js";
 import type {
   GitResult,
   GitRunner,
@@ -85,6 +86,7 @@ export async function loadWorktreePoolRuntime(
       runGit: dependencies.runGit,
       operationLock: dependencies.operationLock,
       uuid: dependencies.uuid,
+      stopWatch: stopExactWatch,
     }),
   };
 }
