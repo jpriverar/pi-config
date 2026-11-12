@@ -1,13 +1,16 @@
 import { describe, expect, test } from "../../tests/expect.js";
 import { execFile, execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import {
+  link,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
   realpath,
+  rename,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -89,6 +92,7 @@ async function createHarness(
       cwd: string,
     ) => { code: number; stdout: string; stderr: string } | undefined;
     removeLeaseRecord?: (root: string, claimId: string) => Promise<void>;
+    stopWatch?: (path: string) => Promise<void>;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "ephemeral-pool-"));
@@ -130,6 +134,7 @@ async function createHarness(
       timeoutMs: options.lockTimeoutMs ?? 1_000,
     },
     uuid: () => UUIDS[next++] ?? crypto.randomUUID(),
+    stopWatch: options.stopWatch ?? (async () => {}),
     ...(options.removeLeaseRecord
       ? { removeLeaseRecord: options.removeLeaseRecord }
       : {}),
@@ -1029,4 +1034,273 @@ describe("bearer-capability lifecycle", () => {
       await h.cleanup();
     }
   });
+});
+
+const COOKIE = ".watchman-cookie-test-host-123-1";
+
+async function partiallyRemovedHarness(
+  stopWatch?: (path: string) => Promise<void>,
+  listResult?: () =>
+    | { code: number; stdout: string; stderr: string }
+    | undefined,
+) {
+  const h = await createHarness({
+    stopWatch,
+    interceptGit: (args, cwd) => {
+      if (args[0] === "worktree" && args[1] === "list") return listResult?.();
+      if (args[0] !== "worktree" || args[1] !== "remove") return undefined;
+      execFileSync("git", ["-C", cwd, ...args]);
+      const path = args.at(-1)!;
+      mkdirSync(path);
+      writeFileSync(join(path, COOKIE), "");
+      return { code: 1, stdout: "", stderr: "Directory not empty" };
+    },
+  });
+  const acquired = await h.pool.acquire(
+    { repository: "repo", branch: "partial-removal" },
+    owner(501, "alice"),
+  );
+  await expect(
+    h.pool.release("repo", acquired.claimId, owner(501, "alice")),
+  ).rejects.toThrow(/Directory not empty.*claim preserved as removing/s);
+  return { ...h, acquired };
+}
+
+describe("partial worktree release recovery", () => {
+  test("explicit retry removes only cookies, stops the exact watch and frees the claim", async () => {
+    const stopped: string[] = [];
+    const h = await partiallyRemovedHarness(async (path) => {
+      stopped.push(path);
+    });
+    try {
+      expect(await managedRegistrations(h.primary)).toEqual([]);
+      const report = await h.pool.repair(
+        "repo",
+        h.acquired.claimId,
+        owner(501, "alice"),
+      );
+      expect(report.repaired).toBe(false);
+      expect(report.reason).toContain("worktree_release");
+      expect(stopped).toEqual([]);
+      expect(await exists(join(h.acquired.path, COOKIE))).toBe(true);
+      expect(
+        await h.pool.release("repo", h.acquired.claimId, owner(501, "alice")),
+      ).toMatchObject({ released: true });
+      expect(stopped).toEqual([
+        (await realpath(h.repository.poolDir)) +
+          "/" +
+          basename(h.acquired.path),
+      ]);
+      expect(await exists(h.acquired.path)).toBe(false);
+      expect(await leaseFiles(h.poolRoot)).toEqual([]);
+      expect(await git(h.primary, ["rev-parse", "partial-removal"])).toBe(
+        h.acquired.head,
+      );
+      expect((await h.pool.list("repo")).repositories[0].used).toBe(0);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  for (const response of [
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: "not porcelain\n", stderr: "" },
+    { code: 1, stdout: "", stderr: "cannot inspect registrations" },
+  ]) {
+    test(`refuses uncertain registration inspection: ${JSON.stringify(response)}`, async () => {
+      let uncertain = false;
+      const stopped: string[] = [];
+      const h = await partiallyRemovedHarness(
+        async (path) => {
+          stopped.push(path);
+        },
+        () => (uncertain ? response : undefined),
+      );
+      try {
+        uncertain = true;
+        expect(
+          (
+            await h.pool.release(
+              "repo",
+              h.acquired.claimId,
+              owner(501, "alice"),
+            )
+          ).released,
+        ).toBe(false);
+        expect(stopped).toEqual([]);
+        expect(await exists(join(h.acquired.path, COOKIE))).toBe(true);
+        expect((await leaseFiles(h.poolRoot)).length).toBe(1);
+      } finally {
+        await h.cleanup();
+      }
+    });
+  }
+
+  test("concurrent new cookies preserve the journal rather than retrying deletion", async () => {
+    let path = "";
+    let inspections = 0;
+    const newCookie = ".watchman-cookie-test-host-123-2";
+    const h = await partiallyRemovedHarness(
+      async (canonical) => {
+        path = canonical;
+      },
+      () => {
+        if (path && ++inspections === 2)
+          writeFileSync(join(path, newCookie), "");
+        return undefined;
+      },
+    );
+    try {
+      expect(
+        (await h.pool.release("repo", h.acquired.claimId, owner(501, "alice")))
+          .released,
+      ).toBe(false);
+      expect(await exists(join(path, newCookie))).toBe(true);
+      expect((await leaseFiles(h.poolRoot)).length).toBe(1);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  for (const state of ["empty directory", "absent directory"]) {
+    test(`finishes interrupted release with ${state}`, async () => {
+      const stopped: string[] = [];
+      const h = await partiallyRemovedHarness(async (path) => {
+        stopped.push(path);
+      });
+      try {
+        await rm(join(h.acquired.path, COOKIE));
+        if (state === "absent directory")
+          await rm(h.acquired.path, { recursive: true });
+        expect(
+          (
+            await h.pool.release(
+              "repo",
+              h.acquired.claimId,
+              owner(501, "alice"),
+            )
+          ).released,
+        ).toBe(true);
+        expect(await exists(h.acquired.path)).toBe(false);
+        expect(await leaseFiles(h.poolRoot)).toEqual([]);
+        expect(stopped.length).toBe(state === "absent directory" ? 0 : 1);
+      } finally {
+        await h.cleanup();
+      }
+    });
+  }
+
+  for (const hazard of [
+    "unknown file",
+    "nonempty cookie",
+    "directory",
+    "symlink",
+    "hardlink",
+    "leaf symlink",
+    "parent symlink",
+    "wrong common directory",
+    "active journal",
+    "invalid cookie name",
+  ]) {
+    test(`preserves ${hazard} even with force`, async () => {
+      const stopped: string[] = [];
+      const h = await partiallyRemovedHarness(async (path) => {
+        stopped.push(path);
+      });
+      try {
+        const path = h.acquired.path;
+        const cookie = join(path, COOKIE);
+        if (hazard === "unknown file")
+          await writeFile(join(path, "keep.txt"), "user data");
+        if (hazard === "invalid cookie name")
+          await writeFile(join(path, ".watchman-cookie-not-a-cookie"), "");
+        if (hazard === "nonempty cookie") await writeFile(cookie, "user data");
+        if (hazard === "directory")
+          await mkdir(join(path, ".watchman-cookie-test-host-123-2"));
+        if (hazard === "symlink" || hazard === "hardlink") {
+          await rm(cookie);
+          const target = join(h.root, "preserved");
+          await writeFile(target, "");
+          if (hazard === "symlink") await symlink(target, cookie);
+          else await link(target, cookie);
+        }
+        if (hazard === "leaf symlink" || hazard === "parent symlink") {
+          const original =
+            hazard === "leaf symlink" ? path : h.repository.poolDir;
+          const target = join(h.root, "preserved");
+          await rename(original, target);
+          await symlink(target, original);
+        }
+        if (
+          hazard === "wrong common directory" ||
+          hazard === "active journal"
+        ) {
+          const [file] = await leaseFiles(h.poolRoot);
+          const recordPath = join(h.poolRoot, ".leases", file);
+          const record = JSON.parse(await readFile(recordPath, "utf8"));
+          if (hazard === "wrong common directory")
+            record.repositoryCommonDir = h.root;
+          else record.state = "active";
+          await writeFile(recordPath, JSON.stringify(record));
+        }
+        expect(
+          (
+            await h.pool.release(
+              "repo",
+              h.acquired.claimId,
+              owner(501, "alice"),
+              undefined,
+              { force: true },
+            )
+          ).released,
+        ).toBe(false);
+        expect(await exists(path)).toBe(true);
+        expect((await leaseFiles(h.poolRoot)).length).toBe(1);
+        expect(stopped).toEqual([]);
+      } finally {
+        await h.cleanup();
+      }
+    });
+  }
+
+  for (const race of [
+    "watch failure",
+    "new file",
+    "changed cookie",
+    "replaced directory",
+    "new registration",
+  ]) {
+    test(`preserves claim on ${race} while stopping watch`, async () => {
+      const h = await partiallyRemovedHarness(async (path) => {
+        if (race === "watch failure") throw new Error("watch stop failed");
+        if (race === "new file")
+          await writeFile(join(path, "keep.txt"), "preserve");
+        if (race === "changed cookie")
+          await writeFile(join(path, COOKIE), "preserve");
+        if (race === "replaced directory") {
+          await rename(path, path + "-preserved");
+          await mkdir(path);
+        }
+        if (race === "new registration") {
+          await rm(join(path, COOKIE));
+          await git(h.primary, ["worktree", "add", path, "partial-removal"]);
+        }
+      });
+      try {
+        expect(
+          (
+            await h.pool.release(
+              "repo",
+              h.acquired.claimId,
+              owner(501, "alice"),
+            )
+          ).released,
+        ).toBe(false);
+        expect(await exists(h.acquired.path)).toBe(true);
+        expect((await leaseFiles(h.poolRoot)).length).toBe(1);
+      } finally {
+        await h.cleanup();
+      }
+    });
+  }
 });
